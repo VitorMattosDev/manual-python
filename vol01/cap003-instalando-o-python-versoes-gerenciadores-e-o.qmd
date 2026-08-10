@@ -1,3 +1,521 @@
 # Instalando o Python: versões, gerenciadores e o Python do sistema {#sec-cap003}
 
-*(em elaboracao)*
+Você precisa de uma biblioteca para consumir uma API. Abre o terminal do Kali, digita `pip install requests` e leva um tapa na cara:
+
+```text
+error: externally-managed-environment
+
+× This environment is externally managed
+╰─> To install Python packages system-wide, try apt install
+    python3-xyz, where xyz is the package you are trying to
+    install.
+
+    If you wish to install a non-Kali-packaged Python package,
+    create a virtual environment using python3 -m venv path/to/venv.
+    Then use path/to/venv/bin/python and path/to/venv/bin/pip. Make
+    sure you have python3-full installed.
+
+    If you wish to install a non-Kali-packaged Python application,
+    it may be easiest to use pipx install xyz, which will manage a
+    virtual environment for you. Make sure you have pipx installed.
+
+    For more information, refer to the following:
+    * https://www.kali.org/docs/general-use/python3-external-packages/
+    * /usr/share/doc/python3.13/README.venv
+
+note: If you believe this is a mistake, please contact your Python installation or OS distribution provider. You can override this, at the risk of breaking your Python installation or OS, by passing --break-system-packages.
+hint: See PEP 668 for the detailed specification.
+```
+
+A tentação é obvia: a última linha oferece uma saída. `--break-system-packages` resolve na hora, o `requests` instala e você volta ao trabalho. Também é a forma mais rápida conhecida de estragar uma instalação de Linux, e a mensagem se dá o trabalho de dizer isso no nome da opção.
+
+Este capítulo explica por que essa barreira existe, o que fazer em vez de derrubá-la, e como ter a versão do Python que você quer sem entrar em conflito com a que o sistema operacional precisa.
+
+## O Python do sistema não é seu
+
+Numa distribuição Linux moderna, o Python não é um programa que alguém instalou para programar. É uma **peça de infraestrutura**. Ferramentas de administração, o gerenciador de pacotes, utilitários de rede e, no caso do Kali, uma parte considerável do arsenal de segurança são escritos em Python e dependem de que o interpretador e as bibliotecas do sistema estejam exatamente na versão que o pacote declarou.
+
+Dá para ver quem está na fila:
+
+```bash
+apt-cache rdepends --installed python3 | head -8
+```
+
+```text
+python3
+Reverse Depends:
+  python3-dev
+  weevely
+  theharvester
+  texlive-pictures
+  texlive-latex-extra
+ |sublist3r
+```
+
+`weevely`, `theHarvester` e `sublist3r` são ferramentas do Kali. Elas não têm ambiente próprio: usam o Python do sistema e as bibliotecas que o `apt` instalou. E são muitas:
+
+```bash
+dpkg -l 'python3-*' | grep -c '^ii'
+```
+
+```text
+529
+```
+
+Quinhentos e vinte e nove pacotes Python gerenciados pelo `apt`. Quando você roda `pip install requests` com privilégio no interpretador do sistema, o `pip` sobrescreve arquivos que o `apt` considera seus, sem avisar o `apt`. O banco de dados de pacotes passa a mentir: ele diz que a versão instalada é a que veio da distribuição, e o disco tem outra. A partir daí, uma atualização de sistema pode reverter a sua biblioteca, ou a sua biblioteca pode quebrar uma ferramenta que esperava a versão antiga — e o sintoma aparece semanas depois, num programa que você não tocou.
+
+É contra isso que a **PEP 668** existe. Ela padronizou um arquivo marcador que a distribuição coloca ao lado da biblioteca padrão:
+
+```bash
+ls -l /usr/lib/python3.13/EXTERNALLY-MANAGED
+```
+
+```text
+-rw-r--r-- 1 root root 734 Jun  3 04:36 /usr/lib/python3.13/EXTERNALLY-MANAGED
+```
+
+O arquivo é um `.ini` cujo campo `Error` é justamente o texto que o `pip` imprimiu:
+
+```bash
+head -4 /usr/lib/python3.13/EXTERNALLY-MANAGED
+```
+
+```text
+[externally-managed]
+Error=To install Python packages system-wide, try apt install
+ python3-xyz, where xyz is the package you are trying to
+ install.
+```
+
+Nenhuma mágica: o `pip` procura esse arquivo e, se o encontra, recusa instalar naquele interpretador. É um acordo entre o empacotador da distribuição e a ferramenta do Python, e a mensagem de erro personalizada é escrita por quem monta a distro. A sua existência não é um bug nem excesso de zelo — é a distribuição dizendo "este interpretador tem dono, e não é você".
+
+## As três camadas
+
+A saída não é lutar com a barreira, é entender que existem três lugares diferentes onde um Python pode morar, com donos diferentes. @fig-camadas-python organiza isso.
+
+::: {#fig-camadas-python}
+```{.tikz}
+%%| filename: camadas-python
+%%| alt: Tres camadas de instalacao do Python: o interpretador do sistema pertencente ao apt, interpretadores adicionais no diretorio do usuario e o ambiente virtual do projeto
+\begin{tikzpicture}[
+  banda/.style={draw, thick, rounded corners, minimum width=8.6cm,
+                minimum height=1.5cm, align=center, font=\footnotesize},
+  lb/.style={font=\scriptsize, align=center},
+  fl/.style={->,>=stealth, thick}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[banda, draw=manualgreen, fill=manualgreen!8] (venv) at (0,0)
+    {\textbf{ambiente virtual do projeto} --- \texttt{.venv/}\\
+     descartável, um por projeto, dono: você};
+  \node[banda, draw=manualblue, fill=manualblue!8] (ger) at (0,-2.3)
+    {\textbf{interpretadores adicionais}\\
+     \texttt{uv}, \texttt{pyenv}, instalador oficial --- dentro do seu \texttt{HOME}};
+  \node[banda, draw=manualred, fill=manualred!8] (sis) at (0,-4.6)
+    {\textbf{Python do sistema} --- \texttt{/usr/bin/python3}\\
+     dono: \texttt{apt}, com 529 pacotes por cima};
+
+  \draw[fl, manualgreen] (-7.4,0) --
+    node[lb, above, text=manualgreen]{\texttt{pip install}} (venv.west);
+
+  \draw[fl, manualred] (-7.4,-4.6) --
+    node[lb, above, xshift=-8pt, text=manualred]{\texttt{sudo pip install}}
+    (sis.west);
+  \draw[manualred, very thick] (-4.90,-4.92) -- (-4.50,-4.28);
+  \draw[manualred, very thick] (-4.50,-4.92) -- (-4.90,-4.28);
+
+  \draw[auxiliar] (ger.east) -- (5.6,-2.3);
+  \draw[auxiliar] (sis.east) -- (5.6,-4.6);
+  \draw[fl, manualgray] (5.6,-4.6) -- (5.6,-2.3) -- (5.6,0) -- (venv.east);
+  \node[lb, anchor=west, text width=2.9cm, text=manualgray] at (5.9,-1.15)
+    {\texttt{-m venv} a partir de qualquer um deles};
+\end{tikzpicture}
+```
+Três camadas, três donos. O `pip` só entra sem pedir licença na de cima.
+:::
+
+A camada de baixo é do `apt`. Você lê, executa e não escreve. A do meio é opcional e existe quando você precisa de uma versão que a distribuição não oferece — mora no seu diretório pessoal e não conflita com nada. A de cima é o ambiente virtual, criado a partir de qualquer interpretador das duas camadas de baixo, e é onde o `pip` trabalha à vontade.
+
+## O ambiente virtual, com precisão
+
+Um ambiente virtual é bem menos mágico do que o nome sugere. Crie um e olhe por dentro:
+
+```bash
+mkdir -p /tmp/lab03 && cd /tmp/lab03
+python3 -m venv .venv
+cat .venv/pyvenv.cfg
+```
+
+```text
+home = /usr/bin
+include-system-site-packages = false
+version = 3.13.12
+executable = /usr/bin/python3.13
+command = /usr/bin/python3 -m venv /tmp/lab03/.venv
+```
+
+É isso: um arquivo de texto de cinco linhas, um diretório `bin/` com alguns links e um `lib/python3.13/site-packages/` vazio. Não há cópia do interpretador — `home` e `executable` apontam para o Python de verdade, lá na camada de baixo. O que muda é onde ele procura pacotes:
+
+```bash
+.venv/bin/python -c "import sys; print('prefix     ', sys.prefix); print('base_prefix', sys.base_prefix)"
+```
+
+```text
+prefix      /tmp/lab03/.venv
+base_prefix /usr
+```
+
+`sys.base_prefix` é o interpretador real; `sys.prefix` é o ambiente. Quando os dois diferem, você está num venv — e é exatamente assim que ferramentas detectam isso. O efeito prático aparece no caminho de busca:
+
+```bash
+.venv/bin/python -c "import sys; [print(p) for p in sys.path if p]"
+```
+
+```text
+/usr/lib/python313.zip
+/usr/lib/python3.13
+/usr/lib/python3.13/lib-dynload
+/tmp/lab03/.venv/lib/python3.13/site-packages
+```
+
+A biblioteca padrão continua vindo de `/usr/lib/python3.13` — ela é compartilhada, e não faria sentido duplicá-la. O que sumiu da lista é o `/usr/lib/python3/dist-packages`, onde moram os 529 pacotes do `apt`. No lugar dele entrou o `site-packages` do projeto. Por isso o `pip` pode trabalhar aqui sem incomodar ninguém:
+
+```bash
+.venv/bin/python -m pip install requests cowsay
+.venv/bin/python -m pip list
+```
+
+```text
+Package            Version
+------------------ ---------
+certifi            2026.7.22
+charset-normalizer 3.4.9
+cowsay             6.1
+humanize           4.16.0
+idna               3.18
+pip                26.1.1
+requests           2.34.2
+urllib3            2.7.0
+```
+
+E o isolamento é verificável nos dois sentidos. Um pacote que só existe no ambiente não vaza para o sistema:
+
+```bash
+.venv/bin/python -c "import cowsay; print(cowsay.__file__)"
+python3 -c "import cowsay"
+```
+
+```text
+/tmp/lab03/.venv/lib/python3.13/site-packages/cowsay/__init__.py
+    import cowsay
+ModuleNotFoundError: No module named 'cowsay'
+```
+
+E um pacote que existe nos dois lados fica em duas versões independentes, cada interpretador vendo a sua:
+
+```bash
+python3 -c "import requests; print(requests.__version__, requests.__file__)"
+.venv/bin/python -c "import requests; print(requests.__version__, requests.__file__)"
+```
+
+```text
+2.32.5 /usr/lib/python3/dist-packages/requests/__init__.py
+2.34.2 /tmp/lab03/.venv/lib/python3.13/site-packages/requests/__init__.py
+```
+
+O Kali traz `requests` 2.32.5 porque é a versão que as ferramentas dele foram testadas contra. O seu projeto usa a 2.34.2. As duas convivem, ninguém quebra, e você não precisou pedir licença. **Este é o argumento inteiro a favor do ambiente virtual**, e ele vale muito mais do que a economia de espaço em disco que às vezes se cita.
+
+### O que `activate` faz de verdade
+
+Chamar `.venv/bin/python` pelo caminho completo funciona sempre e é o que scripts e ferramentas fazem. Para trabalho interativo existe a ativação, que costuma ser descrita como um ritual obscuro e não é nada disso:
+
+```bash
+which python3
+source .venv/bin/activate
+which python
+python --version
+```
+
+```text
+/usr/bin/python3
+/tmp/lab03/.venv/bin/python
+Python 3.13.12
+```
+
+A única coisa relevante que aconteceu está em @fig-activate-path: o diretório `bin/` do ambiente foi colocado **na frente** do `PATH`.
+
+::: {#fig-activate-path}
+```{.tikz}
+%%| filename: activate-path
+%%| alt: Comparacao do PATH antes e depois da ativacao do ambiente virtual, com o diretorio bin do ambiente inserido no inicio
+\begin{tikzpicture}[
+  seg/.style={draw=manualgray, thick, fill=manualgray!8,
+              minimum width=2.55cm, minimum height=0.72cm,
+              font=\ttfamily\scriptsize},
+  novo/.style={draw=manualgreen, very thick, fill=manualgreen!15,
+               minimum width=2.55cm, minimum height=0.72cm,
+               font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  fl/.style={->,>=stealth, thick, manualgreen}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \foreach \idx/\tx in {
+    0/{/usr/local/sbin}, 1/{/usr/local/bin}, 2/{/usr/sbin},
+    3/{/usr/bin}, 4/{...}}
+  {
+    \node[seg] at (\idx*2.6,0)      {\tx};
+    \node[seg] at (\idx*2.6,-2.4)   {\tx};
+  }
+
+  \node[novo] at (-2.6,-2.4) {.venv/bin};
+
+  \node[lb, anchor=east, text width=1.7cm] at (-3.5,0) {\textbf{antes}};
+  \node[lb, anchor=east, text width=1.7cm] at (-4.3,-2.4) {\textbf{depois}};
+
+  \draw[fl] (-3.4,-0.5) -- node[lb, right, text=manualgreen, xshift=3pt]
+    {\texttt{source .venv/bin/activate}\\insere um diretório no início}
+    (-3.4,-1.95);
+
+  \node[lb, anchor=north west, text width=12.0cm] at (-4.3,-3.3)
+    {\texttt{which python} passa a encontrar
+     \texttt{.venv/bin/python} antes de \texttt{/usr/bin/python3}.
+     \texttt{deactivate} devolve o \texttt{PATH} ao que era.};
+\end{tikzpicture}
+```
+Ativar um ambiente virtual é inserir um diretório no começo do `PATH`.
+:::
+
+Nada mais acontece de essencial. O script também ajusta o prompt para mostrar `(.venv)` e define uma função `deactivate` que desfaz a mudança. Não há processo em segundo plano, nada é gravado fora do diretório, e fechar o terminal já desativa. Uma consequência prática útil: como é só `PATH`, ativação **não** é herdada por um processo que você lançou antes, e `sudo` não a preserva — `sudo pip install` dentro de um venv ativado instala no Python do sistema, que é o oposto do que você queria.
+
+## Quando você precisa de outra versão
+
+Até aqui, o venv resolveu o problema dos **pacotes**. Ele não resolve o problema da **versão do interpretador**: o `pyvenv.cfg` acima diz `version = 3.13.12` porque foi criado a partir do Python do sistema, e não há como um venv oferecer um 3.11 se a máquina só tem 3.13.
+
+Três situações pedem outra versão. Um projeto de trabalho preso a um servidor com 3.9. Uma biblioteca que ainda não suporta a versão mais nova. E o inverso: você quer testar um recurso de 3.14 numa máquina cuja distribuição parou no 3.11. Para todos os casos, a resposta é a camada do meio da @fig-camadas-python — interpretadores instalados no seu diretório pessoal, sem `sudo` e sem tocar no sistema.
+
+**`uv`** é hoje o caminho mais direto. Ele é um gerenciador de pacotes e de versões escrito em Rust, resolve dependências rápido e baixa interpretadores prontos:
+
+```bash
+uv python list
+```
+
+```text
+cpython-3.15.0rc1-windows-x86_64-none                 <download available>
+cpython-3.15.0rc1+freethreaded-windows-x86_64-none    <download available>
+cpython-3.14.7-windows-x86_64-none                    <download available>
+cpython-3.14.7+freethreaded-windows-x86_64-none       <download available>
+cpython-3.14.4-windows-x86_64-none                    C:\Python314\python.exe
+cpython-3.13.15-windows-x86_64-none                   C:\Users\Usuario\AppData\Roaming\uv\python\cpython-3.13.15-windows-x86_64-none\python.exe
+cpython-3.13.15+freethreaded-windows-x86_64-none      <download available>
+cpython-3.12.13-windows-x86_64-none                   <download available>
+cpython-3.11.15-windows-x86_64-none                   <download available>
+cpython-3.10.20-windows-x86_64-none                   <download available>
+cpython-3.9.25-windows-x86_64-none                    <download available>
+pypy-3.11.15-windows-x86_64-none                      <download available>
+graalpy-3.12.0-windows-x86_64-none                    <download available>
+```
+
+A listagem foi tirada de uma máquina Windows, e é por isso que aparece `windows-x86_64`; no Linux os nomes trazem `linux-x86_64-gnu`. O que interessa é a estrutura: cada linha é uma combinação de implementação, versão e plataforma, e a coluna da direita diz se já está em disco ou se é download. Repare que estão ali o `freethreaded` — o build sem GIL de que falamos no @sec-cap002 — e também PyPy e GraalPy, as implementações alternativas do @sec-cap001. Criar um ambiente com uma versão específica é uma linha:
+
+```bash
+uv venv --python 3.13 .venv
+```
+
+Se a versão pedida não estiver em disco, o `uv` baixa o interpretador e segue. Ele não pede `sudo`, não escreve em `/usr` e não conhece o `EXTERNALLY-MANAGED` porque nunca chega perto do Python do sistema.
+
+**`pyenv`** é a alternativa mais antiga e ainda muito usada. A diferença de filosofia importa: o `pyenv` **compila** o interpretador na sua máquina, o que exige as bibliotecas de desenvolvimento instaladas e leva alguns minutos, mas produz um binário adaptado ao seu sistema. Ele também oferece um recurso que o `uv` trata de outra forma: o arquivo `.python-version` no diretório do projeto, que faz o `pyenv` trocar de versão automaticamente quando você entra na pasta.
+
+**Os pacotes da distribuição** resolvem o caso em que a versão que você quer está no repositório. No Debian e no Kali, versões adicionais aparecem como pacotes próprios quando existem, e a instalação é a de sempre. No Ubuntu, o repositório extra `deadsnakes` é a fonte tradicional de versões que não vieram no sistema. Vale a advertência: instalar um `python3.12` pelo `apt` ao lado do `python3.13` do sistema é seguro, porque são pacotes distintos com arquivos distintos; o que não é seguro é usar `pip` com privilégio em qualquer um dos dois.
+
+**O instalador oficial** de `python.org` é a rota natural no Windows e no macOS, e a única que este manual recomenda no Windows para quem não vai usar `uv`.
+
+## Windows e macOS em duas páginas
+
+No **Windows**, o instalador oficial traz um programa que não existe no Linux e que resolve o problema de conviver com várias versões: o *launcher*, chamado `py`. Ele lê as instalações registradas e escolhe uma:
+
+```text
+py -0p
+```
+
+```text
+ -V:3.14 *        C:\Python314\python.exe
+ -V:Astral/CPython3.13.15 C:\Users\Usuario\AppData\Roaming\uv\python\cpython-3.13.15-windows-x86_64-none\python.exe
+```
+
+O asterisco marca o padrão. `py -3.13` chama aquela versão específica, `py -3` chama o 3 mais recente, e `py -0p` lista tudo com o caminho. Como o `py` sabe de todas, ele é a forma mais confiável de escolher o interpretador no Windows — mais do que mexer no `PATH`.
+
+Duas armadilhas específicas do Windows valem aviso. A primeira: se `python` abrir a Microsoft Store em vez de rodar, você encontrou o *stub* que a Microsoft instala por padrão. Ele não é um Python; é um atalho para a loja. A solução é usar `py -3` ou instalar de verdade e marcar a opção **"Add python.exe to PATH"** no instalador. A segunda: dentro de um ambiente virtual, prefira sempre `python -m pip` a `pip` solto, porque um `pip.exe` velho em outro diretório do `PATH` pode vencer a disputa e instalar no interpretador errado.
+
+No **macOS**, o Python que vem com o sistema é ainda mais restrito do que no Linux — a Apple o marca como componente interno e já anunciou sua remoção. Use o instalador oficial ou o Homebrew (`brew install python@3.13`), e note que o Homebrew também aplica a PEP 668: `pip install` fora de um venv falha do mesmo jeito.
+
+## 🐍 Jeito Pythônico
+
+A convenção mais estabelecida do ecossistema é curta: **um ambiente virtual por projeto, dentro do projeto, chamado `.venv`, fora do controle de versão.**
+
+```bash
+# pythônico
+cd ~/projetos/relatorios
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install requests
+echo ".venv/" >> .gitignore
+```
+
+O nome `.venv` é reconhecido automaticamente pelo VS Code, pelo PyCharm, pelo `uv` e por várias outras ferramentas — usar outro nome só cria trabalho. E `.venv/` entra no `.gitignore` sempre: o ambiente é derivado, tem caminhos absolutos dentro dele e não é portátil entre máquinas. O que se versiona é a **lista** de dependências, tema do Volume 5.
+
+O antipadrão a evitar tem várias formas, todas com a mesma raiz:
+
+```bash
+# antipadrão: escrever no Python do sistema
+sudo pip install requests
+pip install --break-system-packages requests
+sudo python3 -m pip install --upgrade pip
+
+# antipadrão: um ambiente só para tudo
+source ~/venv-geral/bin/activate   # usado em quinze projetos diferentes
+```
+
+Os três primeiros brigam com o `apt` pelos mesmos arquivos. O quarto não quebra o sistema, mas devolve o problema que o venv resolvia: dois projetos que precisam de versões diferentes da mesma biblioteca voltam a se atropelar, e você descobre isso no pior momento.
+
+Sobre `--break-system-packages`, uma nota honesta: ele existe para casos legítimos, quase todos em contêiner. Numa imagem Docker cujo único propósito é rodar um programa Python, não há conflito possível com ferramentas de distribuição, e a alternativa (criar um venv dentro da imagem) só acrescenta uma camada. Fora desse contexto, a opção faz exatamente o que o nome diz.
+
+Para **instalar aplicativos** escritos em Python — `ruff`, `httpie`, `yt-dlp`, coisas que você chama pelo nome no terminal e não importa no seu código — nem `pip` nem venv manual são a resposta certa. O `pipx` cria um ambiente isolado por aplicativo e coloca só o executável no seu `PATH`:
+
+```bash
+sudo apt install pipx
+pipx install ruff
+```
+
+O `uv` faz a mesma coisa com `uv tool install`. A regra mental é limpa: **biblioteca que você importa vai no venv do projeto; programa que você executa vai no `pipx`**.
+
+Sobre versões, o que muda por aqui:
+
+- **PEP 668** — o marcador `EXTERNALLY-MANAGED`. Chegou às distribuições ao longo de 2023; Debian 12, Ubuntu 23.04 e o Kali de então em diante. É a razão de tutoriais antigos com `sudo pip install` não funcionarem mais.
+- **PEP 405** — o módulo `venv` na biblioteca padrão, desde o Python 3.3. Antes dele, `virtualenv` era um pacote externo obrigatório; hoje é opcional e serve sobretudo a quem precisa de compatibilidade mais ampla.
+- **Python 3.11** — `python3 -m venv` passou a ser bem mais rápido, e `--upgrade-deps` ficou prático para já criar o ambiente com `pip` atualizado.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir a barreira da PEP 668, montar um ambiente virtual, provar o isolamento nos dois sentidos e inspecionar o que a ativação faz. Nada é instalado no sistema, e nada exige `sudo`.
+
+O roteiro está em Linux (Kali/Debian). As diferenças de Windows estão no passo 9.
+
+**1. Confirme quem é o Python do sistema.**
+
+```bash
+python3 --version
+which -a python3
+```
+
+```text
+Python 3.13.12
+/usr/bin/python3
+/bin/python3
+```
+
+`/bin` é um link para `/usr/bin` nas distribuições atuais, então os dois caminhos são o mesmo arquivo.
+
+**2. Veja quem depende dele.** Não pule este passo — é o que dá peso ao resto:
+
+```bash
+dpkg -l 'python3-*' | grep -c '^ii'
+apt-cache rdepends --installed python3 | head -8
+```
+
+O primeiro comando conta os pacotes Python que o `apt` administra (529 na máquina deste capítulo; na sua, outro número). O segundo mostra alguns dos programas que quebrariam se o interpretador mudasse por baixo deles.
+
+**3. Provoque a PEP 668.** Este comando **falha de propósito** e não altera nada no sistema:
+
+```bash
+pip install requests
+```
+
+Você deve ver o `error: externally-managed-environment` da abertura do capítulo, com o texto que a sua distribuição escreveu. **Não** execute a sugestão do `--break-system-packages`.
+
+**4. Encontre o marcador.**
+
+```bash
+ls -l /usr/lib/python3.13/EXTERNALLY-MANAGED
+head -4 /usr/lib/python3.13/EXTERNALLY-MANAGED
+```
+
+Compare o campo `Error` com a mensagem que o `pip` imprimiu no passo 3. É a mesma.
+
+**5. Crie o ambiente e leia o `pyvenv.cfg`.**
+
+```bash
+mkdir -p ~/lab03 && cd ~/lab03
+python3 -m venv .venv
+cat .venv/pyvenv.cfg
+```
+
+Se der erro dizendo que `ensurepip` não está disponível, falta o pacote `python3-venv` (ou `python3-full`): instale com `sudo apt install python3-full` e repita. É a única vez neste laboratório em que `sudo` aparece, e é para instalar um pacote da distribuição pelo `apt` — não para mexer em pacote Python.
+
+**6. Compare os prefixos.**
+
+```bash
+.venv/bin/python -c "import sys; print(sys.prefix); print(sys.base_prefix)"
+```
+
+Os dois têm de ser diferentes. Se forem iguais, você chamou o Python do sistema por engano.
+
+**7. Prove o isolamento nos dois sentidos.**
+
+```bash
+.venv/bin/python -m pip install requests cowsay
+.venv/bin/python -c "import cowsay; print(cowsay.__file__)"
+python3 -c "import cowsay"
+```
+
+O ambiente encontra o `cowsay`; o sistema responde `ModuleNotFoundError`. Agora o caso mais interessante:
+
+```bash
+python3 -c "import requests; print(requests.__version__)"
+.venv/bin/python -c "import requests; print(requests.__version__)"
+```
+
+Dois números diferentes, dois arquivos diferentes, nenhum conflito. Se o seu Kali não trouxer `requests` do `apt`, o primeiro comando dá `ModuleNotFoundError` — o que também serve, só é menos ilustrativo.
+
+**8. Observe a ativação.**
+
+```bash
+which python3
+source .venv/bin/activate
+which python
+echo "$VIRTUAL_ENV"
+deactivate
+which python3
+```
+
+A variável `VIRTUAL_ENV` é definida pela ativação e apagada pela desativação; é o que o seu prompt e o seu editor leem para mostrar qual ambiente está em uso. Confirme que, depois do `deactivate`, `which python3` volta a apontar para `/usr/bin/python3`.
+
+**9. No Windows.** Os passos 3 e 4 não se aplicam — o Python oficial do Windows não é gerenciado externamente e o `pip` instala sem reclamar, o que é justamente por que ali o cuidado com ambientes é responsabilidade sua. O equivalente aos passos 1, 5 e 8:
+
+```text
+py -0p
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install requests cowsay
+deactivate
+```
+
+Se o `Activate.ps1` for bloqueado pela política de execução do PowerShell, a saída sem baixar a guarda do sistema é chamar o interpretador pelo caminho: `.\.venv\Scripts\python.exe -m pip install ...` funciona sem ativação alguma.
+
+**10. Descarte e recrie.** Para fechar, apague o ambiente e faça de novo:
+
+```bash
+rm -rf .venv
+python3 -m venv .venv
+```
+
+Levou poucos segundos e nada foi perdido — porque não havia nada de valor lá dentro. Essa é a propriedade mais útil de um ambiente virtual: ele é descartável. Quando algo der errado nas dependências de um projeto, apagar o `.venv` e recriar é uma solução legítima, não uma gambiarra.
+
+## Resumo
+
+- O Python de `/usr/bin` é infraestrutura da distribuição, não ferramenta de desenvolvimento. No Kali deste capítulo, 529 pacotes do `apt` e ferramentas como `theHarvester` e `weevely` dependem dele.
+- A PEP 668 formalizou o arquivo `EXTERNALLY-MANAGED`, que faz o `pip` recusar instalação no interpretador do sistema. Não é bug: é a distribuição declarando que aquele Python tem dono.
+- Um ambiente virtual é um `pyvenv.cfg`, um `bin/` e um `site-packages/` vazio. Ele não copia o interpretador: substitui o caminho de busca de pacotes, deixando a biblioteca padrão compartilhada e trocando `dist-packages` pelo `site-packages` do projeto.
+- `sys.prefix` diferente de `sys.base_prefix` é a maneira canônica de saber que se está num venv. `activate` apenas insere um diretório no início do `PATH` e define `VIRTUAL_ENV`; `sudo` não herda nada disso.
+- Para outra **versão** do interpretador, use `uv` (baixa binários prontos) ou `pyenv` (compila), ambos dentro do seu diretório pessoal. No Windows, o launcher `py` escolhe entre as versões instaladas.
+- Convenção: um `.venv` por projeto, no projeto, no `.gitignore`. Biblioteca que se importa vai no venv; programa que se executa vai no `pipx`. `sudo pip install` não tem caso de uso legítimo numa máquina de trabalho.
