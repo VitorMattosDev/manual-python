@@ -1,3 +1,698 @@
 # Erros e tracebacks: como ler o que o Python está dizendo {#sec-cap007}
 
-*(em elaboracao)*
+Um script que rodou a semana toda quebrou hoje de manhã. A tela cospe onze linhas de texto com caminhos de arquivo, setas e nomes que você não reconhece. A reação natural é rolar para o topo, procurar a primeira linha e tentar entender o que ela quer.
+
+É o inverso do que funciona. Um traceback é organizado do mais antigo para o mais recente, e a informação que responde "o que aconteceu" está na **última** linha. Ler traceback é a habilidade que mais economiza tempo em Python, e a que menos se ensina.
+
+## O traceback do começo ao fim
+
+Vamos quebrar um programa de verdade. `relatorio.py` calcula a média dos níveis de sinal óptico de um arquivo de log:
+
+```python
+"""Gera o relatorio de quedas por cliente."""
+
+from pathlib import Path
+
+
+def ler_linhas(caminho):
+    return Path(caminho).read_text(encoding="utf-8").splitlines()
+
+
+def extrair_nivel(linha):
+    campos = linha.split()
+    return float(campos[3])
+
+
+def media_niveis(caminho):
+    linhas = ler_linhas(caminho)
+    niveis = [extrair_nivel(l) for l in linhas]
+    return sum(niveis) / len(niveis)
+
+
+if __name__ == "__main__":
+    print(media_niveis("sinais.log"))
+```
+
+E `sinais.log` tem um campo estragado na terceira linha — o equipamento não conseguiu ler e escreveu texto no lugar do número:
+
+```text
+2026-03-11 03:14:02 sitio-mangueira -18.4
+2026-03-11 05:02:19 fazenda-boa-vista -21.7
+2026-03-11 06:47:55 chacara-do-ze sem-leitura
+```
+
+```bash
+python3 relatorio.py
+```
+
+```text
+Traceback (most recent call last):
+  File "/tmp/lab07/relatorio.py", line 22, in <module>
+    print(media_niveis("sinais.log"))
+          ~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/tmp/lab07/relatorio.py", line 17, in media_niveis
+    niveis = [extrair_nivel(l) for l in linhas]
+              ~~~~~~~~~~~~~^^^
+  File "/tmp/lab07/relatorio.py", line 12, in extrair_nivel
+    return float(campos[3])
+ValueError: could not convert string to float: 'sem-leitura'
+```
+
+Esse texto tem uma estrutura fixa, e vale nomear cada parte.
+
+**A primeira linha é um aviso de ordenação**, não informação sobre o erro: `most recent call last` significa "a chamada mais recente está por último". É o Python dizendo onde olhar, e quase todo mundo ignora.
+
+**No meio vêm os quadros** (*frames*), um por chamada de função que estava em andamento. Cada quadro tem três linhas: o arquivo e a linha, o nome da função (`in media_niveis`), o código daquela linha, e — desde o Python 3.11 — a marcação de coluna com til e circunflexo apontando o trecho exato da expressão que estava sendo avaliado.
+
+**A última linha é a resposta**: o tipo da exceção (`ValueError`), dois pontos, e a mensagem. `could not convert string to float: 'sem-leitura'` diz o que deu errado **e** qual dado causou o problema.
+
+@fig-anatomia-traceback organiza a leitura.
+
+::: {#fig-anatomia-traceback}
+```{.tikz}
+%%| filename: anatomia-traceback
+%%| alt: Pilha de chamadas de um traceback, com o quadro mais antigo no topo e o mais recente embaixo, e a ordem recomendada de leitura de baixo para cima
+\begin{tikzpicture}[
+  quadro/.style={draw=manualblue, thick, rounded corners, fill=manualblue!8,
+                 text width=6.4cm, align=left, minimum height=1.0cm,
+                 font=\ttfamily\scriptsize, inner xsep=6pt},
+  final/.style={draw=manualred, very thick, rounded corners, fill=manualred!10,
+                text width=6.4cm, align=left, minimum height=0.85cm,
+                font=\ttfamily\scriptsize, inner xsep=6pt},
+  topo/.style={draw=manualgray, thick, rounded corners, fill=manualgray!8,
+               text width=6.4cm, align=left, minimum height=0.62cm,
+               font=\ttfamily\scriptsize, inner xsep=6pt},
+  nt/.style={font=\scriptsize, align=left, text=manualgray},
+  fl/.style={->,>=stealth, thick}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[topo]   (h)  at (0, 2.55) {Traceback (most recent call last):};
+  \node[quadro] (q1) at (0, 1.60) {line 22, in <module>\\print(media\_niveis(...))};
+  \node[quadro] (q2) at (0, 0.35) {line 17, in media\_niveis\\niveis = [extrair\_nivel(l) ...]};
+  \node[quadro] (q3) at (0,-0.90) {line 12, in extrair\_nivel\\return float(campos[3])};
+  \node[final]  (f)  at (0,-2.00) {ValueError: could not convert...};
+
+  \node[nt, anchor=west, text width=4.5cm] at (3.5, 2.55)
+    {só diz a \textbf{ordem}: o mais recente por último};
+  \node[nt, anchor=west, text width=4.5cm] at (3.5, 1.60)
+    {onde a chamada \textbf{começou}};
+  \node[nt, anchor=west, text width=4.5cm] at (3.5, 0.35)
+    {caminho intermediário};
+  \node[nt, anchor=west, text width=4.5cm] at (3.5,-0.90)
+    {onde o erro \textbf{aconteceu}};
+  \node[nt, anchor=west, text width=4.5cm, text=manualred] at (3.5,-2.00)
+    {\textbf{o que} aconteceu --- leia primeiro};
+
+  \draw[fl, manualred, very thick] (-4.0,-2.35) -- (-4.0, 2.2);
+  \node[nt, rotate=90, anchor=south, text=manualred] at (-4.25,-0.1)
+    {ordem de leitura};
+\end{tikzpicture}
+```
+O traceback imprime do mais antigo ao mais recente; leia de baixo para cima.
+:::
+
+A ordem prática de leitura é esta:
+
+1. **A última linha**, sempre. Tipo e mensagem respondem o que aconteceu.
+2. **O quadro de baixo**, que é onde o erro estourou.
+3. **Subindo**, até encontrar o primeiro quadro que seja **código seu**. É ali que você tem poder de agir.
+
+O passo 3 importa mais do que parece, porque tracebacks reais atravessam bibliotecas. Se o arquivo de log não existir:
+
+```bash
+python3 -c "from relatorio import media_niveis; media_niveis('naoexiste.log')"
+```
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    media_niveis('naoexiste.log')
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/lab07/relatorio.py", line 16, in media_niveis
+    linhas = ler_linhas(caminho)
+  File "/tmp/lab07/relatorio.py", line 7, in ler_linhas
+    return Path(caminho).read_text(encoding="utf-8").splitlines()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/pathlib/_local.py", line 548, in read_text
+    return PathBase.read_text(self, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/pathlib/_abc.py", line 632, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/pathlib/_local.py", line 539, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'naoexiste.log'
+```
+
+São sete quadros, e **quatro deles são da biblioteca padrão**. Nada em `/usr/lib/python3.13/pathlib/` está com defeito — aqueles quadros são só o caminho que a chamada percorreu. O quadro que interessa é o `ler_linhas`, na linha 7 do seu arquivo, e a informação decisiva continua sendo a última linha.
+
+Daí a heurística que resolve a maioria dos casos: **procure o quadro mais baixo cujo caminho seja do seu projeto**. Erro dentro de biblioteca madura quase sempre significa que você passou para ela um valor que ela não esperava.
+
+## As exceções que você vai ver mais
+
+Cada tipo de exceção é uma hipótese sobre a causa. Reconhecê-las de imediato é metade do trabalho.
+
+**`NameError`** — o nome não existe. Desde o Python 3.10, com sugestão:
+
+```python
+comprimento = 10
+print(compriemnto)
+```
+
+```text
+NameError: name 'compriemnto' is not defined. Did you mean: 'comprimento'?
+```
+
+**`AttributeError`** — o objeto não tem aquele atributo ou método. Também sugere, quando o nome é parecido o bastante:
+
+```text
+AttributeError: 'str' object has no attribute 'upperr'. Did you mean: 'upper'?
+AttributeError: 'str' object has no attribute 'startwith'. Did you mean: 'startswith'?
+```
+
+E não sugere, quando o palpite é distante demais:
+
+```text
+AttributeError: 'str' object has no attribute 'uppercase'
+```
+
+A sugestão vem de uma medida de semelhança entre textos: `upperr` e `uppe` chegam perto de `upper`, mas `uppercase` não. Ausência de sugestão não significa que o método não exista com outro nome — significa apenas que a heurística não achou nada próximo. Aí é `dir` e `help`, como no @sec-cap004.
+
+**`TypeError`** — a operação não faz sentido para aqueles tipos:
+
+```text
+  File "<string>", line 1, in <module>
+    print('3' + 4)
+          ~~~~^~~
+TypeError: can only concatenate str (not "int") to str
+```
+
+Aqui a marcação de coluna se mostra útil: o `^` está exatamente sobre o `+`, e os `~` cobrem os operandos. Esse é o "explícito é melhor que implícito" do @sec-cap001 em ação — a linguagem se recusa a adivinhar se você queria `"34"` ou `7`.
+
+**`ValueError`** — o tipo está certo e o valor não serve. `float("sem-leitura")` recebeu um texto, que é o tipo esperado, com conteúdo impossível de converter. A dupla `TypeError` e `ValueError` confunde no começo, e a distinção é essa: tipo errado contra valor errado.
+
+**`KeyError`** e **`IndexError`** — a chave ou a posição não existe:
+
+```text
+    print(d['quedas'])
+          ~^^^^^^^^^^
+KeyError: 'quedas'
+```
+
+```text
+    print(campos[5])
+          ~~~~~~^^^
+IndexError: list index out of range
+```
+
+`IndexError` é o que você recebe quando o arquivo de log tem uma linha com menos campos do que o esperado — e é por isso que `campos[3]` em `extrair_nivel` é uma bomba armada, assunto do laboratório.
+
+**`ZeroDivisionError`** — divisão por zero. No nosso programa, ele aparece se o arquivo estiver vazio:
+
+```text
+    print(sum(niveis)/len(niveis))
+          ~~~~~~~~~~~^~~~~~~~~~~~
+ZeroDivisionError: division by zero
+```
+
+**`FileNotFoundError`** — arquivo ou diretório inexistente, com o `[Errno 2]` que vem do sistema operacional.
+
+**`ModuleNotFoundError`** — o import falhou:
+
+```text
+    import requestss
+ModuleNotFoundError: No module named 'requestss'
+```
+
+Nove vezes em dez a causa não é o nome: é o ambiente virtual errado. Antes de investigar qualquer coisa, rode o `import sys; print(sys.executable)` do @sec-cap005.
+
+## Exceções encadeadas
+
+Quando uma exceção acontece **enquanto** outra estava sendo tratada, o Python mostra as duas. É a parte do traceback que mais assusta e a mais informativa.
+
+### Encadeamento implícito
+
+```python
+dados = {"cliente": "sitio"}
+
+try:
+    quedas = dados["quedas"]
+except KeyError:
+    print("nao achei a chave, vou tentar converter")
+    quedas = int(dados["cliente"])
+```
+
+```text
+nao achei a chave, vou tentar converter
+Traceback (most recent call last):
+  File "/tmp/lab07/enc1.py", line 4, in <module>
+    quedas = dados["quedas"]
+             ~~~~~^^^^^^^^^^
+KeyError: 'quedas'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/tmp/lab07/enc1.py", line 7, in <module>
+    quedas = int(dados["cliente"])
+ValueError: invalid literal for int() with base 10: 'sitio'
+```
+
+A frase-chave é **"During handling of the above exception"**: durante o tratamento da exceção acima, outra ocorreu. Isso quase sempre indica que o seu `except` tem um bug — o plano B falhou. O erro que você precisa corrigir é o de baixo; o de cima explica por que o programa chegou lá.
+
+### Encadeamento explícito
+
+O caso oposto é intencional. Você captura um erro técnico e o traduz para um erro que fala a língua da sua aplicação, preservando o original com `raise ... from`:
+
+```python
+class ConfiguracaoInvalida(Exception):
+    """Erro de dominio da aplicacao."""
+
+
+def ler_taxa(dados):
+    try:
+        return float(dados["taxa"])
+    except KeyError as erro:
+        raise ConfiguracaoInvalida("falta a chave 'taxa'") from erro
+
+
+ler_taxa({"cliente": "sitio"})
+```
+
+```text
+Traceback (most recent call last):
+  File "/tmp/lab07/enc2.py", line 7, in ler_taxa
+    return float(dados["taxa"])
+                 ~~~~~^^^^^^^^
+KeyError: 'taxa'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/tmp/lab07/enc2.py", line 12, in <module>
+    ler_taxa({"cliente": "sitio"})
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/lab07/enc2.py", line 9, in ler_taxa
+    raise ConfiguracaoInvalida("falta a chave 'taxa'") from erro
+ConfiguracaoInvalida: falta a chave 'taxa'
+```
+
+Agora a frase é **"The above exception was the direct cause"** — causa direta, não acidente. Quem lê recebe as duas informações: a mensagem de alto nível ("falta a chave taxa") e o detalhe técnico ("`KeyError: 'taxa'`").
+
+A terceira forma é suprimir a origem com `from None`, quando o erro interno é ruído:
+
+```python
+def ler_taxa(dados):
+    try:
+        return float(dados["taxa"])
+    except KeyError:
+        raise ValueError("falta a chave 'taxa'") from None
+```
+
+```text
+Traceback (most recent call last):
+  File "/tmp/lab07/enc3.py", line 8, in <module>
+    ler_taxa({})
+    ~~~~~~~~^^^^
+  File "/tmp/lab07/enc3.py", line 5, in ler_taxa
+    raise ValueError("falta a chave 'taxa'") from None
+ValueError: falta a chave 'taxa'
+```
+
+Limpo — e você jogou fora informação. Use com parcimônia. @fig-encadeamento resume as três.
+
+::: {#fig-encadeamento}
+```{.tikz}
+%%| filename: encadeamento
+%%| alt: Tres formas de encadeamento de excecoes: implicito por falha no tratamento, explicito com raise from e supressao com from None
+\begin{tikzpicture}[
+  cx/.style={draw=manualgray, thick, rounded corners, fill=manualgray!5,
+             text width=4.5cm, align=center, minimum height=3.4cm},
+  ti/.style={font=\scriptsize\bfseries, align=center},
+  orig/.style={draw=manualyellow, thick, rounded corners, fill=manualyellow!14,
+               text width=3.5cm, align=center, minimum height=0.62cm,
+               font=\ttfamily\tiny},
+  novo/.style={draw=manualred, thick, rounded corners, fill=manualred!10,
+               text width=3.5cm, align=center, minimum height=0.62cm,
+               font=\ttfamily\tiny},
+  sumiu/.style={draw=manualgray, dashed, rounded corners, fill=none,
+                text width=3.5cm, align=center, minimum height=0.62cm,
+                font=\tiny, text=manualgray},
+  fr/.style={font=\tiny, text=manualgray, align=center, text width=4.2cm},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \foreach \xx/\tit in {0/{implícito}, 5.0/{explícito}, 10.0/{suprimido}}
+    { \node[ti] at (\xx,2.15) {\tit}; \node[cx] at (\xx,0.15) {}; }
+
+  \node[orig] at (0,1.35) {KeyError};
+  \node[fr]   at (0,0.62) {During handling of the above exception};
+  \node[novo] at (0,-0.15) {ValueError};
+  \node[fr]   at (0,-1.15) {o \texttt{except} falhou --- provável bug};
+
+  \node[orig] at (5.0,1.35) {KeyError};
+  \node[fr]   at (5.0,0.62) {The above exception was the direct cause};
+  \node[novo] at (5.0,-0.15) {ConfiguracaoInvalida};
+  \node[fr]   at (5.0,-1.15) {\texttt{raise ... from erro} --- tradução proposital};
+
+  \node[sumiu] at (10.0,1.35) {(origem descartada)};
+  \node[fr]    at (10.0,0.62) {nada é mostrado};
+  \node[novo]  at (10.0,-0.15) {ValueError};
+  \node[fr]    at (10.0,-1.15) {\texttt{raise ... from None} --- perde informação};
+
+  \draw[fl] (0,1.02)   -- (0,0.2);
+  \draw[fl] (5.0,1.02) -- (5.0,0.2);
+  \draw[fl, dashed] (10.0,1.02) -- (10.0,0.2);
+\end{tikzpicture}
+```
+Três encadeamentos: acidente, tradução proposital e supressão.
+:::
+
+## Quando o traceback é gigante
+
+Recursão infinita produz o traceback mais intimidador que existe — e o CPython tem a gentileza de resumi-lo:
+
+```python
+def profundidade(n):
+    return profundidade(n + 1)
+
+
+profundidade(0)
+```
+
+```text
+Traceback (most recent call last):
+  File "/tmp/lab07/rec.py", line 5, in <module>
+    profundidade(0)
+    ~~~~~~~~~~~~^^^
+  File "/tmp/lab07/rec.py", line 2, in profundidade
+    return profundidade(n + 1)
+  File "/tmp/lab07/rec.py", line 2, in profundidade
+    return profundidade(n + 1)
+  [Previous line repeated 996 more times]
+RecursionError: maximum recursion depth exceeded
+```
+
+Doze linhas, não mil. O `[Previous line repeated 996 more times]` substitui os quadros repetidos. `RecursionError` quase sempre significa uma de duas coisas: falta a condição de parada, ou existe um ciclo entre funções que chamam umas às outras.
+
+## `SyntaxError` é diferente de todos os outros
+
+Vale reforçar a distinção do @sec-cap002 e do @sec-cap006, porque ela muda como se procura o problema:
+
+```text
+  File "/tmp/lab06/e2.py", line 2
+    print("caro")
+    ^^^^^
+IndentationError: expected an indented block after 'if' statement on line 1
+```
+
+Não há `Traceback (most recent call last)` e não há quadros. Não pode haver: nenhuma função foi chamada, porque o programa nunca começou. `SyntaxError` e suas subclasses são detectadas na compilação; todo o resto acontece em execução. Se você vê quadros, o programa rodou; se não vê, nem chegou a rodar.
+
+## 🐍 Jeito Pythônico
+
+A postura pythônica diante de erro tem um nome: **EAFP**, de *Easier to Ask Forgiveness than Permission* — é mais fácil pedir perdão do que permissão. O oposto é o **LBYL**, *Look Before You Leap*, olhe antes de saltar, comum em outras linguagens.
+
+```python
+# LBYL: verifica tudo antes
+import os
+
+if os.path.exists(caminho):
+    if os.access(caminho, os.R_OK):
+        with open(caminho) as f:
+            dados = f.read()
+    else:
+        dados = ""
+else:
+    dados = ""
+```
+
+```python
+# EAFP: tenta, e trata o que der errado
+try:
+    dados = Path(caminho).read_text(encoding="utf-8")
+except (FileNotFoundError, PermissionError):
+    dados = ""
+```
+
+A segunda não é só mais curta: é **correta**, e a primeira não é. Entre o `os.path.exists` e o `open` existe um intervalo em que o arquivo pode ser apagado por outro processo — uma condição de corrida que a verificação prévia não elimina, só torna mais rara. A exceção é a única forma de saber que a operação falhou de fato.
+
+Três antipadrões que valem nome:
+
+```python
+# antipadrão: engolir tudo em silêncio
+try:
+    nivel = float(campos[3])
+except:
+    pass
+```
+
+Esse é o pior pedaço de código deste capítulo. O `except` sem tipo captura **tudo**, incluindo `KeyboardInterrupt` — o seu `Ctrl+C` — e `SystemExit`. Com `pass` no corpo, o erro desaparece sem rastro, e é o "erros nunca devem passar em silêncio" da PEP 20 sendo violado da forma mais direta possível. O programa continua com dados errados e você descobre semanas depois.
+
+```python
+# antipadrão: capturar Exception por precaução
+try:
+    nivel = float(campos[3])
+except Exception as erro:
+    print("deu erro:", erro)
+```
+
+Melhor, porque não engole o `Ctrl+C` e ao menos avisa. Ainda ruim, porque trata igual coisas diferentes: campo com texto inválido, arquivo corrompido e um bug de digitação no nome de uma variável.
+
+```python
+# pythônico: capture o que você sabe tratar, o mais específico possível
+try:
+    nivel = float(campos[3])
+except (IndexError, ValueError) as erro:
+    logging.warning("linha ignorada (%s): %r", erro, linha)
+    continue
+```
+
+`IndexError` para a linha com poucos campos, `ValueError` para o campo não numérico, e um registro do que foi descartado. Qualquer outra exceção continua subindo — porque não é caso previsto, e programa que quebra alto é melhor que programa que mente.
+
+Duas regras finais:
+
+**Nunca use `assert` para validar entrada.** Como visto no @sec-cap002, `python -O` remove as asserções. Validação é `if` com `raise`.
+
+**Prefira exceção específica à mensagem genérica.** Quando você levanta um erro, escolha o tipo mais preciso da hierarquia (`ValueError` para valor ruim, `TypeError` para tipo errado, `KeyError` para chave ausente) ou crie a sua, herdando de `Exception`. O Volume 6 trata da hierarquia completa e de como desenhar exceções próprias.
+
+Sobre versões — a qualidade das mensagens de erro é uma das áreas em que o Python mais melhorou:
+
+- **Python 3.10** — `NameError` e `AttributeError` passaram a sugerir nomes parecidos; mensagens de `SyntaxError` identificam o comando e a linha que abriram o bloco.
+- **Python 3.11** — marcação de coluna com `~` e `^` (PEP 657) e `ExceptionGroup` com `except*` (PEP 654), para quando várias exceções acontecem em paralelo. `add_note` permite anexar contexto a uma exceção já levantada.
+- **Python 3.12** — `sys.last_exc` guarda a última exceção no modo interativo.
+- **Python 3.13** — tracebacks **coloridos** por padrão no terminal, com o tipo e a mensagem destacados. `PYTHON_COLORS=0` desliga, o que é necessário ao redirecionar para arquivo em ferramenta que não entende as sequências de cor.
+
+## 🧪 Laboratório
+
+Objetivo: provocar cada exceção comum de propósito, praticar a leitura de baixo para cima e transformar um programa frágil num programa que sobrevive a dados ruins.
+
+**1. Ambiente e programa.**
+
+```bash
+mkdir -p ~/lab07 && cd ~/lab07
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+Crie `relatorio.py` e `sinais.log` com o conteúdo do capítulo.
+
+**2. Leia o traceback na ordem certa.**
+
+```bash
+python relatorio.py
+```
+
+Antes de olhar o resto, responda três perguntas usando **só a última linha**: qual é o tipo do erro, o que ele diz e qual dado causou. Depois vá ao quadro de baixo e confirme em que função e em que linha aconteceu.
+
+**3. Conte os quadros de um erro que atravessa a biblioteca.**
+
+```bash
+python -c "from relatorio import media_niveis; media_niveis('naoexiste.log')"
+```
+
+Conte quantos quadros são seus e quantos são de `/usr/lib`. Encontre o quadro mais baixo do **seu** arquivo — é ali que a correção entra.
+
+**4. Provoque o `IndexError` escondido.** Uma linha com menos campos que o esperado é outra bomba armada em `campos[3]`. Para vê-la, use um arquivo **sem** a linha `sem-leitura`, senão o `ValueError` do passo anterior estoura primeiro e esconde este:
+
+```bash
+cat > curto.log <<'EOF'
+2026-03-11 03:14:02 sitio-mangueira -18.4
+2026-03-11 22:00:00 vila-sao-joao
+EOF
+python -c "from relatorio import media_niveis; media_niveis('curto.log')"
+```
+
+```text
+  File "/tmp/lab07/relatorio.py", line 12, in extrair_nivel
+    return float(campos[3])
+                 ~~~~~~^^^
+IndexError: list index out of range
+```
+
+Duas coisas para notar. O traceback é quase idêntico ao do passo 2, com um tipo diferente na última linha — mais uma razão para lê-la primeiro. E a marcação de coluna mudou de lugar: agora aponta `campos[3]`, e não a chamada de `float`, porque o erro aconteceu na indexação, antes de `float` ser chamada.
+
+O fato de o primeiro erro esconder o segundo é a razão de o passo 12 tratar os dois de uma vez.
+
+**5. Provoque o `ZeroDivisionError`.**
+
+```bash
+: > vazio.log
+python -c "from relatorio import media_niveis; media_niveis('vazio.log')"
+```
+
+O `: >` cria um arquivo vazio. Sem linhas, `len(niveis)` é zero.
+
+**6. Colecione as exceções comuns.** Rode cada uma e leia a mensagem inteira:
+
+```bash
+python -c "comprimento = 10; print(compriemnto)"
+python -c "'manual'.upperr()"
+python -c "'manual'.uppercase()"
+python -c "print('3' + 4)"
+python -c "print({'cliente': 'sitio'}['quedas'])"
+python -c "print(['a','b'][5])"
+python -c "import requestss"
+```
+
+Compare a segunda com a terceira: uma sugere `upper`, a outra não. A semelhança entre os nomes é o critério.
+
+**7. Veja o encadeamento implícito.** Crie `enc1.py` com o conteúdo do capítulo e rode. Localize a frase `During handling of the above exception`. Pergunte-se qual dos dois erros você corrigiria — e a resposta é o de baixo, porque o `except` é que está errado.
+
+**8. Veja o encadeamento explícito.** Crie `enc2.py` e rode. Localize `The above exception was the direct cause`. Depois crie `enc3.py`, com `from None`, e compare: a segunda saída é mais limpa e esconde que a causa raiz era um `KeyError`.
+
+**9. Provoque o `RecursionError`.**
+
+```bash
+python -c "
+def profundidade(n):
+    return profundidade(n + 1)
+
+profundidade(0)
+" 2>&1 | tail -4
+```
+
+Confirme o `[Previous line repeated ... more times]`. Depois conte o traceback inteiro:
+
+```bash
+python -c "
+def profundidade(n):
+    return profundidade(n + 1)
+
+profundidade(0)
+" 2>&1 | wc -l
+```
+
+Uma dúzia de linhas para mil chamadas.
+
+**10. Confirme que `SyntaxError` não tem quadros.**
+
+```bash
+printf 'if True:\nprint(1)\n' > sint.py
+python sint.py
+```
+
+Nenhum `Traceback (most recent call last)`, nenhum quadro. O programa não rodou.
+
+**11. Entenda as cores.** No 3.13 o traceback sai colorido — mas só quando a saída é um terminal de verdade. Confirme que redirecionar já desliga:
+
+```bash
+python relatorio.py 2> err.txt
+cat -v err.txt | tail -2
+```
+
+```text
+    return float(campos[3])
+ValueError: could not convert string to float: 'sem-leitura'
+```
+
+Texto puro, sem sequência de escape nenhuma: o Python detectou que não havia terminal e não coloriu. Para **ver** a cor que o terminal recebe, force um pseudoterminal com o utilitário `script`:
+
+```bash
+script -q -c "python relatorio.py" /dev/null 2>&1 | cat -v | tail -1
+```
+
+```text
+^[[1;35mValueError^[[0m: ^[[35mcould not convert string to float: 'sem-leitura'^[[0m^M
+```
+
+Ali estão os códigos de cor em volta do tipo e da mensagem. E é assim que se desliga:
+
+```bash
+PYTHON_COLORS=0 script -q -c "python relatorio.py" /dev/null 2>&1 | cat -v | tail -1
+```
+
+```text
+ValueError: could not convert string to float: 'sem-leitura'^M
+```
+
+Como o desligamento automático já cobre redirecionamento, `PYTHON_COLORS=0` serve para o caso menos comum: uma ferramenta de CI que aloca um pseudoterminal e depois grava o resultado num log que ninguém colore de volta.
+
+**12. Conserte o programa.** Reescreva `extrair_nivel` e `media_niveis` para sobreviver a dados ruins, aplicando o EAFP com exceções específicas:
+
+```python
+import logging
+
+
+def extrair_nivel(linha):
+    campos = linha.split()
+    try:
+        return float(campos[3])
+    except (IndexError, ValueError) as erro:
+        logging.warning("linha ignorada (%s): %r", erro, linha)
+        return None
+
+
+def media_niveis(caminho):
+    linhas = ler_linhas(caminho)
+    niveis = [n for l in linhas if (n := extrair_nivel(l)) is not None]
+    if not niveis:
+        raise ValueError(f"nenhum nivel valido em {caminho}")
+    return sum(niveis) / len(niveis)
+```
+
+Salve como `relatorio2.py` (com `import logging` no topo) e junte os dois problemas num arquivo só:
+
+```bash
+echo "2026-03-11 22:00:00 vila-sao-joao" >> sinais.log
+python relatorio2.py
+```
+
+```text
+WARNING:root:linha ignorada (could not convert string to float: 'sem-leitura'): '2026-03-11 06:47:55 chacara-do-ze sem-leitura'
+WARNING:root:linha ignorada (list index out of range): '2026-03-11 22:00:00 vila-sao-joao'
+-20.049999999999997
+```
+
+As duas linhas ruins foram avisadas e descartadas — cada uma com o erro que a derrubou e o conteúdo exato da linha — e a média saiu das duas boas. Compare com o comportamento anterior, em que a primeira linha ruim matava o programa e a segunda nem chegava a ser vista.
+
+E o arquivo vazio:
+
+```bash
+python -c "from relatorio2 import media_niveis; media_niveis('vazio.log')"
+```
+
+```text
+  File "/tmp/lab07/relatorio2.py", line 24, in media_niveis
+    raise ValueError(f"nenhum nivel valido em {caminho}")
+ValueError: nenhum nivel valido em vazio.log
+```
+
+Agora o erro é um `ValueError` com mensagem sua, que diz **qual** arquivo, em vez de um `ZeroDivisionError` cru vindo de uma divisão que o leitor do log não fez ideia de onde veio.
+
+E o `-20.049999999999997` no lugar de `-20.05`? É o ponto flutuante binário outra vez, como no notebook do @sec-cap005. O Volume 2 explica.
+
+Repare no `:=` do @sec-cap006 dentro da compreensão: ele chama `extrair_nivel` uma vez, guarda o resultado e o testa. Sem ele, seria preciso chamar duas vezes ou escrever um laço.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- Traceback imprime do mais antigo ao mais recente. Leia de baixo para cima: primeiro a última linha (tipo e mensagem), depois o quadro mais baixo, depois subindo até o primeiro quadro do seu projeto.
+- Quadro em `/usr/lib` quase nunca é bug da biblioteca: é o caminho da chamada. O quadro que interessa é o mais baixo que seja código seu.
+- Desde o 3.11, a marcação com `~` e `^` aponta a coluna exata da expressão. Desde o 3.10, `NameError` e `AttributeError` sugerem nomes parecidos — e a ausência de sugestão só quer dizer que nada ficou próximo o bastante.
+- `TypeError` é tipo errado, `ValueError` é valor errado; `KeyError` e `IndexError` são chave e posição inexistentes; `ModuleNotFoundError` é quase sempre ambiente virtual errado.
+- "During handling of the above exception" indica que o seu `except` falhou — corrija o erro de baixo. "The above exception was the direct cause" é `raise ... from`, tradução proposital. `from None` limpa a saída e joga informação fora.
+- `SyntaxError` e subclasses não têm quadros, porque o programa nunca começou. Ver quadros significa que ele rodou.
+- EAFP vence LBYL: tentar e tratar a exceção é mais curto e mais correto que verificar antes, que sofre de condição de corrida. Capture o tipo mais específico que você sabe tratar; `except:` pelado e `except Exception: pass` são os piores hábitos possíveis.

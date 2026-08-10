@@ -16,7 +16,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 004** - O REPL, os scripts e o primeiro programa - `vol01/cap004-o-repl-os-scripts-e-o-primeiro-programa.qmd`
 - [x] **cap 005** - Ambiente de trabalho: editor, VS Code, Jupyter e o terminal - `vol01/cap005-ambiente-de-trabalho-editor-vs-code-jupyter-e.qmd`
 - [x] **cap 006** - Sintaxe essencial: indentação, linhas lógicas e comentários - `vol01/cap006-sintaxe-essencial-indentacao-linhas-logicas-e.qmd`
-- [ ] **cap 007** - Erros e tracebacks: como ler o que o Python está dizendo - `vol01/cap007-erros-e-tracebacks-como-ler-o-que-o-python.qmd`
+- [x] **cap 007** - Erros e tracebacks: como ler o que o Python está dizendo - `vol01/cap007-erros-e-tracebacks-como-ler-o-que-o-python.qmd`
 
 ### Volume 2 — Tipos, Operadores e Expressões
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (1 concluidos).
+**Total:** 104 capitulos em 16 volumes (7 concluidos).
 
