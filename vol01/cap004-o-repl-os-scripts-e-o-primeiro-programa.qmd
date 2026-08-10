@@ -1,3 +1,600 @@
 # O REPL, os scripts e o primeiro programa {#sec-cap004}
 
-*(em elaboracao)*
+Um cliente pede um orçamento: sete horas e meia de trabalho, a oitenta e cinco reais a hora. Você abre a calculadora do sistema, digita, anota o resultado. Meia hora depois vem outro cliente, e outro depois dele. No fim do dia você fez a mesma conta onze vezes e errou uma.
+
+Existem duas ferramentas para isso, e a diferença entre elas é o assunto deste capítulo. Uma serve para **descobrir** qual é a conta; a outra, para **nunca mais** ter que fazê-la. Quem usa só a primeira repete trabalho para sempre. Quem usa só a segunda escreve arquivo para responder perguntas de dez segundos.
+
+## O REPL: onde se descobre
+
+Digite `python3` no terminal, sem argumento nenhum:
+
+```text
+Python 3.13.12 (main, Feb  4 2026, 15:06:39) [GCC 15.2.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> 2 + 3
+5
+>>> _ * 10
+50
+>>> horas = 7.5
+>>> valor = 85
+>>> horas * valor
+637.5
+>>> nome = "manual"
+>>> nome.upper()
+'MANUAL'
+>>> len(nome)
+6
+>>> type(horas)
+<class 'float'>
+>>> for letra in "py":
+...     print(letra, letra.upper())
+...
+p P
+y Y
+>>>
+```
+
+O nome **REPL** descreve o que aquele `>>>` faz, e está em @fig-ciclo-repl: *Read, Eval, Print, Loop* — lê a linha, avalia, imprime o resultado, volta a esperar.
+
+::: {#fig-ciclo-repl}
+```{.tikz}
+%%| filename: ciclo-repl
+%%| alt: Ciclo do REPL com quatro etapas em circulo: ler a linha, compilar, avaliar e imprimir o valor, com a variavel sublinhado guardando o ultimo resultado
+\begin{tikzpicture}[
+  etapa/.style={draw=manualblue, thick, rounded corners, fill=manualblue!8,
+                text width=2.6cm, align=center, minimum height=1.1cm,
+                font=\footnotesize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[etapa] (ler)  at (0,2.3)    {\textbf{lê}\\a linha digitada};
+  \node[etapa] (comp) at (3.7,0)    {\textbf{compila}\\só aquele trecho};
+  \node[etapa] (aval) at (0,-2.3)   {\textbf{avalia}\\executa o bytecode};
+  \node[etapa] (impr) at (-3.7,0)   {\textbf{imprime}\\o valor, se houver};
+
+  \draw[fl] (ler)  to[bend left=18] (comp);
+  \draw[fl] (comp) to[bend left=18] (aval);
+  \draw[fl] (aval) to[bend left=18] (impr);
+  \draw[fl] (impr) to[bend left=18] (ler);
+
+  \node[lb, text width=2.5cm] at (0,0)
+    {\texttt{\_} guarda o último valor impresso};
+
+  \node[lb, anchor=north, text width=8.4cm] at (0,-3.6)
+    {atribuição não produz valor, então nada é impresso ---
+     é por isso que \texttt{horas = 7.5} responde com silêncio};
+\end{tikzpicture}
+```
+O ciclo do REPL. A etapa de compilação é a mesma do @sec-cap002, só que sobre uma linha em vez de um arquivo.
+:::
+
+Quatro detalhes dessa sessão valem atenção, porque são a diferença entre usar o REPL e brigar com ele.
+
+**Expressão imprime, atribuição não.** `horas * valor` respondeu `637.5`; `horas = 7.5` não respondeu nada. Não é economia de tinta: atribuição é um comando e não produz valor, então não há o que imprimir. Quando você digita algo e o REPL fica calado, ele está dizendo "isto não é uma expressão".
+
+**O `_` guarda o último resultado.** `2 + 3` deu 5, e `_ * 10` deu 50 sem que eu tivesse dado nome a nada. É útil para encadear exploração — calcule, veja, use o resultado no passo seguinte. E é uma armadilha em script: `_` só existe no modo interativo, e por convenção significa outra coisa em código (o valor que se descarta).
+
+**A resposta mostra o `repr`, não o texto.** `nome.upper()` respondeu `'MANUAL'` com aspas, porque o REPL exibe a *representação* do objeto — a forma que você digitaria para recriá-lo. Já `print` mostra o texto sem aspas. É a razão de `<class 'float'>` aparecer com esse formato em `type(horas)`.
+
+**Bloco pede linha em branco.** Quando você digita `for letra in "py":` e aperta Enter, o prompt muda para `...`, indicando que o comando não terminou. Para fechar o bloco, uma linha vazia. Esquecer isso e ficar preso no `...` é a primeira frustração de quase todo mundo.
+
+### O REPL do 3.13
+
+O modo interativo foi reescrito no Python 3.13, e a diferença é grande o suficiente para valer nota. O REPL novo tem histórico que atravessa comandos de várias linhas, colagem de bloco inteiro sem que a indentação automática estrague o texto, prompt colorido e — o que mais economiza irritação — comandos que funcionam **sem parênteses**.
+
+Isso não é um detalhe cosmético; é uma lista fixa dentro da implementação. Ela está em `_pyrepl/simple_interact.py`, no interpretador que você tem instalado:
+
+```bash
+grep -n -A 7 "^REPL_COMMANDS" /usr/lib/python3.13/_pyrepl/simple_interact.py
+```
+
+```text
+75:REPL_COMMANDS = {
+76-    "exit": _sitebuiltins.Quitter('exit', ''),
+77-    "quit": _sitebuiltins.Quitter('quit' ,''),
+78-    "copyright": _sitebuiltins._Printer('copyright', sys.copyright),
+79-    "help": _sitebuiltins._Helper(),
+80-    "clear": _clear_screen,
+81-    "\x1a": _sitebuiltins.Quitter('\x1a', ''),
+82-}
+```
+
+São cinco nomes — `exit`, `quit`, `copyright`, `help`, `clear` — mais o caractere de fim de arquivo do Windows. Antes do 3.13, digitar `exit` sozinho respondia com a dica irritante `Use exit() or Ctrl-D (i.e. EOF) to exit`, e você tinha que digitar de novo com os parênteses. Se quiser ver o comportamento antigo, force o REPL básico:
+
+```bash
+PYTHON_BASIC_REPL=1 python3
+```
+
+```text
+>>> exit
+Use exit() or Ctrl-D (i.e. EOF) to exit
+>>>
+```
+
+Uma sutileza que a implementação revela: a interceptação só vale se o nome **não** for uma variável sua. A linha que decide é `if statement in console.locals or statement not in REPL_COMMANDS`, ou seja, o seu `exit = 3` vence o comando. Faz sentido e evita surpresa.
+
+Para pedir informação sem sair do REPL, dois embutidos resolvem quase tudo. O `help` mostra a documentação:
+
+```python
+from orcamento import total
+help(total)
+```
+
+```text
+Help on function total in module orcamento:
+
+total(horas: float, valor_hora: float) -> float
+    Devolve o valor total de `horas` trabalhadas a `valor_hora` por hora.
+```
+
+Note que o `help` mostrou a assinatura com as anotações de tipo e a primeira linha da documentação da função. E o `dir` lista o que um objeto sabe fazer:
+
+```python
+print([m for m in dir("py") if not m.startswith("_")][:12])
+```
+
+```text
+['capitalize', 'casefold', 'center', 'count', 'encode', 'endswith', 'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum']
+```
+
+Filtrei os nomes que começam com underscore para deixar visíveis os métodos de uso comum — os outros são o protocolo interno, assunto do Volume 8. Este par, `dir` para descobrir o que existe e `help` para descobrir como se usa, resolve a maior parte das dúvidas sem abrir o navegador.
+
+## O script: onde se repete
+
+O REPL é excelente para descobrir e péssimo para guardar: feche o terminal e tudo se perde. O orçamento do cliente é uma tarefa recorrente, então ele merece um arquivo. Este é o primeiro programa completo do manual, `orcamento.py`:
+
+```python
+#!/usr/bin/env python3
+"""Calcula o valor de um servico a partir de horas e valor por hora."""
+
+import sys
+
+
+def total(horas: float, valor_hora: float) -> float:
+    """Devolve o valor total de `horas` trabalhadas a `valor_hora` por hora."""
+    return horas * valor_hora
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        print(f"uso: {sys.argv[0]} HORAS VALOR_HORA", file=sys.stderr)
+        return 2
+    horas = float(sys.argv[1])
+    valor_hora = float(sys.argv[2])
+    print(f"{horas} h x R$ {valor_hora:.2f} = R$ {total(horas, valor_hora):.2f}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+```bash
+python3 orcamento.py 7.5 85
+```
+
+```text
+7.5 h x R$ 85.00 = R$ 637.50
+```
+
+São vinte linhas e cada bloco tem uma razão de ser. Vamos por partes, porque este esqueleto vai reaparecer em todo programa de linha de comando deste manual.
+
+**A primeira linha, o *shebang*.** `#!/usr/bin/env python3` só tem efeito em sistemas Unix e só quando o arquivo é executável. Ela diz ao sistema operacional qual interpretador usar:
+
+```bash
+chmod +x orcamento.py
+./orcamento.py 3 120
+```
+
+```text
+3.0 h x R$ 120.00 = R$ 360.00
+```
+
+Repare que se escreve `#!/usr/bin/env python3` e não `#!/usr/bin/python3`. A forma com `env` procura o `python3` no `PATH`, o que faz o script respeitar o ambiente virtual ativo — exatamente o mecanismo do @sec-cap003. A forma com caminho fixo ignora o venv e vai sempre no Python do sistema, que quase nunca é o que você quer.
+
+**A segunda linha, a *docstring* do módulo.** Um texto entre três aspas no começo do arquivo não é comentário: é um valor, guardado no atributo `__doc__` e legível por ferramentas.
+
+```bash
+python3 -c "import orcamento; print(orcamento.__doc__)"
+```
+
+```text
+Calcula o valor de um servico a partir de horas e valor por hora.
+```
+
+**`sys.argv`, os argumentos da linha de comando.** É uma lista de textos em que a posição zero é o nome do programa e o resto são os argumentos. São **textos**, sempre: `float(sys.argv[1])` é obrigatório, e é por isso que passar `abc` no lugar de um número derruba o programa com `ValueError`. Tratar isso bem é assunto do @sec-cap007 e, com ferramenta apropriada, do Volume 12.
+
+**Erro vai para `stderr`, e o programa devolve um código.** Quando faltam argumentos, a mensagem sai por `sys.stderr` e o programa termina com 2:
+
+```bash
+python3 orcamento.py 2>/dev/null      # so o stdout
+python3 orcamento.py 2>&1 >/dev/null  # so o stderr
+python3 orcamento.py; echo $?
+```
+
+```text
+uso: orcamento.py HORAS VALOR_HORA
+2
+```
+
+O primeiro comando não imprimiu nada — o stdout estava vazio. O segundo mostrou a mensagem de uso. Essa separação é o que permite `python3 orcamento.py 7.5 85 > planilha.txt` gravar só o resultado, com os erros continuando visíveis na tela. E o código de saída — 0 para sucesso, diferente de zero para falha — é como o shell sabe se deu certo, o que faz `&&` e `||` funcionarem.
+
+**Funções em vez de código solto.** `total` faz a conta e `main` cuida da conversa com o mundo. A separação parece exagero em vinte linhas, mas é o que permite reaproveitar a conta sem executar o programa:
+
+```bash
+python3 -c "from orcamento import total; print(total(2, 50))"
+```
+
+```text
+100
+```
+
+Isso funciona por causa da última peça, que merece seção própria.
+
+## `if __name__ == "__main__"`
+
+Todo módulo Python tem uma variável `__name__`. O valor dela depende de **como** o arquivo foi carregado, e é a única diferença entre "programa" e "biblioteca" na linguagem. Dois arquivos mostram isso. Primeiro `quemsou.py`:
+
+```python
+print("modulo quemsou, __name__ =", __name__)
+
+if __name__ == "__main__":
+    print("  -> rodando como programa principal")
+else:
+    print("  -> fui importado por outro modulo")
+```
+
+E `usa.py`, que só o importa:
+
+```python
+import quemsou
+
+print("modulo usa, __name__ =", __name__)
+```
+
+Rodando o primeiro direto:
+
+```bash
+python3 quemsou.py
+```
+
+```text
+modulo quemsou, __name__ = __main__
+  -> rodando como programa principal
+```
+
+Rodando o segundo, que importa o primeiro:
+
+```bash
+python3 usa.py
+```
+
+```text
+modulo quemsou, __name__ = quemsou
+  -> fui importado por outro modulo
+modulo usa, __name__ = __main__
+```
+
+Três coisas de uma vez. O módulo importado recebeu o próprio nome, `quemsou`. O arquivo que foi chamado na linha de comando recebeu `__main__` — e note que agora é o `usa.py` que tem esse valor. E o `print` do topo do `quemsou.py` **executou durante o import**: importar um módulo roda o código do nível superior dele, inteiro.
+
+Esse último ponto é a razão de o guarda existir. @fig-name-main mostra os dois caminhos.
+
+::: {#fig-name-main}
+```{.tikz}
+%%| filename: name-main
+%%| alt: Um mesmo arquivo percorrido por dois caminhos, executado direto e importado, com valores diferentes da variavel name e o desvio do bloco principal
+\begin{tikzpicture}[
+  arq/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!8,
+              text width=3.4cm, align=center, minimum height=1.0cm,
+              font=\footnotesize},
+  via/.style={draw=manualgray, thick, rounded corners, fill=manualgray!6,
+              text width=3.9cm, align=center, minimum height=0.95cm,
+              font=\scriptsize},
+  vale/.style={draw=manualyellow, thick, rounded corners, fill=manualyellow!12,
+               text width=3.9cm, align=center, minimum height=0.9cm,
+               font=\scriptsize},
+  sim/.style={draw=manualgreen, thick, rounded corners, fill=manualgreen!10,
+              text width=3.9cm, align=center, minimum height=0.9cm,
+              font=\scriptsize},
+  nao/.style={draw=manualred, thick, rounded corners, fill=manualred!8,
+              text width=3.9cm, align=center, minimum height=0.9cm,
+              font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[arq] (arq) at (0,0) {\texttt{orcamento.py}};
+
+  \node[via] (esq) at (-3.4,-1.7) {\texttt{python3 orcamento.py}};
+  \node[via] (dir) at ( 3.4,-1.7) {\texttt{import orcamento}};
+
+  \node[vale] (vesq) at (-3.4,-3.3)
+    {\texttt{\_\_name\_\_} vale\\\texttt{"\_\_main\_\_"}};
+  \node[vale] (vdir) at ( 3.4,-3.3)
+    {\texttt{\_\_name\_\_} vale\\\texttt{"orcamento"}};
+
+  \node[sim] (sesq) at (-3.4,-5.0) {o guarda abre:\\\texttt{main()} roda};
+  \node[nao] (sdir) at ( 3.4,-5.0) {o guarda fecha:\\\texttt{main()} não roda};
+
+  \draw[fl] (arq) -- (esq);
+  \draw[fl] (arq) -- (dir);
+  \draw[fl] (esq) -- (vesq);
+  \draw[fl] (dir) -- (vdir);
+  \draw[fl] (vesq) -- (sesq);
+  \draw[fl] (vdir) -- (sdir);
+
+  \node[font=\scriptsize, text=manualgray, align=center, text width=4.6cm]
+    at (0,-6.4)
+    {o mesmo arquivo serve como programa e como biblioteca};
+  \draw[auxiliar] (-3.4,-5.6) -- (-1.6,-6.2);
+  \draw[auxiliar] ( 3.4,-5.6) -- ( 1.6,-6.2);
+\end{tikzpicture}
+```
+Sem o guarda, importar o módulo executaria o programa.
+:::
+
+Sem aquele `if`, o `from orcamento import total` do exemplo anterior teria rodado o `main()`, que olharia o `sys.argv` do processo que importou, não acharia dois argumentos e mataria o programa com código 2. Com o guarda, o mesmo arquivo é as duas coisas: um programa quando chamado e uma biblioteca quando importado.
+
+Vale desfazer uma confusão comum: `if __name__ == "__main__"` não é uma declaração de "função principal" como o `main` de C. É uma condição normal, avaliada quando o módulo carrega, sobre uma variável normal. Não há nada de especial nela além da convenção — e a convenção é universal.
+
+## As cinco formas de rodar código Python
+
+Além do REPL e do script, existem outras. Cada uma tem um uso próprio:
+
+| Forma | Para quê |
+|:---|:---|
+| `python3` | REPL: explorar, testar ideia, inspecionar objeto |
+| `python3 arquivo.py` | rodar um programa que você escreveu |
+| `python3 -c "código"` | uma linha só, direto no shell ou num script de shell |
+| `python3 -m modulo` | rodar um módulo instalado como se fosse programa |
+| `python3 -i arquivo.py` | rodar o arquivo e **cair no REPL** com o estado dele |
+
+O `-m` merece destaque porque resolve um problema real. Ele procura o módulo no caminho de importação e o executa com `__name__` valendo `__main__`:
+
+```bash
+python3 -m quemsou
+```
+
+```text
+modulo quemsou, __name__ = __main__
+  -> rodando como programa principal
+```
+
+Muitos módulos da biblioteca padrão são úteis assim, sem que você escreva nada:
+
+```bash
+python3 -m json.tool <<< '{"cliente":"sitio","quedas":4}'
+```
+
+```text
+{
+    "cliente": "sitio",
+    "quedas": 4
+}
+```
+
+O `-m` também é a forma correta de chamar o `pip` (`python3 -m pip`, como no @sec-cap003), porque garante que o `pip` executado é o do interpretador que você invocou, e não outro que esteja no `PATH`.
+
+Cuidado com uma diferença sutil no `-c`: o `sys.argv` começa com a string `'-c'`, não com um nome de arquivo:
+
+```bash
+python3 -c "import sys; print(sys.argv)" um dois tres
+```
+
+```text
+['-c', 'um', 'dois', 'tres']
+```
+
+Já o `-i` é a ponte entre os dois mundos deste capítulo, e a ferramenta de depuração mais subestimada que existe. Ele roda o arquivo e, em vez de terminar, abre o REPL com tudo que o arquivo definiu ainda vivo — inclusive quando o arquivo morreu com uma exceção. Você cai no prompt com as variáveis no estado em que estavam e pode olhar uma por uma.
+
+## 🐍 Jeito Pythônico
+
+O esqueleto de `orcamento.py` é a forma canônica de escrever um programa de linha de comando em Python, e cada peça dele tem um antipadrão correspondente.
+
+```python
+# antipadrão: código solto no nível do módulo
+import sys
+
+horas = float(sys.argv[1])
+valor = float(sys.argv[2])
+print(horas * valor)
+```
+
+```python
+# pythônico: função + guarda
+def main() -> int:
+    ...
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+A versão de cima funciona e é o que quase todo mundo escreve primeiro. Ela tem três problemas que só aparecem depois: não pode ser importada sem executar, não pode ser testada (o Volume 11 vai querer chamar `total` num teste), e não tem como devolver código de saída diferente de zero sem espalhar `sys.exit` pelo meio.
+
+Sobre o guarda, a forma idiomática é `sys.exit(main())` e não só `main()`. Assim o valor devolvido pela função vira o código de saída do processo, e você escreve um único `return` em vez de chamar `sys.exit` em cada ramo.
+
+Três outros pontos de estilo:
+
+**Mensagem de erro vai para `stderr`.** `print(..., file=sys.stderr)` e não `print(...)`. Quem usa o seu programa num pipe agradece.
+
+**`_` não sai do REPL.** No modo interativo ele é o último resultado; em código, a convenção é o oposto — `_` marca o valor que você está descartando de propósito, como em `for _ in range(3):` quando o índice não importa.
+
+**Duas aspas triplas no topo, não um comentário.** Docstring é dado, comentário é ruído para a máquina. Ferramentas leem `__doc__`; nenhuma lê o `#`.
+
+Sobre versões:
+
+- **Python 3.13** — REPL novo (PEP 762), com `exit`, `quit`, `help`, `clear` e `copyright` sem parênteses, histórico multilinha e colagem de bloco. `PYTHON_BASIC_REPL=1` volta ao antigo.
+- **Python 3.11** — `-P` desliga a inclusão automática do diretório do script no caminho de importação, e `PYTHONSAFEPATH` faz o mesmo por variável de ambiente. Interessa a quem já foi mordido por um arquivo local chamado `json.py` sombreando o módulo da biblioteca padrão.
+- **Python 3.12** — o `sys.last_exc` guarda a última exceção no modo interativo, mais conveniente que os três atributos antigos.
+
+Por fim, a divisão de trabalho que resume o capítulo: **use o REPL para perguntas e o arquivo para respostas**. Se você digitou a mesma coisa no REPL duas vezes, é hora de abrir um arquivo. Se você está editando um arquivo para descobrir o nome de um método, é hora de abrir o REPL.
+
+## 🧪 Laboratório
+
+Objetivo: usar o REPL para descobrir, transformar a descoberta num programa completo e verificar as duas identidades do mesmo arquivo. Só biblioteca padrão.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab04 && cd ~/lab04
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Explore no REPL.** Abra `python` e reproduza a sessão da abertura do capítulo. Depois experimente três coisas fora do roteiro:
+
+```python
+>>> 10 / 3
+>>> 10 // 3
+>>> 10 % 3
+```
+
+Anote os três resultados. Divisão em Python devolve `float` mesmo entre inteiros — e isso derruba quem chega de C. O Volume 2 trata do assunto.
+
+**3. Confirme que atribuição não imprime.** Digite `x = 5` e depois `x`. A primeira linha responde com silêncio, a segunda com `5`. Agora digite `x == 5`: isso é uma expressão, e responde `True`.
+
+**4. Use `dir` e `help` para descobrir sozinho.** Sem consultar nada externo, descubra o que faz o método `zfill` de um texto:
+
+```python
+>>> help("".zfill)
+>>> "42".zfill(5)
+```
+
+Este é o hábito a construir: a documentação está dentro do interpretador.
+
+**5. Teste os comandos sem parênteses.** Digite `help` sozinho e aperte Enter — no 3.13 entra no modo de ajuda interativo (saia com Enter em branco). Depois compare com o REPL antigo:
+
+```bash
+PYTHON_BASIC_REPL=1 python
+```
+
+Digite `exit` sem parênteses. Você deve ver `Use exit() or Ctrl-D (i.e. EOF) to exit`. Saia com `exit()` e reabra o `python` normal, onde `exit` sozinho funciona.
+
+**6. Escreva o programa.** Crie `orcamento.py` com o conteúdo mostrado no capítulo e rode:
+
+```bash
+python orcamento.py 7.5 85
+```
+
+```text
+7.5 h x R$ 85.00 = R$ 637.50
+```
+
+**7. Exercite as bordas.** Três execuções que **falham de propósito**, para você ver o que cada uma faz:
+
+```bash
+python orcamento.py            # faltam argumentos
+python orcamento.py 7.5        # falta um
+python orcamento.py 7.5 abc    # o segundo não é número
+```
+
+As duas primeiras devem imprimir a mensagem de uso e sair com código 2 — confirme com `echo $?`. A terceira estoura um `ValueError` com traceback, porque `float("abc")` não tem resposta. Guarde essa diferença: erro previsto é mensagem, erro imprevisto é traceback. O @sec-cap007 é sobre isso.
+
+**8. Separe os fluxos.**
+
+```bash
+python orcamento.py 7.5 85 > saida.txt
+cat saida.txt
+python orcamento.py > vazio.txt
+cat vazio.txt
+```
+
+O primeiro `cat` mostra o resultado; o segundo mostra um arquivo vazio, porque a mensagem de uso foi para `stderr` e continuou aparecendo na tela.
+
+**9. Torne executável.** Em Linux ou macOS:
+
+```bash
+chmod +x orcamento.py
+./orcamento.py 3 120
+```
+
+```text
+3.0 h x R$ 120.00 = R$ 360.00
+```
+
+No Windows não há `chmod`; o equivalente é a associação de extensão feita pelo instalador, e `py orcamento.py 3 120` sempre funciona.
+
+**10. Prove as duas identidades.** Crie `quemsou.py` e `usa.py` como no capítulo e rode os dois, mais o `-m`:
+
+```bash
+python quemsou.py
+python usa.py
+python -m quemsou
+```
+
+Confirme que `__name__` vale `__main__` no primeiro e no terceiro, e `quemsou` no segundo.
+
+**11. Importe sem executar.**
+
+```bash
+python -c "from orcamento import total; print(total(2, 50))"
+```
+
+```text
+100
+```
+
+Agora **apague** as duas últimas linhas do `orcamento.py` (o `if` e o `sys.exit`), acrescente `main()` solto no lugar e repita o comando acima. Você deve ver a mensagem de uso e o programa morrer — porque o `main` rodou durante o import e não achou os argumentos. Desfaça a mudança. Este é o passo que faz o guarda parar de ser superstição.
+
+**12. Caia no REPL com o estado.**
+
+```bash
+python -i orcamento.py 7.5 85
+```
+
+Não se assuste com o que aparece antes do prompt:
+
+```text
+  File "/tmp/lab04/orcamento.py", line 23, in <module>
+    sys.exit(main())
+    ~~~~~~~~^^^^^^^^
+SystemExit: 0
+```
+
+Isso **não** é um erro. O `sys.exit` funciona levantando a exceção `SystemExit`, e normalmente o interpretador a intercepta em silêncio para encerrar o processo. Com `-i`, como o processo não vai terminar, ela é exibida como qualquer outra exceção — e o `0` no fim é o código de saída de sucesso. No seu terminal o traceback sai colorido, novidade do 3.13.
+
+Já no prompt, tudo do arquivo está carregado. Experimente:
+
+```python
+>>> total(1, 1)
+1
+>>> sys.argv
+['orcamento.py', '7.5', '85']
+>>> horas
+```
+
+```text
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+    horas
+NameError: name 'horas' is not defined
+```
+
+`total` e `sys` existem porque são do nível superior do módulo; `horas` não, porque era variável local do `main`. É exatamente a distinção de escopo que o Volume 3 vai formalizar. Saia com `exit`.
+
+**13. Use um módulo da biblioteca padrão como programa.**
+
+```bash
+echo '{"cliente":"sitio","quedas":4}' | python -m json.tool
+python -m this
+python -m timeit "sum(range(100))"
+```
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- O REPL é para descobrir; o arquivo é para repetir. Digitou a mesma coisa duas vezes no REPL: abra um arquivo.
+- No REPL, expressão imprime e atribuição não; `_` guarda o último valor impresso; a resposta é o `repr` do objeto, não o texto; bloco só fecha com linha em branco.
+- O REPL do 3.13 aceita `exit`, `quit`, `help`, `clear` e `copyright` sem parênteses — uma lista fixa em `_pyrepl/simple_interact.py`, que perde para uma variável sua de mesmo nome. `PYTHON_BASIC_REPL=1` volta ao comportamento antigo.
+- Um programa de linha de comando tem shebang com `env`, docstring de módulo, a lógica em funções, `sys.argv` convertido explicitamente, erro em `sys.stderr` e código de saída via `sys.exit(main())`.
+- `__name__` vale `"__main__"` no arquivo que foi chamado e o nome do módulo quando importado. O guarda `if __name__ == "__main__"` é o que permite ao mesmo arquivo ser programa e biblioteca — sem ele, importar executa.
+- Cinco formas de rodar: REPL, arquivo, `-c` para uma linha, `-m` para módulo instalado (é assim que se chama o `pip`), `-i` para cair no REPL com o estado do arquivo.
