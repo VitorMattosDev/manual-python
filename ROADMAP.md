@@ -14,7 +14,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 002** - Como o Python executa código: interpretador, bytecode e CPython - `vol01/cap002-como-o-python-executa-codigo-interpretador.qmd`
 - [x] **cap 003** - Instalando o Python: versões, gerenciadores e o Python do sistema - `vol01/cap003-instalando-o-python-versoes-gerenciadores-e-o.qmd`
 - [x] **cap 004** - O REPL, os scripts e o primeiro programa - `vol01/cap004-o-repl-os-scripts-e-o-primeiro-programa.qmd`
-- [ ] **cap 005** - Ambiente de trabalho: editor, VS Code, Jupyter e o terminal - `vol01/cap005-ambiente-de-trabalho-editor-vs-code-jupyter-e.qmd`
+- [x] **cap 005** - Ambiente de trabalho: editor, VS Code, Jupyter e o terminal - `vol01/cap005-ambiente-de-trabalho-editor-vs-code-jupyter-e.qmd`
 - [ ] **cap 006** - Sintaxe essencial: indentação, linhas lógicas e comentários - `vol01/cap006-sintaxe-essencial-indentacao-linhas-logicas-e.qmd`
 - [ ] **cap 007** - Erros e tracebacks: como ler o que o Python está dizendo - `vol01/cap007-erros-e-tracebacks-como-ler-o-que-o-python.qmd`
 

@@ -1,3 +1,597 @@
 # Ambiente de trabalho: editor, VS Code, Jupyter e o terminal {#sec-cap005}
 
-*(em elaboracao)*
+O código roda no terminal. No editor, a mesma linha aparece sublinhada de amarelo com "import não pode ser resolvido". Você roda de novo no terminal: funciona. Aperta o botão de executar do editor: `ModuleNotFoundError`. Abre um notebook para testar e lá o import funciona, mas a função que você acabou de corrigir no arquivo continua devolvendo o valor antigo.
+
+Nada disso é bug de ferramenta. São três programas diferentes perguntando a três interpretadores diferentes, e a solução para todos os casos é a mesma. Este capítulo monta o ambiente de trabalho de forma que essa classe de problema deixe de existir.
+
+## Uma regra que resolve a maioria dos problemas
+
+O ambiente virtual do @sec-cap003 é um interpretador com um conjunto de pacotes. O terminal sabe qual usar porque a ativação mexeu no `PATH`. **O editor não vê o seu `PATH`**, e o kernel de um notebook é um terceiro processo, iniciado por quem sabe qual Python. @fig-um-interpretador mostra o arranjo que funciona.
+
+::: {#fig-um-interpretador}
+```{.tikz}
+%%| filename: um-interpretador
+%%| alt: Editor, terminal e kernel de notebook apontando para o mesmo interpretador do ambiente virtual, e o Python do sistema marcado como escolha errada
+\begin{tikzpicture}[
+  cliente/.style={draw=manualblue, thick, rounded corners, fill=manualblue!8,
+                  text width=3.0cm, align=center, minimum height=1.05cm,
+                  font=\scriptsize},
+  alvo/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!10,
+               text width=3.6cm, align=center, minimum height=1.3cm,
+               font=\scriptsize},
+  errado/.style={draw=manualred, thick, rounded corners, fill=manualred!8,
+                 text width=3.6cm, align=center, minimum height=1.05cm,
+                 font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[cliente] (ed)  at (-5.6, 1.9) {\textbf{editor}\\VS Code, Neovim};
+  \node[cliente] (te)  at (-5.6, 0.0) {\textbf{terminal}\\venv ativado};
+  \node[cliente] (ke)  at (-5.6,-1.9) {\textbf{notebook}\\kernel do Jupyter};
+
+  \node[alvo] (py) at (0.4,0)
+    {\texttt{.venv/bin/python}\\\textbf{um interpretador}\\os mesmos pacotes};
+
+  \draw[fl] (ed) -- (py);
+  \draw[fl] (te) -- (py);
+  \draw[fl] (ke) -- (py);
+
+  \node[errado] (sis) at (0.4,-2.9) {\texttt{/usr/bin/python3}};
+  \draw[fl, manualred, dashed] (ke) -- (sis);
+  \draw[manualred, very thick] (-2.9,-2.75) -- (-2.4,-2.25);
+  \draw[manualred, very thick] (-2.4,-2.75) -- (-2.9,-2.25);
+
+  \node[lb, anchor=west, text width=4.2cm, text=manualred] at (2.5,-2.9)
+    {o kernel apontando para outro Python é a causa do
+     \texttt{ModuleNotFoundError} que só acontece no notebook};
+\end{tikzpicture}
+```
+Editor, terminal e notebook precisam apontar para o mesmo interpretador.
+:::
+
+A regra é: **um ambiente virtual por projeto, e as três ferramentas apontando para ele.** Quando alguma coisa funciona num lugar e não no outro, a primeira pergunta não é "qual é o bug", é *qual Python cada um está usando*. E a resposta é sempre a mesma linha, rodada de dentro de cada ferramenta:
+
+```python
+import sys
+print(sys.executable)
+```
+
+Se o terminal responde `/home/voce/projeto/.venv/bin/python` e o notebook responde `/usr/bin/python3`, você achou o problema em dez segundos, sem investigar mais nada.
+
+## O terminal
+
+O terminal não é um detalhe de acompanhamento — é onde o Python é executado de verdade, em servidor, em contêiner e em automação. Vale saber o mínimo bem.
+
+Quatro coisas cobrem o dia a dia. **Navegar**: `cd`, `ls`, `pwd`. **Ativar o ambiente**: `source .venv/bin/activate`, e conferir com `which python`. **Rodar**: `python arquivo.py`, `python -m modulo`, `python -c` — as formas do @sec-cap004. E **redirecionar**: `>` para gravar a saída, `2>` para gravar o erro, `|` para passar a saída de um programa como entrada de outro.
+
+Esse último merece um exemplo, porque é o que torna um script Python uma peça reutilizável em vez de um programa isolado:
+
+```bash
+python orcamento.py 7.5 85 | tee ultimo-orcamento.txt
+```
+
+O programa não sabe que está num pipe, e é justamente por isso que funciona: ele escreveu no `stdout`, como manda a convenção do @sec-cap004, e o shell cuidou do resto.
+
+Duas variáveis de ambiente valem conhecer agora. `PYTHONPATH` acrescenta diretórios ao caminho de busca de módulos — útil em emergência, e um cheiro de problema de estrutura quando aparece em uso permanente (o Volume 5 resolve isso direito). E `PYTHONDONTWRITEBYTECODE=1`, que desliga o `__pycache__` do @sec-cap002.
+
+No **Windows**, o equivalente é o PowerShell, com `Activate.ps1` no lugar do `source`. O terminal integrado do VS Code herda a ativação, o que resolve metade dos problemas deste capítulo de graça.
+
+## O editor
+
+Qualquer editor serve para escrever Python. O que muda a produtividade é ter cinco coisas funcionando: realce de sintaxe, autocompletar que conhece os seus objetos, o erro apontado antes de rodar, formatação automática ao salvar e um depurador. Este manual usa o **VS Code** nos exemplos por ser gratuito, multiplataforma e o mais comum — mas nada aqui depende dele.
+
+O essencial da configuração é uma extensão e uma escolha. A extensão é a **Python**, da Microsoft, que traz junto o servidor de linguagem Pylance. A escolha é o interpretador: `Ctrl+Shift+P`, comando **Python: Select Interpreter**, e aponte para `./.venv/bin/python`. Isso é o que faz o sublinhado amarelo desaparecer, porque o editor passa a olhar os pacotes do ambiente certo.
+
+Melhor do que escolher na mão é deixar a escolha registrada no projeto. Crie `.vscode/settings.json`:
+
+```json
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "editor.formatOnSave": true,
+  "editor.rulers": [88],
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  }
+}
+```
+
+Esse arquivo **vai para o Git**. É a diferença entre "funciona na minha máquina" e "funciona para quem clonar o repositório": qualquer pessoa que abrir o projeto recebe o mesmo interpretador, a mesma largura de linha e a mesma formatação ao salvar. No Windows, o caminho do interpretador é `${workspaceFolder}/.venv/Scripts/python.exe`.
+
+O `88` dos `rulers` não é arbitrário: é a largura de linha que o formatador usa por padrão, e a régua na tela evita a briga de reformatação a cada salvamento.
+
+### O depurador, que substitui o `print`
+
+O recurso mais subutilizado do editor é o depurador. Colocar `print` para descobrir o valor de uma variável funciona, mas é lento: você edita, roda, lê, edita de novo, e no fim precisa lembrar de apagar tudo.
+
+Com o depurador, você clica na margem esquerda para criar um ponto de parada, aperta F5 e o programa congela naquela linha com todas as variáveis visíveis num painel. Dá para avançar linha por linha, entrar dentro de uma função, e — o que mais importa — digitar expressões no console de depuração usando o estado real daquele instante.
+
+O equivalente sem editor nenhum já está na linguagem, desde o Python 3.7:
+
+```python
+def total(horas, valor_hora):
+    breakpoint()
+    return horas * valor_hora
+```
+
+`breakpoint()` para a execução e abre o `pdb`, o depurador de linha de comando da biblioteca padrão. É o mesmo recurso, disponível em servidor por SSH, onde não há editor gráfico. O Volume 11 tem um capítulo sobre isso; por ora, saiba que existe e que a variável `PYTHONBREAKPOINT=0` desliga todos os `breakpoint()` de uma vez, o que é útil quando você esqueceu um.
+
+## Linter e formatador: `ruff`
+
+Duas ferramentas diferentes com nomes parecidos. O **formatador** arruma a aparência: espaços, quebras de linha, aspas. Ele não muda o que o programa faz e não tem opinião sobre a sua lógica. O **linter** procura problemas: import que não é usado, variável definida e nunca lida, nome fora da convenção, construção que tem uma forma melhor.
+
+O `ruff` faz as duas coisas, é escrito em Rust e é rápido o bastante para rodar a cada salvamento. Instale no ambiente do projeto:
+
+```bash
+python -m pip install ruff
+ruff --version
+```
+
+```text
+ruff 0.16.2
+```
+
+Vamos dar a ele um arquivo com problemas de propósito, `bagunca.py`:
+
+```python
+import os
+import sys
+from pathlib import Path
+
+def Media( valores ):
+    total=0
+    for i in range(len(valores)):
+        total = total + valores[i]
+    return total/len(valores)
+
+x = Media([1,2,3])
+print( "media:",x )
+```
+
+Primeiro o linter, com as regras que vêm ligadas por padrão:
+
+```bash
+ruff check --output-format concise bagunca.py
+```
+
+```text
+bagunca.py:1:1: I001 [*] Import block is un-sorted or un-formatted
+bagunca.py:1:8: F401 [*] `os` imported but unused
+bagunca.py:2:8: F401 [*] `sys` imported but unused
+bagunca.py:3:21: F401 [*] `pathlib.Path` imported but unused
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.
+```
+
+Cada linha traz arquivo, linha, coluna, código da regra e a explicação. O `[*]` marca o que a ferramenta sabe corrigir sozinha. As regras padrão são conservadoras; ligando mais famílias, aparece mais:
+
+```bash
+ruff check --output-format concise --select E,F,I,N,UP,B,SIM bagunca.py
+```
+
+```text
+bagunca.py:1:1: I001 [*] Import block is un-sorted or un-formatted
+bagunca.py:1:8: F401 [*] `os` imported but unused
+bagunca.py:2:8: F401 [*] `sys` imported but unused
+bagunca.py:3:21: F401 [*] `pathlib.Path` imported but unused
+bagunca.py:5:5: N802 Function name `Media` should be lowercase
+Found 5 errors.
+[*] 4 fixable with the `--fix` option.
+```
+
+Entrou o `N802`: `Media` deveria ser `media`, porque `CamelCase` é para classes. E note que ele **não** é corrigível automaticamente — renomear uma função exige saber quem a chama, e isso a ferramenta não decide por você.
+
+Agora o formatador, mostrando o que mudaria antes de mudar:
+
+```bash
+ruff format --diff bagunca.py
+```
+
+```text
+--- bagunca.py
++++ bagunca.py
+@@ -2,11 +2,13 @@
+ import sys
+ from pathlib import Path
+
+-def Media( valores ):
+-    total=0
++
++def Media(valores):
++    total = 0
+     for i in range(len(valores)):
+         total = total + valores[i]
+-    return total/len(valores)
++    return total / len(valores)
++
+
+-x = Media([1,2,3])
+-print( "media:",x )
++x = Media([1, 2, 3])
++print("media:", x)
+```
+
+Espaços dentro dos parênteses removidos, espaço em volta dos operadores acrescentado, duas linhas em branco antes da função — tudo o que a PEP 8 pede e ninguém quer fazer à mão. Aplicando as duas ferramentas:
+
+```bash
+ruff check --select E,F,I,N,UP,B,SIM --fix --output-format concise bagunca.py
+ruff format bagunca.py
+```
+
+```text
+bagunca.py:2:5: N802 Function name `Media` should be lowercase
+Found 4 errors (3 fixed, 1 remaining).
+1 file reformatted
+```
+
+O resultado:
+
+```python
+def Media(valores):
+    total = 0
+    for i in range(len(valores)):
+        total = total + valores[i]
+    return total / len(valores)
+
+
+x = Media([1, 2, 3])
+print("media:", x)
+```
+
+Vale olhar com atenção para **o que continua errado**. Os três imports inúteis saíram, o espaçamento está correto, mas o laço percorrendo a lista por índice — o antipadrão do @sec-cap001 — passou intacto, e o nome `Media` só recebeu um aviso. Nenhuma ferramenta escreve `sum(valores) / len(valores)` no seu lugar.
+
+Isso define o limite da automação, e é um limite honesto: **linter e formatador cuidam do que é mecânico para liberar a sua atenção para o que não é.** Eles não substituem saber a linguagem. Um arquivo aprovado pelo `ruff` pode ser um programa ruim.
+
+A configuração do `ruff` mora no `pyproject.toml`, na raiz do projeto, e também vai para o Git:
+
+```toml
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+```
+
+Com isso, `ruff check` e `ruff format` já saem com as regras do projeto, sem `--select` na linha de comando, e o editor lê o mesmo arquivo. Uma fonte de verdade para você, para a equipe e para a integração contínua — assunto do Volume 16.
+
+## O notebook
+
+Um notebook Jupyter é uma sequência de células que você executa na ordem que quiser, com o resultado — texto, tabela, gráfico — logo abaixo de cada uma. Instale no ambiente do projeto:
+
+```bash
+python -m pip install jupyterlab
+jupyter --version
+```
+
+```text
+Selected Jupyter core packages...
+IPython          : 9.16.1
+ipykernel        : 7.3.0
+jupyter_client   : 8.9.1
+jupyter_core     : 5.9.1
+jupyter_server   : 2.20.0
+jupyterlab       : 4.6.3
+nbclient         : 0.11.0
+nbconvert        : 7.17.1
+nbformat         : 5.11.0
+```
+
+Abra com `jupyter lab`, que sobe um servidor local e abre o navegador. O VS Code também abre arquivos `.ipynb` direto, o que costuma ser mais confortável.
+
+Notebook é excelente para **explorar dados**: carregar um arquivo, olhar, filtrar, desenhar um gráfico, mudar de ideia. O ciclo é curto e o estado fica vivo entre as células, então você não recarrega o arquivo de 200 MB a cada tentativa. Os volumes de dados e visualização deste manual vivem nesse modo.
+
+E notebook tem uma armadilha que precisa ser entendida antes do primeiro uso, não depois: **o estado depende da ordem em que você executou, não da ordem em que as células aparecem na tela.**
+
+### A ordem de execução
+
+Imagine três células, nesta ordem no arquivo:
+
+```python
+# célula A
+taxa = 0.10
+print("taxa definida:", taxa)
+```
+
+```python
+# célula B
+preco = 100
+print("preco definido:", preco)
+```
+
+```python
+# célula C
+print("total:", preco * (1 + taxa))
+```
+
+Agora suponha que você clicou nelas na ordem A, C, B, C — o que é absolutamente normal quando se está explorando. Foi o que rodamos num kernel de verdade:
+
+```text
+clique na celula A -> In [1]
+    taxa definida: 0.1
+clique na celula C -> In [2]
+    NameError: name 'preco' is not defined
+clique na celula B -> In [3]
+    preco definido: 100
+clique na celula C -> In [4]
+    total: 110.00000000000001
+```
+
+O número entre colchetes é o **contador de execução**, e é a informação mais importante da tela. Ele não é o número da célula: é a ordem em que as coisas aconteceram. @fig-ordem-notebook põe as duas ordens lado a lado.
+
+::: {#fig-ordem-notebook}
+```{.tikz}
+%%| filename: ordem-notebook
+%%| alt: Comparacao entre a ordem das celulas no arquivo e a ordem de execucao real num notebook, mostrando que o estado depende da segunda
+\begin{tikzpicture}[
+  cel/.style={draw=manualblue, thick, rounded corners, fill=manualblue!8,
+              text width=3.5cm, align=center, minimum height=0.85cm,
+              font=\scriptsize},
+  exe/.style={draw=manualgreen, thick, rounded corners, fill=manualgreen!10,
+              text width=3.5cm, align=center, minimum height=0.85cm,
+              font=\scriptsize},
+  falha/.style={draw=manualred, thick, rounded corners, fill=manualred!8,
+                text width=3.5cm, align=center, minimum height=0.85cm,
+                font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[lb, font=\scriptsize\bfseries] at (0,1.3) {ordem no arquivo};
+  \node[cel] (a1) at (0, 0.4) {\textbf{A} \quad \texttt{taxa = 0.10}};
+  \node[cel] (b1) at (0,-0.7) {\textbf{B} \quad \texttt{preco = 100}};
+  \node[cel] (c1) at (0,-1.8) {\textbf{C} \quad usa as duas};
+
+  \node[lb, font=\scriptsize\bfseries] at (7.2,1.3) {ordem de execução real};
+  \node[exe]   (a2) at (7.2, 0.4) {\texttt{In [1]} \quad A \quad ok};
+  \node[falha] (c2) at (7.2,-0.7) {\texttt{In [2]} \quad C \quad \texttt{NameError}};
+  \node[exe]   (b2) at (7.2,-1.8) {\texttt{In [3]} \quad B \quad ok};
+  \node[exe]   (c3) at (7.2,-2.9) {\texttt{In [4]} \quad C \quad ok};
+
+  \draw[fl] (a1.east) -- (a2.west);
+  \draw[fl] (c1.east) -- (c2.west);
+  \draw[fl] (b1.east) -- (b2.west);
+  \draw[fl] (c1.east) -- (c3.west);
+
+  \node[lb, anchor=north, text width=11.4cm] at (3.6,-3.8)
+    {o contador entre colchetes conta \textbf{execuções}, não células ---
+     um notebook cujos números não sejam 1, 2, 3\dots\ em sequência
+     não roda igual para outra pessoa};
+\end{tikzpicture}
+```
+A mesma célula C falha e funciona, dependendo do que rodou antes.
+:::
+
+Duas consequências práticas. A primeira: um notebook com contadores fora de ordem **não é reproduzível**. Ele funciona na sua tela porque o kernel guarda variáveis que não estão mais em nenhuma célula, ou porque uma célula foi executada com um código que você depois editou. Passe para outra pessoa e não roda.
+
+A segunda: o hábito que evita tudo isso é **Restart Kernel and Run All Cells** antes de considerar o trabalho pronto. Isso apaga o estado, executa tudo de cima para baixo e prova que o notebook é o que ele parece ser. Se falhar, era mentira.
+
+Como brinde, aquele `110.00000000000001` no lugar de `110.0` não é erro do Jupyter: é o comportamento do ponto flutuante binário, que tem um capítulo inteiro reservado no Volume 2.
+
+Notebook é ruim para outras coisas, e vale dizer quais. Código que vai para produção, biblioteca reutilizável, qualquer coisa que precise de teste automatizado ou de revisão em *pull request* — nada disso pertence a um `.ipynb`. O formato é JSON com a saída embutida, o que faz o `diff` do Git ficar ilegível e o histórico engordar com imagens. A divisão saudável é: **explore no notebook, mude para arquivo `.py` assim que o código tiver valor além daquela sessão.**
+
+## Outras opções
+
+**PyCharm** é um ambiente completo, com o depurador mais confortável do ecossistema e refatoração de verdade. A edição Community é gratuita. Custa mais memória e tem mais curva de aprendizado.
+
+**Neovim** com `pylsp` ou `pyright` entrega o mesmo autocompletar e diagnóstico dentro do terminal, o que importa em servidor remoto. Exige montar a configuração.
+
+**Spyder** imita o Matlab e agrada quem vem da computação científica.
+
+E `python -i` do @sec-cap004 continua sendo o ambiente mais rápido de todos para uma pergunta pequena.
+
+## 🐍 Jeito Pythônico
+
+A convenção sobre ambiente de trabalho é curta: **versione a configuração, nunca o ambiente.**
+
+```text
+# vai para o Git
+pyproject.toml          # regras do ruff, dependências, metadados
+.vscode/settings.json   # interpretador, formatação ao salvar
+.gitignore
+
+# não vai para o Git
+.venv/                  # derivado, com caminhos absolutos dentro
+__pycache__/            # cache de bytecode
+*.ipynb_checkpoints/    # rascunhos do Jupyter
+```
+
+O `.gitignore` mínimo de um projeto Python:
+
+```text
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.ruff_cache/
+```
+
+Três antipadrões comuns:
+
+```bash
+# antipadrão: instalar a ferramenta no ambiente do projeto sem precisar
+python -m pip install ruff black isort flake8 pylint mypy
+
+# pythônico: uma ferramenta que faz o trabalho de várias
+python -m pip install ruff
+```
+
+O `ruff` substitui `flake8`, `isort`, `black` e boa parte do `pylint` com uma configuração só. Empilhar ferramentas com opiniões diferentes sobre a mesma linha gera conflito de formatação a cada salvamento.
+
+```python
+# antipadrão: depurar por print e esquecer de apagar
+print("AQUI 1", valores)
+print(">>>>", total)
+
+# pythônico: ponto de parada
+breakpoint()
+```
+
+```text
+# antipadrão: um notebook de 200 células que é o produto final
+analise.ipynb
+
+# pythônico: notebook para explorar, .py para o que ficou de pé
+explorar.ipynb   ->   src/relatorio.py + tests/test_relatorio.py
+```
+
+Sobre versões e ferramentas:
+
+- **Python 3.7** — `breakpoint()` embutido (PEP 553), com `PYTHONBREAKPOINT` para desligar ou trocar o depurador.
+- **Python 3.11** — `PYTHONSAFEPATH` evita que um arquivo local com nome de módulo da biblioteca padrão sombreie o original.
+- **`ruff`** — pede `target-version` no `pyproject.toml` para saber quais modernizações propor. Com `py313`, ele sugere sintaxe que não existia em versões anteriores; com `py39`, não.
+- **PEP 8** é a referência de estilo, e a largura de linha de 88 caracteres é convenção de ferramenta, não da PEP (que fala em 79). O Volume 11 trata do assunto.
+
+## 🧪 Laboratório
+
+Objetivo: montar um projeto com ambiente, configuração versionada, linter, formatador e notebook, e provar que as três ferramentas usam o mesmo interpretador.
+
+**1. Estrutura e ambiente.**
+
+```bash
+mkdir -p ~/lab05 && cd ~/lab05
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -c "import sys; print(sys.executable)"
+```
+
+A última linha tem de apontar para dentro de `~/lab05/.venv`. Guarde esse caminho: ele é o gabarito dos passos 7 e 9.
+
+**2. Instale as ferramentas.**
+
+```bash
+python -m pip install ruff jupyterlab
+ruff --version
+```
+
+```text
+ruff 0.16.2
+```
+
+A sua versão provavelmente será mais nova; o `ruff` muda rápido, e mensagens podem diferir em detalhe.
+
+**3. Crie o arquivo problemático.** Salve `bagunca.py` com o conteúdo do capítulo — **exatamente** como está, com os espaços tortos.
+
+**4. Rode o linter.**
+
+```bash
+ruff check --output-format concise bagunca.py
+```
+
+Quatro erros. Agora com mais regras:
+
+```bash
+ruff check --output-format concise --select E,F,I,N,UP,B,SIM bagunca.py
+```
+
+Cinco, com o `N802` do nome `Media`.
+
+**5. Veja o formatador antes de aplicar.**
+
+```bash
+ruff format --diff bagunca.py
+```
+
+Leia o diff com calma: `-` é o que sai, `+` é o que entra. Este hábito — olhar antes de deixar a ferramenta escrever — vale para o resto da vida profissional.
+
+**6. Aplique e confira o que sobrou.**
+
+```bash
+ruff check --select E,F,I,N,UP,B,SIM --fix --output-format concise bagunca.py
+ruff format bagunca.py
+cat bagunca.py
+```
+
+Confirme que o laço por índice continua lá. Agora **corrija à mão** o que a ferramenta não corrige:
+
+```python
+def media(valores):
+    return sum(valores) / len(valores)
+
+
+x = media([1, 2, 3])
+print("media:", x)
+```
+
+**7. Versione a configuração.** Crie `pyproject.toml` e `.gitignore` com o conteúdo do capítulo, e `.vscode/settings.json` se você usa VS Code. Depois, sem `--select` — as regras agora vêm do `pyproject.toml`:
+
+```bash
+ruff check bagunca.py
+ruff format --check bagunca.py
+```
+
+```text
+All checks passed!
+1 file already formatted
+```
+
+E o programa ficou melhor por decisão sua, não da ferramenta.
+
+**8. Experimente o depurador.** Acrescente `breakpoint()` como primeira linha de `media` e rode `python bagunca.py`. Você cai no `pdb`, que mostra o arquivo, a linha e o comando onde parou:
+
+```text
+> /home/voce/lab05/bagunca.py(2)media()
+-> breakpoint()
+(Pdb)
+```
+
+Digite `valores` para ver o argumento, `n` para avançar uma linha, `c` para continuar até o fim e `q` para sair:
+
+```text
+(Pdb) valores
+[1, 2, 3]
+(Pdb) n
+> /home/voce/lab05/bagunca.py(3)media()
+-> return sum(valores) / len(valores)
+(Pdb) c
+2.0
+```
+
+O caminho na sua máquina será outro. Depois remova o `breakpoint()` — ou teste `PYTHONBREAKPOINT=0 python bagunca.py`, que ignora todos eles sem editar o arquivo.
+
+**9. O notebook e o mesmo interpretador.**
+
+```bash
+python -m ipykernel install --user --name lab05 --display-name "Python (lab05)"
+jupyter lab
+```
+
+No navegador, crie um notebook, escolha o kernel `Python (lab05)` e execute numa célula:
+
+```python
+import sys
+sys.executable
+```
+
+O resultado tem de ser o mesmo caminho do passo 1. Se for `/usr/bin/python3`, o kernel está errado — troque em **Kernel → Change Kernel**.
+
+**10. Reproduza a armadilha da ordem.** Crie três células com o conteúdo A, B e C do capítulo. Execute na ordem **A, C, B, C** clicando célula por célula. Confirme que:
+
+- a célula C falhou com `NameError` na primeira vez e funcionou na segunda;
+- lendo a tela de cima para baixo, os contadores são `[1]`, `[3]`, `[4]` — a célula do meio rodou por último entre as duas primeiras, e a de baixo guarda apenas a execução mais recente. O `[2]`, que foi a falha, **desapareceu da tela**: rodar C de novo sobrescreveu o resultado anterior.
+
+Esse último detalhe é o que torna a armadilha perigosa. O erro aconteceu, você corrigiu por acidente, e o notebook não guarda memória de que houve problema.
+
+**11. Prove que está reprodutível.** Use **Kernel → Restart Kernel and Run All Cells**. Agora os contadores são 1, 2, 3 de cima para baixo e nada falha, porque a ordem do arquivo passou a ser a ordem de execução. Faça isso sempre antes de mostrar um notebook para alguém.
+
+**12. Quebre de propósito para fixar.** Numa célula nova, escreva `taxa = 0.25` e execute. Depois **apague a célula**. Rode a célula C: ela usa 0.25, um valor que não existe em nenhum lugar do arquivo. Reinicie o kernel e rode tudo: volta para 0.10. Esse é o fantasma que faz notebook não reproduzir.
+
+**13. Feche com `deactivate`** (e `Ctrl+C` duas vezes no terminal do Jupyter).
+
+## Resumo
+
+- Editor, terminal e kernel de notebook são três processos. Quando algo funciona num e não no outro, a pergunta é qual interpretador cada um usa: `import sys; print(sys.executable)` responde em dez segundos.
+- Um ambiente virtual por projeto, e as três ferramentas apontando para ele. No VS Code isso se registra em `.vscode/settings.json`, que vai para o Git.
+- Formatador arruma aparência; linter procura problema. O `ruff` faz as duas coisas e substitui a pilha antiga de ferramentas. A configuração vive no `pyproject.toml`.
+- A automação tem um limite honesto: `ruff` remove import inútil e conserta espaçamento, mas não troca um laço por índice por `sum`, nem renomeia função. Arquivo aprovado pelo linter pode ser programa ruim.
+- `breakpoint()` está na linguagem desde o 3.7 e substitui a depuração por `print`. `PYTHONBREAKPOINT=0` desliga todos.
+- Notebook é para explorar. O contador `In [n]` conta execuções, não células: se não estiver em sequência, o notebook não é reproduzível. **Restart Kernel and Run All Cells** antes de dar por pronto; código com valor duradouro migra para `.py`.
+- Versione a configuração (`pyproject.toml`, `.vscode/`, `.gitignore`), nunca o ambiente (`.venv/`, `__pycache__/`, checkpoints).
