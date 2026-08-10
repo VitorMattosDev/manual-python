@@ -1,3 +1,783 @@
 # Números inteiros, de ponto flutuante e complexos {#sec-cap009}
 
-*(em elaboracao)*
+O fabricante do equipamento entrega uma ferramenta em C que classifica as leituras de potência óptica em faixas de 2 dBm. Você reescreveu a mesma classificação em Python para integrar ao relatório, conferiu com uma dúzia de leituras e bateu tudo. Aí chegou a primeira leitura negativa.
+
+```c
+printf("%d %d\n", -7 / 2, -7 % 2);
+```
+
+```text
+-3 -1
+```
+
+```python
+print(-7 // 2, -7 % 2)
+```
+
+```text
+-4 1
+```
+
+Nenhuma das duas está errada. C trunca em direção ao zero; Python arredonda para baixo. São duas convenções legítimas para dividir inteiros negativos, e a linguagem escolheu a que ninguém que vem de C espera.
+
+Este capítulo é sobre os três tipos numéricos nativos — `int`, `float` e `complex` — e sobre as decisões de projeto que os tornam diferentes dos equivalentes de outras linguagens. A precisão do `float`, que é um assunto por si só, fica para o @sec-cap010.
+
+## `int` não tem teto
+
+Em C, Java ou Rust, um inteiro tem tamanho fixo e estoura. Em Python, não:
+
+```python
+import math
+
+print(2 ** 100)
+print(math.factorial(30))
+```
+
+```text
+1267650600228229401496703205376
+265252859812191058636308480000000
+```
+
+Não há `long`, não há `int64`, não há `OverflowError` em aritmética inteira. O `int` do Python é de **precisão arbitrária**: cresce enquanto houver memória. O CPython guarda o número como uma sequência de dígitos de 30 bits, e o objeto engorda conforme necessário:
+
+```python
+import sys
+
+print(sys.getsizeof(0), sys.getsizeof(2 ** 30), sys.getsizeof(2 ** 100))
+print((2 ** 100).bit_length(), (255).bit_length())
+```
+
+```text
+28 32 40
+101 8
+```
+
+Vinte e oito bytes para o zero — o cabeçalho de qualquer objeto Python — e quatro bytes a mais por dígito interno. `bit_length()` diz quantos bits são necessários para representar o valor, e é a forma correta de perguntar "de que tamanho é este número".
+
+O preço da comodidade é desempenho: aritmética com inteiro grande é feita em software, não pela ALU do processador. Para a maioria dos programas isso não aparece; quando aparece, a resposta é NumPy, do Volume 13, que usa inteiros de tamanho fixo.
+
+Há **um** limite, e ele não é de aritmética, é de conversão para texto:
+
+```python
+print(sys.get_int_max_str_digits())
+str(10 ** 5000)
+```
+
+```text
+4300
+ValueError: Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit
+```
+
+Esse limite entrou no **Python 3.11** (e foi retroportado até o 3.9) para fechar uma negação de serviço: converter um inteiro gigante para decimal é quadrático, e um servidor que aceitasse `int(entrada_do_usuario)` podia ser travado com uma string de alguns megabytes. A aritmética continua ilimitada; só a conversão decimal tem freio, e ele se ajusta com `sys.set_int_max_str_digits()`. Conversão para hexadecimal, octal ou binário não é afetada, porque nessas bases o algoritmo é linear.
+
+## Literais e bases
+
+```python
+print(1_000_000, 0xFF, 0o755, 0b1010)
+print(hex(255), oct(493), bin(10))
+print(int("ff", 16), int("1010", 2), int("  42  "))
+```
+
+```text
+1000000 255 493 10
+0xff 0o755 0b1010
+255 10 42
+```
+
+O sublinhado como separador de milhar vem da **PEP 515** (Python 3.6) e é ignorado pelo interpretador: serve só para o leitor. Use em constantes grandes — `1_500_000` e `0xFF_FF` custam nada e evitam a conferência de zeros no olho.
+
+`int(texto, base)` aceita a base como segundo argumento e ignora espaço em volta. O que ele **não** aceita é ponto decimal: `int("3.5")` levanta `ValueError`. Para isso, `int(float("3.5"))`, e aí a truncagem é explícita.
+
+## As duas divisões
+
+Python separa o que outras linguagens juntam. `/` é **sempre** divisão real e **sempre** devolve `float`, mesmo quando dá exato:
+
+```python
+print(7 / 2, type(7 / 2))
+print(4 / 2, type(4 / 2))
+```
+
+```text
+3.5 <class 'float'>
+2.0 <class 'float'>
+```
+
+Essa foi uma das mudanças que quebraram a compatibilidade no Python 3, e por bom motivo: no Python 2, `1/2` valia `0`, e o número de bugs que isso causou é folclore da comunidade.
+
+Para divisão inteira existe `//`, o operador de piso. E aqui está a raiz do problema da abertura:
+
+```python
+for a, b in [(7, 3), (-7, 3), (7, -3), (-7, -3)]:
+    print(a, b, a // b, a % b, a == b * (a // b) + a % b)
+```
+
+```text
+7 3 2 1 True
+-7 3 -3 2 True
+7 -3 -3 -2 True
+-7 -3 2 -1 True
+```
+
+Duas regras explicam a tabela inteira:
+
+1. `a // b` arredonda para **baixo** (em direção a −∞), não em direção ao zero.
+2. `a % b` tem sempre o **sinal do divisor**.
+
+E a última coluna mostra por que: a identidade `a == b * (a // b) + a % b` vale nos quatro casos. Python escolheu preservar essa invariante; C escolheu preservar `(-a)/b == -(a/b)`. Não dá para ter as duas.
+
+::: {#fig-divisao-piso}
+```{.tikz}
+%%| filename: divisao-piso
+%%| alt: Reta numerica mostrando que -3,5 truncado em direcao ao zero da -3, enquanto o piso usado por Python da -4
+\begin{tikzpicture}[
+  rt/.style={->,>=stealth, thick, manualgray},
+  tk/.style={manualgray, thick},
+  vl/.style={font=\scriptsize\ttfamily, text=manualgray},
+  pt/.style={circle, fill=manualblue, inner sep=1.7pt},
+  al/.style={->,>=stealth, very thick},
+  lb/.style={font=\scriptsize, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \draw[rt] (-5.6,0) -- (1.2,0);
+  \foreach \vv in {-5,-4,-3,-2,-1,0}
+    { \draw[tk] (\vv,-0.13) -- (\vv,0.13); \node[vl] at (\vv,-0.42) {\vv}; }
+
+  \node[pt] (p) at (-3.5,0) {};
+  \node[font=\scriptsize\ttfamily, text=manualblue] at (-3.5,0.45) {-7/2 = -3.5};
+
+  \draw[al, manualred] (-3.45,-0.95) -- (-4.0,-0.95);
+  \node[lb, text=manualred, anchor=east, text width=3.0cm] at (-4.15,-0.95)
+    {\textbf{piso} (Python)\\\texttt{-7 // 2} é \texttt{-4}};
+
+  \draw[al, manualgreen] (-3.55,-1.85) -- (-3.0,-1.85);
+  \node[lb, text=manualgreen, anchor=west, text width=3.4cm] at (-2.85,-1.85)
+    {\textbf{truncagem} (C)\\\texttt{-7 / 2} é \texttt{-3}};
+
+  \draw[manualgray, dashed] (-3.5,-2.15) -- (-3.5,0.25);
+
+  \node[lb, text=manualgray, text width=8.6cm] at (-2.2,-2.85)
+    {a escolha de Python preserva
+     \texttt{a == b * (a // b) + a \% b}, e faz o resto\\herdar o sinal do divisor};
+\end{tikzpicture}
+```
+Duas convenções para dividir negativos. Python arredonda para baixo; C trunca.
+:::
+
+Na prática, a convenção de Python é a que você quer quase sempre, porque é a aritmética de relógio:
+
+```python
+print(-1 % 24)
+```
+
+```text
+23
+```
+
+Uma hora antes da meia-noite é 23h. Em C, `-1 % 24` é `-1`, e quem usa isso como índice de um vetor de 24 posições ganha uma falha de segmentação. A convenção "estranha" de Python é a que não quebra.
+
+`divmod` devolve os dois de uma vez, com uma divisão só:
+
+```python
+print(divmod(-7, 2))
+```
+
+```text
+(-4, 1)
+```
+
+E cuidado com o tipo: `//` entre floats continua sendo piso, mas devolve `float`.
+
+```python
+print(7.0 // 2, type(7.0 // 2))
+```
+
+```text
+3.0 <class 'float'>
+```
+
+Potenciação tem operador próprio, `**`, e a versão de três argumentos de `pow` calcula `(base ** expo) % mod` sem construir o número intermediário — é o que torna criptografia de chave pública viável:
+
+```python
+print(2 ** 10, 2 ** -1, pow(3, 100, 7))
+print(2 ** 0.5)
+```
+
+```text
+1024 0.5 4
+1.4142135623730951
+```
+
+Repare: `2 ** -1` devolve `0.5`, um `float`. Expoente negativo sobre inteiro sai da aritmética inteira, como tem de ser.
+
+## Operadores bit a bit
+
+Sobre `int`, os seis operadores bit a bit funcionam como em C, com a diferença de que o número não tem largura fixa:
+
+```python
+ip = 0xC0A80105          # 192.168.1.5
+mascara = 0xFFFFFF00     # /24
+
+print(hex(ip & mascara))
+print(hex(ip | 0xFF))
+print(hex(ip >> 8), hex(ip & 0xFF))
+print(~5, ~5 == -(5 + 1))
+```
+
+```text
+0xc0a80100
+0xc0a801ff
+0xc0a801 0x5
+-6 True
+```
+
+`&` para máscara, `|` para ligar bits, `^` para inverter, `>>` e `<<` para deslocar. O `~` é o que confunde: como o `int` é de precisão arbitrária e com sinal, o complemento de um número é sempre `-(n + 1)`. Não existe "inverter os 32 bits" sem dizer quais 32 — para isso, `n ^ 0xFFFFFFFF`.
+
+Para endereçamento IP de verdade, use `ipaddress` da biblioteca padrão em vez de fazer a conta à mão; o exemplo acima é para ver o operador funcionando.
+
+## `float` é IEEE 754 de 64 bits
+
+O `float` do Python é o `double` do C: 64 bits, no formato IEEE 754 de precisão dupla. Não há `float32`, não há decimal — há exatamente um tipo de ponto flutuante nativo, e ele tem uma estrutura fixa.
+
+::: {#fig-float-ieee754}
+```{.tikz}
+%%| filename: float-ieee754
+%%| alt: Layout de 64 bits de um float: 1 bit de sinal, 11 bits de expoente e 52 bits de fracao, com 53 bits efetivos de precisao
+\begin{tikzpicture}[
+  sg/.style={draw=manualred, very thick, fill=manualred!14,
+             minimum height=0.85cm, align=center, font=\scriptsize},
+  ex/.style={draw=manualyellow, very thick, fill=manualyellow!22,
+             minimum height=0.85cm, align=center, font=\scriptsize},
+  fr/.style={draw=manualblue, very thick, fill=manualblue!10,
+             minimum height=0.85cm, align=center, font=\scriptsize},
+  lb/.style={font=\scriptsize, align=center, text=manualgray},
+  ch/.style={decorate, manualgray, thick},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[sg, minimum width=0.75cm] (s) at (-4.9,0) {S};
+  \node[ex, minimum width=2.2cm]  (e) at (-3.4,0) {expoente};
+  \node[fr, minimum width=7.0cm]  (f) at ( 1.8,0) {fração};
+
+  \node[lb] at (-4.9,-0.72) {1 bit};
+  \node[lb] at (-3.4,-0.72) {11 bits};
+  \node[lb] at ( 1.8,-0.72) {52 bits};
+
+  \node[lb, text width=1.9cm] at (-4.9, 1.05) {sinal};
+  \node[lb, text width=2.6cm] at (-3.4, 1.15) {faixa: cerca de\\$10^{-308}$ a $10^{308}$};
+  \node[lb, text width=6.0cm] at ( 1.8, 1.15) {precisão: 52 bits gravados + 1 implícito\\= 53 bits, ou 15 a 17 dígitos decimais};
+
+  \node[lb, text width=10.5cm] at (0.4,-1.65)
+    {valor $=\ (-1)^{S} \times 1{,}\text{fração} \times 2^{\text{expoente}-1023}$
+     --- a base é \textbf{2}, e é por isso que 0,1\\não tem representação exata,
+     como 1/3 não tem em decimal};
+\end{tikzpicture}
+```
+Os 64 bits de um `float`: um de sinal, onze de expoente, cinquenta e dois de fração.
+:::
+
+Os limites do formato estão em `sys.float_info`:
+
+```python
+print(sys.float_info.max)
+print(sys.float_info.min)
+print(sys.float_info.epsilon)
+print(sys.float_info.dig, sys.float_info.mant_dig)
+```
+
+```text
+1.7976931348623157e+308
+2.2250738585072014e-308
+2.220446049250313e-16
+15 53
+```
+
+`dig` é o número de dígitos decimais que sempre sobrevivem a uma ida e volta; `mant_dig`, os 53 bits de precisão da figura; `epsilon`, a menor diferença perceptível em torno de 1,0.
+
+Diferente do `int`, o `float` **estoura** — e não com exceção:
+
+```python
+print(1e308 * 10, -1e308 * 10)
+print(float("inf"), float("-inf"), float("nan"))
+```
+
+```text
+inf -inf
+inf -inf nan
+```
+
+Ultrapassar `float_info.max` produz `inf`, silenciosamente. `inf` se comporta como o infinito matemático (`inf > 10**100` é verdadeiro), mas `inf - inf` é `nan` — *not a number*, o resultado de uma operação indefinida.
+
+E `nan` tem uma propriedade que quebra a intuição:
+
+```python
+n = float("nan")
+print(n == n, n is n, math.isnan(n))
+```
+
+```text
+False True True
+```
+
+**`nan` não é igual a si mesmo.** É o que a norma IEEE 754 manda: comparar com um valor indefinido não pode dar verdadeiro. Consequência prática: `if x == x` é um teste válido de "não é `nan`", e `lista.count(float('nan'))` pode devolver 1 mesmo com a igualdade falsa, porque as coleções testam identidade antes de igualdade. Para detectar, sempre `math.isnan`.
+
+Divisão por zero, no entanto, **é** exceção em Python, e não `inf` como em C:
+
+```python
+1.0 / 0.0
+```
+
+```text
+ZeroDivisionError: float division by zero
+```
+
+## `round` e a regra do banqueiro
+
+```python
+print(round(2.5), round(3.5), round(-2.5), round(0.5))
+```
+
+```text
+2 4 -2 0
+```
+
+`round(2.5)` é 2, não 3. Isso não é bug e não é o `float`: é o **arredondamento para o par mais próximo** (*banker's rounding*), especificado na norma IEEE 754 e adotado pelo Python 3. Quando o valor cai exatamente no meio, vai para o par. A razão é estatística: arredondar sempre para cima enviesa a soma de uma série de valores para cima, e em contabilidade esse viés acumula dinheiro do nada.
+
+Já este caso é o `float`:
+
+```python
+print(round(2.675, 2))
+```
+
+```text
+2.67
+```
+
+Nada a ver com regra de arredondamento: `2.675` não é exatamente 2,675 em binário — é um tiquinho menos —, então o vizinho mais próximo com duas casas é mesmo 2,67. Quando o arredondamento decimal precisa ser exato, o tipo certo é `Decimal`, e esse é o assunto do próximo capítulo.
+
+`round` com o segundo argumento negativo arredonda para a esquerda da vírgula, o que é útil e pouco conhecido:
+
+```python
+print(round(1234, -2))
+```
+
+```text
+1200
+```
+
+E note a diferença entre truncar e arredondar para baixo:
+
+```python
+print(int(-3.99), math.floor(-3.99), math.ceil(-3.99), math.trunc(-3.99))
+```
+
+```text
+-3 -4 -3 -3
+```
+
+`int()` e `math.trunc()` truncam em direção ao zero; `math.floor()` vai para baixo. Com números positivos os dois coincidem, e é por isso que o erro só aparece quando chega o primeiro negativo — exatamente como na abertura.
+
+## A torre numérica
+
+Misturar tipos numéricos funciona, e o resultado sobe para o tipo mais geral: `int` → `float` → `complex`.
+
+```python
+print(3 + 0.5, type(3 + 0.5))
+print(1 + True, int(True))
+```
+
+```text
+3.5 <class 'float'>
+2 1
+```
+
+`bool` é subclasse de `int`, com `True` valendo 1 — assunto do @sec-cap011. A promoção é automática **entre** esses tipos e não existe fora deles: `"3" + 4` continua sendo `TypeError`, como no @sec-cap007.
+
+Um efeito colateral da promoção merece atenção: `int` grande somado a `float` perde precisão, porque o resultado é `float`.
+
+```python
+print(10 ** 16 + 1.0)
+print(float(2 ** 53) == float(2 ** 53 + 1))
+```
+
+```text
+1e+16
+True
+```
+
+Acima de 2⁵³ o `float` não distingue mais inteiros consecutivos. Se o seu domínio tem identificadores grandes — carimbo de tempo em nanossegundos, chave primária, valor em centavos —, mantenha tudo em `int` e não deixe um `float` entrar por acidente no meio da conta.
+
+## Complexos
+
+Python tem números complexos nativos, sem importar nada. O sufixo é `j`, não `i`, por convenção da engenharia elétrica:
+
+```python
+z = 3 + 4j
+print(z, z.real, z.imag, abs(z), z.conjugate())
+print((1 + 2j) * (3 - 1j))
+```
+
+```text
+(3+4j) 3.0 4.0 5.0 (3-4j)
+(5+5j)
+```
+
+`abs()` de um complexo é o módulo — por isso 5,0 para 3+4j. As partes `real` e `imag` são sempre `float`.
+
+Para funções sobre complexos existe `cmath`, o par de `math`:
+
+```python
+import cmath
+
+print(cmath.sqrt(-1))
+print(cmath.polar(1j))
+```
+
+```text
+1j
+(1.0, 1.5707963267948966)
+```
+
+`math.sqrt(-1)` levanta `ValueError`; `cmath.sqrt(-1)` devolve `1j`. É a diferença entre "domínio real" e "domínio complexo", e não uma inconsistência.
+
+Complexos aparecem pouco em código de aplicação e muito em processamento de sinais, FFT e cálculo numérico — território do Volume 13.
+
+## 🐍 Jeito Pythônico
+
+**Escolha o operador pelo resultado que você quer, não pelo tipo da entrada.** `/` quando o resultado é uma medida (média, taxa, proporção); `//` quando é uma contagem (quantos blocos cabem, quantas páginas). Escrever `int(a / b)` para dividir inteiros é o antipadrão clássico: passa pelo `float`, perde precisão acima de 2⁵³ e trunca em vez de arredondar para baixo.
+
+```python
+# antipadrão: passeia pelo float sem precisar
+paginas = int(total / por_pagina)
+```
+
+```python
+# pythônico: aritmética inteira do começo ao fim
+paginas = -(-total // por_pagina)     # divisão inteira arredondando para cima
+```
+
+O truque `-(-a // b)` é o idioma consagrado para "divisão para cima" sem `math.ceil` e sem `float`. Quando a legibilidade importar mais que a economia, `math.ceil(Fraction(total, por_pagina))` diz a mesma coisa em voz alta e continua exato — `Fraction` é assunto do próximo capítulo.
+
+**Nunca compare `float` com `==`.** Use `math.isclose`, que existe desde o Python 3.5 (PEP 485):
+
+```python
+print(0.1 + 0.2 == 0.3)
+print(math.isclose(0.1 + 0.2, 0.3))
+```
+
+```text
+False
+True
+```
+
+`math.isclose` usa tolerância relativa por padrão, o que é o certo para grandezas de escala desconhecida; para valores próximos de zero, passe `abs_tol` também, porque a tolerância relativa a zero é zero.
+
+**Não use `float` para dinheiro.** É a regra que mais aparece em revisão de código e a do capítulo seguinte: centavos em `int` ou valores em `Decimal`, nunca reais em `float`.
+
+**Prefira comparação encadeada.** `1 < x < 10` é Python legítimo, avalia `x` uma vez só e lê como matemática:
+
+```python
+if 0 <= indice < len(itens):
+```
+
+**Use `_` nos literais longos e as bases nativas nas máscaras.** `0xFF_FF_FF_00` diz "máscara de rede" para quem lê; `4294967040` não diz nada.
+
+Um antipadrão frequente:
+
+```python
+# antipadrão: testar nan com igualdade
+if resultado == float("nan"):     # nunca é verdadeiro
+```
+
+```python
+# pythônico
+if math.isnan(resultado):
+```
+
+Sobre versões, o que mudou de fato:
+
+- **Python 3.0** — `/` virou divisão real; `//` passou a ser a divisão inteira. É a diferença de comportamento mais comum em código antigo portado.
+- **Python 3.6** — sublinhado em literais numéricos (PEP 515).
+- **Python 3.8** — `math.prod`, o produto que faltava ao lado de `sum`.
+- **Python 3.9** — `math.lcm`, ao lado de `math.gcd`.
+- **Python 3.11** — limite de dígitos na conversão de `int` para `str`; `math.exp2` e `math.cbrt`.
+- **Python 3.12** — `math.sumprod`, para produto escalar sem NumPy.
+
+## 🧪 Laboratório
+
+Objetivo: medir o `int` de precisão arbitrária, reproduzir a divergência C/Python da abertura, ver os limites do `float` e classificar leituras negativas sem errar a faixa.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab09 && cd ~/lab09
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Meça o inteiro crescendo.**
+
+```bash
+python -c "
+import sys
+for e in (0, 30, 100, 1000):
+    n = 2 ** e
+    print(e, n.bit_length(), sys.getsizeof(n))
+"
+```
+
+```text
+0 1 28
+30 31 32
+100 101 40
+1000 1001 160
+```
+
+Cada 30 bits de valor custam 4 bytes de objeto. Nenhum estouro em vista.
+
+**3. Encoste no limite que existe.**
+
+```bash
+python -c "
+import sys
+print(sys.get_int_max_str_digits())
+print(len(hex(10 ** 5000)))
+print(len(str(10 ** 5000)))
+"
+```
+
+```text
+4300
+4155
+Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+    print(len(str(10 ** 5000)))
+              ~~~^^^^^^^^^^^^
+ValueError: Exceeds the limit (4300 digits) for integer string conversion; use sys.set_int_max_str_digits() to increase the limit
+```
+
+Hexadecimal passa com 4155 caracteres, decimal não passa com 5001. Agora destrave:
+
+```bash
+python -c "
+import sys
+sys.set_int_max_str_digits(6000)
+print(len(str(10 ** 5000)))
+"
+```
+
+```text
+5001
+```
+
+Pense em por que o padrão é conservador num servidor que aceita número vindo do usuário.
+
+**4. Reproduza a divergência da abertura.** Se houver `gcc`:
+
+```bash
+cat > div.c <<'EOF'
+#include <stdio.h>
+int main(void) {
+    printf("%d %d\n", -7 / 2, -7 % 2);
+    printf("%d %d\n", -1 / 24, -1 % 24);
+    return 0;
+}
+EOF
+gcc -O2 -o div div.c && ./div
+python -c "print(-7 // 2, -7 % 2); print(-1 // 24, -1 % 24)"
+```
+
+```text
+-3 -1
+0 -1
+```
+
+```text
+-4 1
+-1 23
+```
+
+A segunda linha é a que importa: a hora anterior à meia-noite é 23 em Python e −1 em C.
+
+**5. Confira a invariante.**
+
+```bash
+python -c "
+for a in (-7, 7):
+    for b in (-3, 3):
+        print(a, b, a // b, a % b, a == b * (a // b) + a % b)
+"
+```
+
+```text
+-7 -3 2 -1 True
+-7 3 -3 2 True
+7 -3 -3 -2 True
+7 3 2 1 True
+```
+
+Quatro `True`. Anote a regra do sinal do resto — sempre o do divisor.
+
+**6. Truncar não é arredondar para baixo.**
+
+```bash
+python -c "
+import math
+for x in (3.99, -3.99):
+    print(x, int(x), math.floor(x), math.ceil(x), math.trunc(x))
+"
+```
+
+```text
+3.99 3 3 4 3
+-3.99 -3 -4 -3 -3
+```
+
+Na linha positiva, `int` e `floor` concordam. Na negativa, não. É o motivo de o bug só aparecer com dado negativo.
+
+**7. Máscara de rede na mão.**
+
+```bash
+python -c "
+ip, m = 0xC0A80105, 0xFFFFFF00
+print(hex(ip & m), hex(ip | ~m & 0xFFFFFFFF))
+print('.'.join(str((ip >> d) & 0xFF) for d in (24, 16, 8, 0)))
+"
+```
+
+```text
+0xc0a80100 0xc0a801ff
+192.168.1.5
+```
+
+Rede e broadcast do /24. Repare no `& 0xFFFFFFFF` depois do `~`: sem ele, o complemento de um `int` sem largura fixa vira negativo.
+
+**8. Os limites do `float`.**
+
+```bash
+python -c "
+import sys
+fi = sys.float_info
+print(fi.max, fi.epsilon, fi.dig, fi.mant_dig)
+print(fi.max * 1.0000001)
+print(2.0 ** 53, 2.0 ** 53 == 2.0 ** 53 + 1)
+"
+```
+
+```text
+1.7976931348623157e+308 2.220446049250313e-16 15 53
+inf
+9007199254740992.0 True
+```
+
+O estouro virou `inf` sem exceção nenhuma. E acima de 2⁵³ o `float` não conta mais de um em um.
+
+**9. `nan` contra si mesmo.**
+
+```bash
+python -c "
+import math
+n = float('nan')
+print(n == n, math.isnan(n))
+print([n] == [n])
+print(math.inf - math.inf, math.inf > 10**100)
+"
+```
+
+```text
+False True
+True
+nan True
+```
+
+A terceira linha é a pegadinha: a lista compara identidade antes de igualdade, então `[n] == [n]` é `True` mesmo com `n == n` falso.
+
+**10. Arredondamento do banqueiro.**
+
+```bash
+python -c "
+print([round(x) for x in (0.5, 1.5, 2.5, 3.5, 4.5)])
+print(round(2.675, 2), round(1234, -2))
+"
+```
+
+```text
+[0, 2, 2, 4, 4]
+2.67 1200
+```
+
+Todos os resultados são pares. Some `[round(x) for x in ...]` e compare com a soma de arredondar sempre para cima — a diferença é o viés que a regra elimina.
+
+**11. Complexos.**
+
+```bash
+python -c "
+import cmath
+z = 3 + 4j
+print(z.real, z.imag, abs(z))
+print(cmath.sqrt(-1), cmath.polar(1j))
+"
+```
+
+```text
+3.0 4.0 5.0
+1j (1.0, 1.5707963267948966)
+```
+
+**12. Classifique as leituras sem errar a faixa.** O problema da abertura, resolvido. Crie `faixas.py`:
+
+```python
+"""Classifica leituras de potencia optica em faixas de 2 dBm."""
+
+LEITURAS = [-18.4, -21.7, -7.0, -6.9, -3.0, 0.0]
+LARGURA = 2
+
+
+def faixa(valor):
+    """Indice da faixa, arredondando para baixo, como manda a reta numerica."""
+    return int(valor // LARGURA)
+
+
+for leitura in LEITURAS:
+    inicio = faixa(leitura) * LARGURA
+    print(f"{leitura:>6} -> faixa {faixa(leitura):>3}  [{inicio}, {inicio + LARGURA})")
+```
+
+```bash
+python faixas.py
+```
+
+```text
+ -18.4 -> faixa -10  [-20, -18)
+ -21.7 -> faixa -11  [-22, -20)
+  -7.0 -> faixa  -4  [-8, -6)
+  -6.9 -> faixa  -4  [-8, -6)
+  -3.0 -> faixa  -2  [-4, -2)
+   0.0 -> faixa   0  [0, 2)
+```
+
+Cada leitura caiu no intervalo que a contém, inclusive a de borda exata (`-7.0`). Agora troque `//` por `int(valor / LARGURA)` e rode de novo:
+
+```text
+-7.0 -3 [-6, -4)
+-6.9 -3 [-6, -4)
+```
+
+As duas leituras foram para a faixa `-3`, cujo intervalo é `[-6, -4)` — e que **não contém** nenhuma das duas. Esse é o bug da ferramenta em C, e a linha que o corrige é uma barra a mais.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- `int` tem precisão arbitrária: não estoura, cresce com a memória, e `bit_length()` diz o tamanho. O único limite é a conversão para decimal, freada em 4300 dígitos desde o 3.11 por segurança.
+- `/` é sempre divisão real e devolve `float`; `//` é divisão de **piso**, arredondando para −∞, e `%` herda o sinal do divisor. A escolha preserva `a == b * (a // b) + a % b` e é o oposto da truncagem de C.
+- `int()` e `math.trunc()` truncam em direção ao zero; `math.floor()` vai para baixo. Com valores positivos coincidem — o bug só nasce com o primeiro negativo.
+- `float` é IEEE 754 de 64 bits: 53 bits de precisão, 15 a 17 dígitos decimais, faixa até ~10³⁰⁸. Estouro vira `inf` em silêncio; `nan` não é igual a si mesmo e só `math.isnan` detecta.
+- `round` usa arredondamento para o par mais próximo, por norma e para evitar viés; `round(x, -n)` arredonda à esquerda da vírgula.
+- Tipos numéricos se promovem automaticamente (`int` → `float` → `complex`), mas acima de 2⁵³ o `float` deixa de distinguir inteiros consecutivos — mantenha identificadores e dinheiro fora dele.
+- Compare `float` com `math.isclose`, nunca com `==`; use `-(-a // b)` para divisão inteira arredondando para cima; use `_` e bases nativas nos literais que o leitor precisa reconhecer.
