@@ -1,0 +1,3 @@
+# logging: registrando o que o programa faz {#sec-cap060}
+
+*(em elaboracao)*

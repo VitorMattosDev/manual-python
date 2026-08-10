@@ -1,0 +1,3 @@
+# Strings: criação, indexação e fatiamento {#sec-cap012}
+
+*(em elaboracao)*

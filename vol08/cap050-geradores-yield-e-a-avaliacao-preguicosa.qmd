@@ -1,0 +1,3 @@
+# Geradores, yield e a avaliação preguiçosa {#sec-cap050}
+
+*(em elaboracao)*

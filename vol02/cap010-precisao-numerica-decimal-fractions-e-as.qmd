@@ -1,0 +1,3 @@
+# Precisão numérica: decimal, fractions e as armadilhas do float {#sec-cap010}
+
+*(em elaboracao)*

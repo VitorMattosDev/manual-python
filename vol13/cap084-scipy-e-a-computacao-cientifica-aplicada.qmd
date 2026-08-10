@@ -1,0 +1,3 @@
+# SciPy e a computação científica aplicada {#sec-cap084}
+
+*(em elaboracao)*

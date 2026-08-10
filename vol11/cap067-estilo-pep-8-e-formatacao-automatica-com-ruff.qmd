@@ -1,0 +1,3 @@
+# Estilo, PEP 8 e formatação automática com Ruff e Black {#sec-cap067}
+
+*(em elaboracao)*

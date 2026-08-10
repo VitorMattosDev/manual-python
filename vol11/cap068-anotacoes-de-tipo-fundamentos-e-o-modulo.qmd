@@ -1,0 +1,3 @@
+# Anotações de tipo: fundamentos e o módulo typing {#sec-cap068}
+
+*(em elaboracao)*

@@ -1,0 +1,3 @@
+# Python acelerado: PyPy, Numba e o interpretador sem GIL {#sec-cap100}
+
+*(em elaboracao)*

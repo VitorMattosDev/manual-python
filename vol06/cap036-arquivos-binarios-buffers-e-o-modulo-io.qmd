@@ -1,0 +1,3 @@
+# Arquivos binários, buffers e o módulo io {#sec-cap036}
+
+*(em elaboracao)*

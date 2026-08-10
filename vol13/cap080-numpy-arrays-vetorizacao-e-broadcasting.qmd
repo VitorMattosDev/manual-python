@@ -1,0 +1,3 @@
+# NumPy: arrays, vetorização e broadcasting {#sec-cap080}
+
+*(em elaboracao)*

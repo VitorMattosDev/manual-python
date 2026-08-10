@@ -1,0 +1,3 @@
+# Decoradores de classe, functools e metadados preservados {#sec-cap052}
+
+*(em elaboracao)*

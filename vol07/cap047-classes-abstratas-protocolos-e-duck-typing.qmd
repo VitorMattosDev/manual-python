@@ -1,0 +1,3 @@
+# Classes abstratas, protocolos e duck typing {#sec-cap047}
+
+*(em elaboracao)*

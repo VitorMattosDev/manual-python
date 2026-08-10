@@ -1,0 +1,3 @@
+# Escopo, closures e a regra LEGB {#sec-cap020}
+
+*(em elaboracao)*

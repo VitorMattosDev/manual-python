@@ -1,0 +1,3 @@
+# Git, pre-commit e integração contínua para projetos Python {#sec-cap102}
+
+*(em elaboracao)*

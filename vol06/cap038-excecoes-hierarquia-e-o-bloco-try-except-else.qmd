@@ -1,0 +1,3 @@
+# Exceções: hierarquia e o bloco try, except, else e finally {#sec-cap038}
+
+*(em elaboracao)*

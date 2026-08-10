@@ -1,0 +1,3 @@
+# Atributos, propriedades e encapsulamento {#sec-cap042}
+
+*(em elaboracao)*

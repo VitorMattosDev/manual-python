@@ -1,0 +1,3 @@
+# Requisições HTTP com requests e httpx {#sec-cap078}
+
+*(em elaboracao)*

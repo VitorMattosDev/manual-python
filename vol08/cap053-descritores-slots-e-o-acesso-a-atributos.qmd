@@ -1,0 +1,3 @@
+# Descritores, `__slots__` e o acesso a atributos {#sec-cap053}
+
+*(em elaboracao)*

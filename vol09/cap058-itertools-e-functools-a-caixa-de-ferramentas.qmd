@@ -1,0 +1,3 @@
+# itertools e functools: a caixa de ferramentas funcional {#sec-cap058}
+
+*(em elaboracao)*

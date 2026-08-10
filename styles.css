@@ -1,0 +1,55 @@
+/*-- scss:rules --*/
+
+/* Manual de Python — estilos do livro
+   ATENÇÃO: o marcador de camada SCSS acima precisa ser a PRIMEIRA linha do
+   arquivo, pois styles.css está listado em theme: no _quarto.yml. Sem ele o
+   render inteiro falha com "doesn't contain at least one layer boundary". */
+
+:root {
+  --py-primaria: #306998;
+  --py-destaque: #ffd43b;
+  --py-alerta: #b3261e;
+  --py-ok: #2e7d32;
+  --py-neutra: #5f6368;
+}
+
+h1, h2, h3 { letter-spacing: -0.01em; }
+
+h2 {
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0.3rem;
+  margin-top: 2.2rem;
+}
+
+/* Blocos de código com respiro */
+pre {
+  border-radius: 6px;
+  font-size: 0.88em;
+}
+
+code:not(pre code) {
+  background: #f3f4f6;
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* Saída de interpretador logo abaixo do código, sem respiro entre os dois */
+div.cell-output-display + div.sourceCode { margin-top: 0.4rem; }
+
+/* Figuras TikZ centralizadas e responsivas */
+figure img, figure svg {
+  max-width: 100%;
+  height: auto;
+}
+
+figcaption {
+  font-size: 0.9em;
+  color: var(--py-neutra);
+}
+
+/* Tabelas mais legíveis em capítulos comparativos */
+table { font-size: 0.94em; }
+
+/* Destaque das seções fixas */
+.callout.callout-style-simple { border-left-width: 4px; }

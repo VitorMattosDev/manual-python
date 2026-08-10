@@ -1,0 +1,3 @@
+# Escolhendo a estrutura certa: custo das operações {#sec-cap028}
+
+*(em elaboracao)*

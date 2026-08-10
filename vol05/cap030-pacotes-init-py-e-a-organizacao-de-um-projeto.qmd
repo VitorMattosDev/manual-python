@@ -1,0 +1,3 @@
+# Pacotes, `__init__.py` e a organização de um projeto {#sec-cap030}
+
+*(em elaboracao)*

@@ -1,0 +1,3 @@
+# Tipagem avançada: genéricos, protocolos e mypy {#sec-cap069}
+
+*(em elaboracao)*

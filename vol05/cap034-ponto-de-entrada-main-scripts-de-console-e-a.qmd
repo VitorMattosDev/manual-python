@@ -1,0 +1,3 @@
+# Ponto de entrada: `__main__`, scripts de console e a linha de comando {#sec-cap034}
+
+*(em elaboracao)*

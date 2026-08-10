@@ -1,0 +1,3 @@
+# Métodos estáticos, métodos de classe e o desenho da API {#sec-cap045}
+
+*(em elaboracao)*

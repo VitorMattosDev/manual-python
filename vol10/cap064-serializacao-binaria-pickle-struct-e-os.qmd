@@ -1,0 +1,3 @@
+# Serialização binária: pickle, struct e os riscos envolvidos {#sec-cap064}
+
+*(em elaboracao)*

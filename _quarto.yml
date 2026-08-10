@@ -1,0 +1,228 @@
+project:
+  type: book
+  output-dir: _book
+
+lang: pt
+
+book:
+  title: "Manual de Python"
+  subtitle: "Do primeiro script ao código de produção — a linguagem, a biblioteca padrão e o ecossistema"
+  author: "Vitor Mattos"
+  date: today
+  date-format: "DD/MM/YYYY"
+  language: pt
+  search: true
+  repo-url: https://github.com/VitorMattosDev/manual-python
+  repo-actions: [edit, issue]
+  downloads: [pdf]
+  sidebar:
+    style: docked
+    collapse-level: 1
+  page-footer:
+    left: "Manual de Python"
+    right: "Licença CC BY-SA 4.0"
+  chapters:
+    - index.qmd
+    # ===== Fase 1 — Fundamentos da Linguagem =====
+    - part: |
+        Volume 1 — Primeiros Passos com Python
+      chapters:
+        - vol01/cap001-o-que-e-python-historia-filosofia-e-o-zen-da.qmd
+        - vol01/cap002-como-o-python-executa-codigo-interpretador.qmd
+        - vol01/cap003-instalando-o-python-versoes-gerenciadores-e-o.qmd
+        - vol01/cap004-o-repl-os-scripts-e-o-primeiro-programa.qmd
+        - vol01/cap005-ambiente-de-trabalho-editor-vs-code-jupyter-e.qmd
+        - vol01/cap006-sintaxe-essencial-indentacao-linhas-logicas-e.qmd
+        - vol01/cap007-erros-e-tracebacks-como-ler-o-que-o-python.qmd
+    - part: |
+        Volume 2 — Tipos, Operadores e Expressões
+      chapters:
+        - vol02/cap008-objetos-variaveis-e-o-modelo-de-referencias.qmd
+        - vol02/cap009-numeros-inteiros-de-ponto-flutuante-e.qmd
+        - vol02/cap010-precisao-numerica-decimal-fractions-e-as.qmd
+        - vol02/cap011-booleanos-valor-verdade-e-os-operadores.qmd
+        - vol02/cap012-strings-criacao-indexacao-e-fatiamento.qmd
+        - vol02/cap013-metodos-de-string-formatacao-e-f-strings.qmd
+        - vol02/cap014-unicode-bytes-e-codificacao-de-caracteres.qmd
+    - part: |
+        Volume 3 — Controle de Fluxo e Funções
+      chapters:
+        - vol03/cap015-condicionais-if-elif-else-e-a-expressao.qmd
+        - vol03/cap016-lacos-while-for-e-o-protocolo-de-iteracao.qmd
+        - vol03/cap017-break-continue-else-em-lacos-e-o-casamento-de.qmd
+        - vol03/cap018-definindo-funcoes-parametros-argumentos-e.qmd
+        - vol03/cap019-argumentos-nomeados-valores-padrao-args-e.qmd
+        - vol03/cap020-escopo-closures-e-a-regra-legb.qmd
+        - vol03/cap021-funcoes-como-objetos-lambda-map-filter-e.qmd
+    - part: |
+        Volume 4 — Estruturas de Dados Nativas
+      chapters:
+        - vol04/cap022-listas-operacoes-mutabilidade-e-copia.qmd
+        - vol04/cap023-tuplas-empacotamento-e-desempacotamento.qmd
+        - vol04/cap024-dicionarios-chaves-ordem-e-os-metodos.qmd
+        - vol04/cap025-conjuntos-e-operacoes-de-conjunto.qmd
+        - vol04/cap026-compreensoes-de-lista-dicionario-e-conjunto.qmd
+        - vol04/cap027-ordenacao-chaves-de-ordenacao-e-comparacao-de.qmd
+        - vol04/cap028-escolhendo-a-estrutura-certa-custo-das.qmd
+    # ===== Fase 2 — Python Estruturado =====
+    - part: |
+        Volume 5 — Módulos, Pacotes e o Ambiente
+      chapters:
+        - vol05/cap029-modulos-import-e-o-caminho-de-busca.qmd
+        - vol05/cap030-pacotes-init-py-e-a-organizacao-de-um-projeto.qmd
+        - vol05/cap031-ambientes-virtuais-venv-pip-e-o-isolamento-de.qmd
+        - vol05/cap032-empacotamento-moderno-pyproject-toml-build-e.qmd
+        - vol05/cap033-uv-pipx-e-poetry-o-ecossistema-de.qmd
+        - vol05/cap034-ponto-de-entrada-main-scripts-de-console-e-a.qmd
+    - part: |
+        Volume 6 — Arquivos, Erros e Contextos
+      chapters:
+        - vol06/cap035-leitura-e-escrita-de-arquivos-de-texto.qmd
+        - vol06/cap036-arquivos-binarios-buffers-e-o-modulo-io.qmd
+        - vol06/cap037-caminhos-e-o-sistema-de-arquivos-com-pathlib.qmd
+        - vol06/cap038-excecoes-hierarquia-e-o-bloco-try-except-else.qmd
+        - vol06/cap039-levantando-excecoes-e-criando-excecoes.qmd
+        - vol06/cap040-gerenciadores-de-contexto-e-a-instrucao-with.qmd
+    - part: |
+        Volume 7 — Programação Orientada a Objetos
+      chapters:
+        - vol07/cap041-classes-instancias-e-o-self.qmd
+        - vol07/cap042-atributos-propriedades-e-encapsulamento.qmd
+        - vol07/cap043-heranca-mro-e-a-funcao-super.qmd
+        - vol07/cap044-composicao-delegacao-e-quando-nao-herdar.qmd
+        - vol07/cap045-metodos-estaticos-metodos-de-classe-e-o.qmd
+        - vol07/cap046-dataclasses-namedtuple-e-enumeracoes.qmd
+        - vol07/cap047-classes-abstratas-protocolos-e-duck-typing.qmd
+    - part: |
+        Volume 8 — O Modelo de Dados de Python
+      chapters:
+        - vol08/cap048-metodos-especiais-o-protocolo-por-tras-da.qmd
+        - vol08/cap049-iteradores-e-o-protocolo-de-iteracao.qmd
+        - vol08/cap050-geradores-yield-e-a-avaliacao-preguicosa.qmd
+        - vol08/cap051-decoradores-de-funcao.qmd
+        - vol08/cap052-decoradores-de-classe-functools-e-metadados.qmd
+        - vol08/cap053-descritores-slots-e-o-acesso-a-atributos.qmd
+        - vol08/cap054-metaclasses-e-init-subclass-quando-nao-usar.qmd
+    # ===== Fase 3 — Biblioteca Padrão e Qualidade =====
+    - part: |
+        Volume 9 — A Biblioteca Padrão Essencial
+      chapters:
+        - vol09/cap055-os-sys-e-a-interacao-com-o-sistema.qmd
+        - vol09/cap056-datetime-zoneinfo-e-o-tratamento-de-tempo.qmd
+        - vol09/cap057-collections-deque-counter-defaultdict-e.qmd
+        - vol09/cap058-itertools-e-functools-a-caixa-de-ferramentas.qmd
+        - vol09/cap059-math-statistics-e-random.qmd
+        - vol09/cap060-logging-registrando-o-que-o-programa-faz.qmd
+    - part: |
+        Volume 10 — Texto, Dados e Serialização
+      chapters:
+        - vol10/cap061-expressoes-regulares-com-o-modulo-re.qmd
+        - vol10/cap062-json-csv-e-formatos-tabulares.qmd
+        - vol10/cap063-yaml-toml-e-arquivos-de-configuracao.qmd
+        - vol10/cap064-serializacao-binaria-pickle-struct-e-os.qmd
+        - vol10/cap065-sqlite-e-a-db-api-banco-de-dados-sem-servidor.qmd
+        - vol10/cap066-hashlib-secrets-e-o-tratamento-de-dados.qmd
+    - part: |
+        Volume 11 — Qualidade: Testes, Tipagem e Ferramentas
+      chapters:
+        - vol11/cap067-estilo-pep-8-e-formatacao-automatica-com-ruff.qmd
+        - vol11/cap068-anotacoes-de-tipo-fundamentos-e-o-modulo.qmd
+        - vol11/cap069-tipagem-avancada-genericos-protocolos-e-mypy.qmd
+        - vol11/cap070-testes-com-pytest-fundamentos-assercoes-e.qmd
+        - vol11/cap071-parametrizacao-dubles-de-teste-e-cobertura.qmd
+        - vol11/cap072-depuracao-pdb-breakpoint-e-o-traceback-dificil.qmd
+        - vol11/cap073-documentacao-docstrings-doctest-e-sphinx.qmd
+    # ===== Fase 4 — Python Aplicado =====
+    - part: |
+        Volume 12 — Automação, Sistema e Redes
+      chapters:
+        - vol12/cap074-scripts-de-automacao-arquivos-planilhas-e.qmd
+        - vol12/cap075-subprocess-chamando-programas-externos-com.qmd
+        - vol12/cap076-interfaces-de-linha-de-comando-com-argparse.qmd
+        - vol12/cap077-redes-com-sockets-tcp-udp-e-o-modelo-cliente.qmd
+        - vol12/cap078-requisicoes-http-com-requests-e-httpx.qmd
+        - vol12/cap079-raspagem-de-dados-responsavel-html-seletores.qmd
+    - part: |
+        Volume 13 — Dados, Análise e Visualização
+      chapters:
+        - vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.qmd
+        - vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.qmd
+        - vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.qmd
+        - vol13/cap083-visualizacao-de-dados-com-matplotlib.qmd
+        - vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.qmd
+        - vol13/cap085-introducao-ao-aprendizado-de-maquina-com.qmd
+    - part: |
+        Volume 14 — Web, APIs e Bancos de Dados
+      chapters:
+        - vol14/cap086-como-funciona-uma-aplicacao-web-http-wsgi-e.qmd
+        - vol14/cap087-validacao-de-dados-com-pydantic.qmd
+        - vol14/cap088-apis-rest-com-fastapi.qmd
+        - vol14/cap089-flask-e-django-quando-usar-cada-um.qmd
+        - vol14/cap090-bancos-de-dados-relacionais-com-sqlalchemy.qmd
+        - vol14/cap091-autenticacao-autorizacao-e-seguranca-em.qmd
+        - vol14/cap092-implantacao-conteineres-servidores-de.qmd
+    # ===== Fase 5 — Avançado e Fronteira =====
+    - part: |
+        Volume 15 — Concorrência, Desempenho e Internos
+      chapters:
+        - vol15/cap093-concorrencia-paralelismo-e-o-gil.qmd
+        - vol15/cap094-threads-e-o-modulo-threading.qmd
+        - vol15/cap095-multiprocessing-e-o-paralelismo-real.qmd
+        - vol15/cap096-programacao-assincrona-async-await-e-asyncio.qmd
+        - vol15/cap097-medindo-desempenho-timeit-profiling-e.qmd
+        - vol15/cap098-memoria-contagem-de-referencias-e-o-coletor.qmd
+    - part: |
+        Volume 16 — Fronteira e Prática Contínua
+      chapters:
+        - vol16/cap099-estendendo-python-c-cython-e-ligacoes-nativas.qmd
+        - vol16/cap100-python-acelerado-pypy-numba-e-o-interpretador.qmd
+        - vol16/cap101-arquitetura-de-projetos-e-codigo-sustentavel.qmd
+        - vol16/cap102-git-pre-commit-e-integracao-continua-para.qmd
+        - vol16/cap103-python-e-inteligencia-artificial-llms-apis-e.qmd
+        - vol16/cap104-para-onde-ir-depois-peps-comunidade-e-pratica.qmd
+    - referencias.qmd
+
+bibliography: referencias.bib
+csl: associacao-brasileira-de-normas-tecnicas.csl
+
+crossref:
+  chapters: true
+
+filters:
+  - tikz
+  - quarto
+
+tikz:
+  svg-engine: dvisvgm
+  cache: true
+
+format:
+  html:
+    theme: [cosmo, styles.css]
+    toc: true
+    toc-depth: 3
+    code-copy: true
+    code-overflow: wrap
+    highlight-style: github
+    link-external-newwindow: true
+    fig-align: center
+  pdf:
+    documentclass: scrbook
+    papersize: a4
+    geometry:
+      - top=25mm
+      - bottom=25mm
+      - left=25mm
+      - right=25mm
+    toc-depth: 2
+    number-sections: true
+    colorlinks: true
+    include-in-header:
+      text: |
+        \usepackage{fvextra}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+
+execute:
+  freeze: auto
+  echo: true
+  warning: false

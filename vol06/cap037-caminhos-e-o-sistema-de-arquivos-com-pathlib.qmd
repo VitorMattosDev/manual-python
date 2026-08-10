@@ -1,0 +1,3 @@
+# Caminhos e o sistema de arquivos com pathlib {#sec-cap037}
+
+*(em elaboracao)*

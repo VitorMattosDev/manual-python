@@ -1,0 +1,60 @@
+# Apresentação {.unnumbered}
+
+Este é um manual de **Python** escrito em português do Brasil, pensado para levar o leitor do primeiro `print` até o código que roda em produção — passando pela linguagem a fundo, pela biblioteca padrão, pelas ferramentas que separam script de software e pelos domínios em que Python se tornou padrão de fato.
+
+A versão de referência é o **Python 3.13**. O código é moderno: `pathlib` no lugar de `os.path`, f-strings no lugar do operador `%`, `list[int]` no lugar de `typing.List[int]`. Onde um recurso é recente, o texto diz a partir de qual versão ele existe; onde o código antigo ainda é comum em produção, explica o que se fazia antes e por que mudou. O ambiente de referência é Linux, com notas para Windows e macOS onde a diferença importa.
+
+## Para quem é este manual {.unnumbered}
+
+Para quem quer aprender Python a sério e não parar no básico. Serve a quem nunca programou — o Volume 1 começa do zero, sem pressupor outra linguagem —, a quem já programa em outra linguagem e quer entender o que é específico de Python em vez de escrever Java com sintaxe de Python, e a quem já usa Python há anos de forma intuitiva e quer fechar as lacunas: descritores, o modelo de dados, o GIL, empacotamento, tipagem.
+
+Não é preciso conhecimento prévio de programação. É preciso, sim, um interpretador aberto ao lado enquanto se lê.
+
+## Como o manual está organizado {.unnumbered}
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "Dependências entre as fases do manual"
+flowchart TD
+    F1["<b>Fase 1</b><br/>Fundamentos da Linguagem<br/><i>Vol. 1–4</i>"] --> F2["<b>Fase 2</b><br/>Python Estruturado<br/><i>Vol. 5–8</i>"]
+    F2 --> F3["<b>Fase 3</b><br/>Biblioteca Padrão e Qualidade<br/><i>Vol. 9–11</i>"]
+    F3 --> F4["<b>Fase 4</b><br/>Python Aplicado<br/><i>Vol. 12–14</i>"]
+    F3 --> F5["<b>Fase 5</b><br/>Avançado e Fronteira<br/><i>Vol. 15–16</i>"]
+    F4 --> F5
+```
+
+São **104 capítulos** distribuídos em **16 volumes** e **5 fases**, escritos para serem lidos em sequência por quem está começando, e consultados por assunto por quem já atua na área.
+
+A **Fase 1** cobre a linguagem no nível da expressão e da função: tipos, operadores, controle de fluxo e as estruturas de dados nativas. A **Fase 2** sobe um nível e trata da organização do código — módulos, pacotes, ambientes, exceções, orientação a objetos e o modelo de dados que faz a sintaxe de Python funcionar como funciona. A **Fase 3** é sobre não ficar sozinho: a biblioteca padrão e as ferramentas de qualidade (testes, tipagem, formatação, documentação). A **Fase 4** aplica tudo isso a quatro domínios concretos — automação e redes, análise de dados, web e bancos de dados. A **Fase 5** vai ao que está embaixo: concorrência, o GIL, memória, desempenho, extensão em C e para onde seguir depois.
+
+As fases 4 e 5 são independentes entre si: quem quer o caminho aplicado pode ir direto da 3 para a 4, e quem quer entender os internos pode pular para a 5, aceitando algumas referências para frente.
+
+## Seções fixas de cada capítulo {.unnumbered}
+
+Todo capítulo traz duas seções obrigatórias ao final:
+
+::: {.callout-note appearance="simple"}
+**🐍 Jeito Pythônico** — a forma idiomática de fazer o que o capítulo ensinou: o que a comunidade escreve de verdade, qual PEP fundamenta a escolha, qual é o antipadrão equivalente e por que ele machuca.
+:::
+
+::: {.callout-tip appearance="simple"}
+**🧪 Laboratório** — roteiro prático reproduzível: passos numerados que você executa no seu próprio ambiente, com o resultado esperado de cada um. Termina em algo que funciona.
+:::
+
+## Sobre o código deste livro {.unnumbered}
+
+::: {.callout-important}
+## Todo exemplo roda
+
+Os exemplos foram executados num ambiente virtual limpo antes de entrar no texto, e a saída mostrada é a saída real do interpretador — inclusive nos exemplos de erro, onde o traceback vai completo, porque ler traceback é parte de saber Python.
+
+Onde a saída varia entre execuções (endereço de objeto, ordem de um `set`, data e hora, caminho absoluto), o texto avisa. Onde o exemplo é do que **não** fazer, isso está dito antes do bloco, não depois.
+
+Código que apaga arquivo, executa comando externo ou desserializa dado de origem desconhecida vem sempre precedido do aviso e, quando possível, de um ensaio seguro em diretório descartável.
+:::
+
+## Licença {.unnumbered}
+
+Conteúdo sob licença [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.pt-BR). Código e exemplos sob licença MIT. Contribuições, correções e sugestões são bem-vindas via issues no repositório.
+
+Bom proveito — e mantenha um REPL aberto ao lado enquanto lê.

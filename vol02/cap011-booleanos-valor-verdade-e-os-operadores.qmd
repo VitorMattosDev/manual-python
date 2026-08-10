@@ -1,0 +1,3 @@
+# Booleanos, valor-verdade e os operadores lógicos {#sec-cap011}
+
+*(em elaboracao)*

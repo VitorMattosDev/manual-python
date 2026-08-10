@@ -1,0 +1,3 @@
+# Erros e tracebacks: como ler o que o Python está dizendo {#sec-cap007}
+
+*(em elaboracao)*

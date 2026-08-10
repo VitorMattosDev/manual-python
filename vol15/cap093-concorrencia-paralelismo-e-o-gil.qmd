@@ -1,0 +1,3 @@
+# Concorrência, paralelismo e o GIL {#sec-cap093}
+
+*(em elaboracao)*

@@ -1,0 +1,69 @@
+name: Publicar livro
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: pre-release
+
+      # ---------------------------------------------------------------
+      # Mermaid no PDF: sem isso o render trava indefinidamente no runner,
+      # que nao tem Chromium headless. A ferramenta e chrome-headless-shell,
+      # NAO chromium. Precisa vir ANTES do render/publish.
+      # ---------------------------------------------------------------
+      - name: Instalar Chrome headless (mermaid no PDF)
+        run: quarto install chrome-headless-shell
+
+      # ---------------------------------------------------------------
+      # Preparar TeX — versao definitiva (ver LICOES-MANUAIS.md)
+      #  1. tlmgr aborta silenciosamente sem `update --self` antes
+      #  2. nunca mascarar o install com `|| true`
+      #  3. binarios do TinyTeX sao SYMLINKS: find SEM -type f
+      #  4. exportar via GITHUB_PATH E criar symlinks de fallback
+      #  5. verificacoes que falham alto no final
+      # ---------------------------------------------------------------
+      - name: Preparar TeX
+        run: |
+          set -euo pipefail
+          quarto install tinytex
+
+          TLMGR="$(command -v tlmgr || find "$HOME" -name tlmgr -not -path '*/proc/*' | head -n1)"
+          echo "tlmgr encontrado em: $TLMGR"
+
+          "$TLMGR" update --self
+          "$TLMGR" install standalone pgf pgfplots dvisvgm xcolor amsmath amsfonts \
+                           fvextra koma-script
+
+          TEXBIN="$(dirname "$(command -v pdflatex || find "$HOME/.TinyTeX" -name pdflatex | head -n1)")"
+          echo "TEXBIN=$TEXBIN"
+          echo "$TEXBIN" >> "$GITHUB_PATH"
+
+          for bin in pdflatex latex dvisvgm kpsewhich; do
+            sudo ln -sf "$TEXBIN/$bin" "/usr/local/bin/$bin"
+          done
+
+          kpsewhich standalone.cls
+          kpsewhich pgfplots.sty
+          dvisvgm --version
+
+      - name: Publicar no GitHub Pages
+        uses: quarto-dev/quarto-actions/publish@v2
+        with:
+          target: gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

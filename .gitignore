@@ -1,0 +1,17 @@
+/_book/
+/.quarto/
+/_freeze/
+*.log
+*.aux
+*.pdf.tmp
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+.venv/
+.venv-exemplos/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+**/*.quarto_ipynb

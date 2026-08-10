@@ -1,0 +1,3 @@
+# Listas: operações, mutabilidade e cópia {#sec-cap022}
+
+*(em elaboracao)*

@@ -1,0 +1,3 @@
+# Coloque aqui a extensao TikZ com patches locais,
+# copiada de figuras-tikz-kit.zip (ver FIGURAS.md).
+# NAO rodar 'quarto add' nem 'quarto update' nesta pasta.

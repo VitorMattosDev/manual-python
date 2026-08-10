@@ -1,0 +1,3 @@
+# collections: deque, Counter, defaultdict e namedtuple {#sec-cap057}
+
+*(em elaboracao)*

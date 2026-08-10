@@ -1,0 +1,3 @@
+# Como o Python executa código: interpretador, bytecode e CPython {#sec-cap002}
+
+*(em elaboracao)*

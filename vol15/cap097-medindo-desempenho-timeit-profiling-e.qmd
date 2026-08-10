@@ -1,0 +1,3 @@
+# Medindo desempenho: timeit, profiling e otimização {#sec-cap097}
+
+*(em elaboracao)*

@@ -1,0 +1,3 @@
+# Metaclasses e `__init_subclass__`: quando (não) usar {#sec-cap054}
+
+*(em elaboracao)*
