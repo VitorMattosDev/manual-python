@@ -1,3 +1,441 @@
 # O que é Python: história, filosofia e o Zen da linguagem {#sec-cap001}
 
-*(em elaboracao)*
+Segunda-feira, oito da manhã. O suporte quer saber quais clientes caíram mais vezes durante o fim de semana, porque três deles ligaram reclamando e ninguém sabe se o problema é da rede ou do roteador da casa. O arquivo com os eventos de conexão está ali, com uma linha por evento, e tem alguns milhares delas. Abrir isso numa planilha é possível, mas você vai fazer de novo na semana que vem, e na outra.
+
+Com Python, a resposta cabe em seis linhas:
+
+```python
+from collections import Counter
+from pathlib import Path
+
+linhas = Path("conexoes.log").read_text(encoding="utf-8").splitlines()
+quedas = Counter(l.split()[2] for l in linhas if l.endswith("DOWN"))
+
+for cliente, total in quedas.most_common(3):
+    print(f"{cliente:<20} {total} quedas")
+```
+
+```text
+sitio-mangueira      4 quedas
+fazenda-boa-vista    3 quedas
+chacara-do-ze        2 quedas
+```
+
+Este capítulo é sobre a linguagem que permite escrever essas seis linhas — de onde ela veio, quem decide como ela cresce e qual é o conjunto de valores que faz um programa Python parecer com esse e não com outra coisa.
+
+## Seis linhas e vinte e quatro
+
+O trecho acima não é curto por esperteza. Ele é curto porque a linguagem já tem palavras para as três coisas que o problema pede: *ler um arquivo de texto* (`Path.read_text`), *contar ocorrências* (`Counter`) e *pegar as maiores* (`most_common`). Escrito como quem transliterou o programa de outra linguagem, o mesmo resultado sai assim:
+
+```python
+arquivo = open("conexoes.log")
+linhas = arquivo.readlines()
+arquivo.close()
+
+quedas = {}
+i = 0
+while i < len(linhas):
+    linha = linhas[i]
+    partes = linha.split()
+    if len(partes) == 4 and partes[3] == "DOWN":
+        cliente = partes[2]
+        if cliente in quedas:
+            quedas[cliente] = quedas[cliente] + 1
+        else:
+            quedas[cliente] = 1
+    i = i + 1
+
+pares = []
+for cliente in quedas:
+    pares.append((quedas[cliente], cliente))
+pares.sort()
+pares.reverse()
+
+j = 0
+while j < 3 and j < len(pares):
+    print(pares[j][1] + " " * (21 - len(pares[j][1])) + str(pares[j][0]) + " quedas")
+    j = j + 1
+```
+
+São 24 linhas de código contra 6, e a saída é byte a byte a mesma. As duas versões rodam; a segunda apenas gasta o leitor. Ela também esconde três bugs em potencial que a primeira nem tem chance de cometer: o arquivo que fica aberto se algo estourar no meio, o índice `i` que alguém esquece de incrementar num `if`, e o `21` mágico da formatação manual.
+
+A diferença entre as duas não é uma questão de gosto. É a consequência prática de uma decisão de projeto tomada em 1989 e defendida com teimosia desde então: **o código é lido muito mais vezes do que é escrito**, e a linguagem deve otimizar para a leitura.
+
+## De um projeto de fim de ano a uma linguagem de infraestrutura
+
+Em dezembro de 1989, Guido van Rossum trabalhava no CWI — o Centrum voor Wiskunde en Informatica, o instituto nacional holandês de matemática e computação, em Amsterdã. A equipe dele mantinha o Amoeba, um sistema operacional distribuído, e enfrentava um problema chato: escrever utilitários de administração em C era lento demais para o tamanho da tarefa, e o shell não dava conta de nada que exigisse estrutura de dados de verdade.
+
+Van Rossum tinha acabado de sair de outro projeto do mesmo instituto: a linguagem ABC, pensada para ensinar programação a não programadores. O ABC acertou em coisas que ninguém mais fazia — blocos delimitados por indentação, tipos de alto nível embutidos, sintaxe legível em voz alta — e errou em outras, de forma fatal: era monolítica, praticamente impossível de estender, e não conversava com o sistema operacional. Você não conseguia abrir um arquivo do jeito que o sistema queria, nem chamar uma biblioteca em C.
+
+O projeto que ele começou naquele fim de ano era, em essência, o ABC com as arestas corrigidas: a mesma legibilidade, mas extensível, capaz de chamar código C e de falar com o sistema. O nome não veio da cobra. Van Rossum era fã do grupo de humor britânico Monty Python, e "Python" entrou como título provisório de um arquivo. Nunca foi trocado.
+
+A primeira versão pública, a 0.9.0, foi postada em fevereiro de 1991 no grupo `alt.sources` da Usenet — já com classes, herança, tratamento de exceções, funções e os tipos `list` e `dict`. A 1.0 saiu em janeiro de 1994. A 2.0, em outubro de 2000, trouxe as compreensões de lista e um coletor de lixo capaz de resolver ciclos de referência. Em 2001 foi criada a Python Software Foundation, que passou a deter a propriedade intelectual do projeto — uma decisão burocrática e sem glamour que provavelmente é uma das razões de a linguagem ainda existir. A @fig-linha-do-tempo-python situa esses marcos.
+
+::: {#fig-linha-do-tempo-python}
+```{.tikz}
+%%| filename: linha-do-tempo-python
+%%| alt: Linha do tempo de 1989 a 2024 com oito marcos da historia do Python
+\begin{tikzpicture}
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+  \draw[eixo] (-1.4,0) -- (17.0,0);
+  \foreach \xx/\an/\tx in {
+    0/1989/{Guido inicia o projeto no CWI},
+    2.2/1991/{0.9.0 publicada no alt.sources},
+    4.4/1994/{versão 1.0},
+    6.6/2000/{2.0: compreensões de lista},
+    8.8/2008/{3.0: a ruptura},
+    11.0/2018/{Guido deixa o posto de BDFL},
+    13.2/2020/{fim de vida do 2.7},
+    15.4/2024/{3.13: REPL novo e build sem GIL}}
+  {
+    \draw[auxiliar] (\xx,-0.3) -- (\xx,0.3);
+    \node[ponto] at (\xx,0) {};
+    \node[anchor=south, font=\bfseries\small, text=manualblue] at (\xx,0.35) {\an};
+    \node[anchor=north, font=\scriptsize, text width=2.1cm, align=center]
+      at (\xx,-0.4) {\tx};
+  }
+\end{tikzpicture}
+```
+Trinta e cinco anos de Python em oito marcos.
+:::
+
+## A ruptura do Python 3 e a lição que ficou
+
+Em dezembro de 2008 saiu o Python 3.0, e ele quebrou compatibilidade de propósito. Foi a decisão mais cara da história do projeto e a mais defensável.
+
+O motivo central era texto. No Python 2, o tipo `str` era uma sequência de bytes que fingia ser texto, e o texto de verdade morava num tipo separado, `unicode`. Enquanto todo mundo escrevia em inglês ASCII, dava para não notar. Assim que entrava um acento — um nome de cliente como "Fazenda Boa Vista" vindo de um sistema em ISO-8859-1, ou um log gerado por um equipamento que fala UTF-8 — o programa passava a misturar bytes e texto sem avisar, e o resultado eram aqueles caracteres embaralhados que todo mundo já viu, ou uma exceção estourando em produção três meses depois, na única linha em que o acento aparecia.
+
+O Python 3 separou os dois de forma inegociável: `str` é texto, `bytes` é byte, e a conversão entre eles exige que você diga qual é a codificação. É por isso que o exemplo da abertura escreve `encoding="utf-8"` em vez de deixar o padrão decidir. Parece rigor excessivo até o dia em que salva o seu relatório.
+
+A travessia foi longa e dolorosa. Por mais de uma década existiu código de produção nas duas versões, bibliotecas que só funcionavam numa delas e distribuições Linux que traziam `python` apontando para o 2.7 por medo de quebrar scripts de sistema. O suporte ao Python 2.7 terminou em 1º de janeiro de 2020, onze anos depois do lançamento do 3.0.
+
+Para quem começa hoje, isso é história — mas história com uma consequência prática: **ao procurar solução na internet, você ainda vai esbarrar em respostas escritas para o Python 2**. O sinal mais rápido é o `print` sem parênteses: `print "olá"` é Python 2 e é erro de sintaxe hoje. Nas distribuições atuais, incluindo o Kali, o comando `python` já aponta para o Python 3, e `python2` simplesmente não vem instalado.
+
+## Quem decide o que entra na linguagem
+
+Mudanças no Python não acontecem por decisão isolada de quem tem acesso ao repositório. Elas passam por uma PEP — *Python Enhancement Proposal*, proposta de melhoria do Python —, um documento numerado que descreve a mudança, a motivação, a especificação técnica, as alternativas consideradas e o impacto sobre código existente. O processo é definido pela PEP 1, e o fluxo está em @fig-fluxo-pep.
+
+::: {#fig-fluxo-pep}
+```{.tikz}
+%%| filename: fluxo-pep
+%%| alt: Fluxograma do processo de uma PEP, da ideia inicial ate a implementacao ou rejeicao
+\begin{tikzpicture}[
+  etapa/.style={draw=manualblue, thick, rounded corners, fill=manualblue!8,
+                text width=3.1cm, align=center, minimum height=1.2cm,
+                font=\small},
+  aceite/.style={draw=manualgreen, thick, rounded corners, fill=manualgreen!8,
+                 text width=3.1cm, align=center, minimum height=1.2cm,
+                 font=\small},
+  recusa/.style={draw=manualred, thick, rounded corners, fill=manualred!8,
+                 text width=3.1cm, align=center, minimum height=1.2cm,
+                 font=\small},
+  fluxo/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[etapa]  (a) at (0,0)     {\textbf{Ideia}\\discutida em público};
+  \node[etapa]  (b) at (4.8,0)   {\textbf{Rascunho}\\PEP numerada, com autor e padrinho};
+  \node[etapa]  (c) at (9.6,0)   {\textbf{Revisão}\\comunidade e especialistas};
+  \node[etapa]  (d) at (9.6,-2.8){\textbf{Conselho Diretor}\\cinco eleitos};
+  \node[aceite] (e) at (4.8,-2.8){\textbf{Aceita}\\alvo: uma versão};
+  \node[etapa]  (f) at (0,-2.8)  {\textbf{Implementada}\\testada e liberada};
+  \node[recusa] (g) at (9.6,-5.4){\textbf{Rejeitada}\\ou adiada};
+
+  \draw[fluxo] (a) -- (b);
+  \draw[fluxo] (b) -- (c);
+  \draw[fluxo] (c) -- (d);
+  \draw[fluxo] (d) -- (e);
+  \draw[fluxo] (e) -- (f);
+  \draw[fluxo] (d) -- (g);
+\end{tikzpicture}
+```
+O caminho de uma mudança na linguagem, da ideia à liberação.
+:::
+
+Por quase trinta anos, a palavra final era de Guido van Rossum, com o título semi-brincalhão de BDFL — *Benevolent Dictator For Life*, ditador benevolente vitalício. O arranjo acabou em julho de 2018. A PEP 572, que introduziu o operador morsa (`:=`), gerou uma discussão longa e áspera; Van Rossum aprovou a proposta e, dias depois, anunciou que estava se afastando do papel de árbitro. A comunidade respondeu com a PEP 13, que criou o Conselho Diretor: cinco pessoas eleitas anualmente pelos desenvolvedores do núcleo, com mandato coletivo sobre as decisões técnicas.
+
+Vale registrar que o operador morsa, motivo de tanto barulho, hoje é usado sem drama — e que Van Rossum continuou contribuindo com o projeto depois de sair do posto. A instituição sobreviveu à saída do fundador, que é exatamente o que se espera de uma linguagem em que as pessoas vão apostar a infraestrutura delas.
+
+A PEP 602 estabeleceu o ritmo atual de lançamentos: uma versão nova por ano, sempre em outubro. Cada versão recebe cerca de dois anos de correções de bugs e mais três de correções apenas de segurança — cinco anos de vida útil, previsíveis de antemão. Isso permite planejar migração em vez de reagir a ela.
+
+## Python 3.13, a versão de referência deste manual
+
+Este manual usa o **Python 3.13**, lançado em outubro de 2024. É a versão em que todos os exemplos foram executados antes de a saída ser colada aqui. Especificamente:
+
+```text
+$ python --version
+Python 3.13.15
+```
+
+O que o 3.13 trouxe de mais visível:
+
+- **Um REPL novo.** O modo interativo ganhou histórico multilinha de verdade, colagem de blocos inteiros sem bagunçar a indentação, cores na saída de erro e comandos como `help`, `exit` e `clear` funcionando sem parênteses. Quem usava o `IPython` só por causa disso talvez não precise mais.
+- **Mensagens de erro melhores.** A linha do traceback agora aponta com `~` e `^` exatamente qual pedaço da expressão falhou, e não apenas em qual linha.
+- **Um build experimental sem GIL** (PEP 703), instalado à parte como `python3.13t`, em que threads de Python realmente rodam em paralelo. É o começo de um trabalho de vários anos; nas versões seguintes ele deixou de ser experimental. O assunto tem um volume inteiro reservado neste manual.
+- **Um compilador JIT experimental** (PEP 744), desligado por padrão.
+- **A remoção das "pilhas mortas"** (PEP 594): dezenove módulos obsoletos da biblioteca padrão saíram de vez, entre eles `telnetlib`, `cgi` e `crypt`.
+
+Nada disso muda a linguagem que você vai aprender nos próximos capítulos. Muda o conforto de usá-la.
+
+## O Zen do Python
+
+Em 1999, Tim Peters — um dos desenvolvedores mais influentes do núcleo, autor do algoritmo de ordenação que o Python usa até hoje — resumiu numa lista de aforismos os critérios que a comunidade usava para decidir se uma proposta "parecia Python". A lista virou a PEP 20 e está dentro do interpretador. Digite `import this` em qualquer instalação:
+
+```python
+import this
+```
+
+```text
+The Zen of Python, by Tim Peters
+
+Beautiful is better than ugly.
+Explicit is better than implicit.
+Simple is better than complex.
+Complex is better than complicated.
+Flat is better than nested.
+Sparse is better than dense.
+Readability counts.
+Special cases aren't special enough to break the rules.
+Although practicality beats purity.
+Errors should never pass silently.
+Unless explicitly silenced.
+In the face of ambiguity, refuse the temptation to guess.
+There should be one-- and preferably only one --obvious way to do it.
+Although that way may not be obvious at first unless you're Dutch.
+Now is better than never.
+Although never is often better than *right* now.
+If the implementation is hard to explain, it's a bad idea.
+If the implementation is easy to explain, it may be a good idea.
+Namespaces are one honking great idea -- let's do more of those!
+```
+
+São 19 aforismos. A PEP 20 diz que são 20, e que o vigésimo ficou reservado para Guido preencher — ele nunca preencheu, e a piada permaneceu no documento.
+
+Quatro deles mudam código no dia a dia com mais frequência que os outros.
+
+**"Legibilidade conta."** É a régua para desempatar qualquer discussão de estilo. Se uma linha economiza três caracteres e custa dez segundos de leitura, ela perdeu.
+
+**"Explícito é melhor que implícito."** É a razão de o `self` aparecer escrito na assinatura dos métodos, de o `encoding` ser recomendado ao abrir um arquivo de texto e de não existir conversão automática entre número e texto: `"3" + 4` é um erro, não um palpite. Linguagens que adivinham economizam digitação e cobram em depuração.
+
+**"Erros nunca devem passar em silêncio — a menos que silenciados explicitamente."** Quando algo dá errado, o Python para e diz onde. Considere um script que lê níveis de sinal óptico e encontra um campo estragado no meio do arquivo:
+
+```python
+leituras = ["-18.4", "-21.7", "sem leitura", "-19.2"]
+
+for leitura in leituras:
+    print(float(leitura))
+```
+
+```text
+-18.4
+-21.7
+Traceback (most recent call last):
+  File "C:\Users\Usuario\lab01\sinal.py", line 4, in <module>
+    print(float(leitura))
+          ~~~~~^^^^^^^^^
+ValueError: could not convert string to float: 'sem leitura'
+```
+
+O caminho da primeira linha é o do arquivo na máquina onde o exemplo rodou — no seu, vai aparecer o seu. O que importa é o resto: a linha exata, a expressão exata marcada por `~~~~~^^^^^^^^^`, o tipo do erro e o valor que causou o problema. Nenhum `NaN` silencioso, nenhum zero inventado no lugar do dado ruim. O programa parou porque continuar seria pior — e é você quem decide o que fazer com o campo estragado, não o interpretador.
+
+**"Deve haver uma — e de preferência só uma — maneira óbvia de fazer."** É o aforismo mais citado e o mais mal-entendido. Não quer dizer que exista uma única forma possível; quer dizer que, entre as formas possíveis, a comunidade converge para uma, e essa uma vira a que todo mundo reconhece de imediato. Na prática é isso que permite ler código Python de um projeto que você nunca viu e entender o que ele faz.
+
+O contrapeso está logo acima: **"embora a praticidade vença a pureza"**. O Python aceita romper a regra quando o custo de mantê-la é alto demais. O próprio módulo `this` é a prova:
+
+```python
+import this
+
+print(this.c, this.i, len(this.d))
+```
+
+```text
+97 25 52
+```
+
+O texto do Zen está guardado em `this.s` cifrado em ROT13, e o módulo monta a tabela de decifração com dois laços aninhados — deixando as variáveis `c` e `i` vazando no espaço de nomes do módulo. É um deslize que qualquer revisor apontaria, dentro da biblioteca padrão, no arquivo que descreve as boas práticas. Está lá há mais de vinte anos porque não faz mal a ninguém e a piada é boa. Praticidade venceu a pureza.
+
+Já a rigidez sobre a sintaxe, essa é levada a sério, com humor:
+
+```python
+from __future__ import braces
+```
+
+```text
+  File "<string>", line 1
+SyntaxError: not a chance
+```
+
+Chaves para delimitar blocos, o pedido mais repetido por quem vem de C e de Java, tem uma resposta oficial no interpretador: *nem a pau*.
+
+## Onde Python é forte e onde não é
+
+Ser honesto sobre os limites poupa frustração. O Python é lento em laço numérico puro comparado a C, Rust ou Go — uma ordem de grandeza ou mais. O bloqueio global do interpretador, o GIL, historicamente impediu que threads de Python usassem vários núcleos ao mesmo tempo para trabalho de CPU. Distribuir um programa como um único executável dá trabalho, e a linguagem não é uma escolha natural para aplicativo de celular nem para código embarcado com poucos kilobytes de memória.
+
+Em compensação, ela é imbatível em três situações que cobrem boa parte do trabalho real: **colar sistemas que não foram feitos para conversar** (um log aqui, uma API ali, um banco acolá), **explorar dados** e **automatizar o que hoje é feito na mão**. Nesses casos o gargalo não é o processador — é o disco, a rede ou o tempo de quem escreve o programa. E as partes que precisam de velocidade quase sempre já existem escritas em C por baixo de uma interface Python: é assim que funcionam `NumPy`, `pandas` e praticamente todo o ecossistema científico.
+
+Uma distinção que vale desde já: **Python é a linguagem; CPython é o programa que a executa**. O CPython, escrito em C, é a implementação de referência — é ele que você instala e é sobre ele que este manual fala. Existem outras: o `PyPy`, com compilação em tempo de execução e desempenho muito superior em código de laço; o `MicroPython`, para microcontroladores; o `GraalPy`, sobre a máquina virtual da JVM. Todas implementam a mesma linguagem, com graus diferentes de compatibilidade com as extensões em C.
+
+## 🐍 Jeito Pythônico
+
+"Pythônico" é o adjetivo que a comunidade usa para o código que resolve o problema com o vocabulário da linguagem, e não com o vocabulário de outra linguagem escrito com sintaxe de Python. Ele tem duas fontes escritas: a **PEP 20**, que dá os valores, e a **PEP 8**, o guia de estilo, que dá as convenções concretas — quatro espaços de indentação, `snake_case` para funções e variáveis, `CamelCase` para classes, linhas curtas.
+
+O antipadrão mais comum de quem chega de outra linguagem é percorrer uma sequência pelo índice:
+
+```python
+# antipadrão: índice manual, herdado de C
+i = 0
+while i < len(linhas):
+    processar(linhas[i])
+    i = i + 1
+
+# pythônico: iterar sobre o objeto
+for linha in linhas:
+    processar(linha)
+```
+
+A segunda versão não é só mais curta. Ela não tem como errar o limite do laço, funciona igual para lista, arquivo aberto, conjunto ou gerador — e comunica a intenção em vez do mecanismo. Quando o índice é realmente necessário, existe a forma canônica para isso:
+
+```python
+for numero, linha in enumerate(linhas, start=1):
+    if linha.endswith("DOWN"):
+        print(f"linha {numero}: {linha}")
+```
+
+O mesmo raciocínio vale para "acumular contagem num dicionário" (é `collections.Counter`), "juntar textos com separador" (é `"; ".join(partes)`, não concatenação em laço) e "montar texto com valores dentro" (é a f-string, `f"{cliente}: {total}"`).
+
+Sobre versões, quatro marcos que aparecem em código moderno e que não existiam antes — vale saber a partir de quando cada um pode ser usado:
+
+- **Python 3.8** — o operador morsa, que atribui dentro de uma expressão: `if (n := len(fila)) > 10:`.
+- **Python 3.10** — o casamento de padrões, com `match` e `case`, e a barra vertical como união de tipos na anotação, no lugar de `typing.Optional` e `typing.Union`.
+- **Python 3.11** — `tomllib` na biblioteca padrão, para ler arquivos TOML sem instalar nada.
+- **Python 3.12** — a sintaxe nova de genéricos e de alias de tipo, com `type` e colchetes na assinatura.
+
+Se o seu código precisa rodar num servidor com Python 3.9, `match` está fora — e é para isso que a versão mínima serve. Cada um desses recursos tem seu capítulo mais adiante.
+
+Por fim, uma regra que resume o resto: **escreva para quem vai ler o código daqui a seis meses, que provavelmente é você e não vai lembrar de nada.** Um nome de variável de dez letras que diz o que a variável é vale mais do que um comentário explicando um nome de uma letra.
+
+## 🧪 Laboratório
+
+Objetivo: montar um ambiente isolado com Python 3.13, confirmar a versão, explorar o Zen por dentro e rodar o script da abertura com dados próprios. Tudo com a biblioteca padrão — nada a instalar.
+
+**1. Crie o diretório e o ambiente virtual.** No Linux (Kali, Debian, Ubuntu):
+
+```bash
+mkdir -p ~/lab01 && cd ~/lab01
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+No Windows, no PowerShell, as duas últimas linhas viram:
+
+```text
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+O prompt passa a exibir `(.venv)` na frente. A partir daqui, `python` é o do ambiente.
+
+**2. Confirme a versão.** Esperado: `3.13` alguma coisa. O número após o segundo ponto varia conforme a data.
+
+```bash
+python --version
+python -c "import sys; print(sys.version_info)"
+```
+
+```text
+Python 3.13.15
+sys.version_info(major=3, minor=13, micro=15, releaselevel='final', serial=0)
+```
+
+Se aparecer `3.9` ou `2.7`, o ambiente não foi ativado ou a versão instalada é outra. O capítulo sobre instalação, mais adiante no Volume 1, trata dos gerenciadores de versão.
+
+**3. Leia o Zen.** Ainda no terminal:
+
+```bash
+python -c "import this"
+```
+
+A saída é a lista de 19 aforismos mostrada neste capítulo.
+
+**4. Olhe o Zen por dentro.** Crie o arquivo `zen.py`:
+
+```python
+import this
+
+print(this.c, this.i, len(this.d))
+print(this.s.splitlines()[13])
+print("".join(this.d.get(ch, ch) for ch in this.s.splitlines()[13]))
+```
+
+Rode com `python zen.py`. Depois das 19 linhas impressas pelo `import`, sai isto:
+
+```text
+97 25 52
+Va gur snpr bs nzovthvgl, ershfr gur grzcgngvba gb thrff.
+In the face of ambiguity, refuse the temptation to guess.
+```
+
+Três coisas para notar. As variáveis `c` e `i` sobreviveram aos laços do módulo — é o vazamento comentado acima. O dicionário `d` tem 52 entradas: 26 letras maiúsculas mais 26 minúsculas. E a última linha decifra o aforismo aplicando a mesma tabela: ROT13 é a sua própria inversa.
+
+**5. Gere um log de exemplo.** Crie `conexoes.log` com este conteúdo — são pares de queda e retorno de quatro clientes ao longo de um dia:
+
+```text
+2026-03-11 03:14:02 sitio-mangueira DOWN
+2026-03-11 03:14:41 sitio-mangueira UP
+2026-03-11 05:02:19 fazenda-boa-vista DOWN
+2026-03-11 05:03:07 fazenda-boa-vista UP
+2026-03-11 06:47:55 sitio-mangueira DOWN
+2026-03-11 06:48:30 sitio-mangueira UP
+2026-03-11 09:21:10 chacara-do-ze DOWN
+2026-03-11 09:22:02 chacara-do-ze UP
+2026-03-11 11:05:44 sitio-mangueira DOWN
+2026-03-11 11:06:21 sitio-mangueira UP
+2026-03-11 12:44:38 fazenda-boa-vista DOWN
+2026-03-11 12:45:26 fazenda-boa-vista UP
+2026-03-11 14:38:09 chacara-do-ze DOWN
+2026-03-11 14:39:00 chacara-do-ze UP
+2026-03-11 17:12:47 fazenda-boa-vista DOWN
+2026-03-11 17:13:35 fazenda-boa-vista UP
+2026-03-11 18:52:31 sitio-mangueira DOWN
+2026-03-11 18:53:12 sitio-mangueira UP
+2026-03-11 21:30:05 vila-sao-joao DOWN
+2026-03-11 21:30:52 vila-sao-joao UP
+```
+
+**6. Rode o script da abertura.** Salve como `quedas.py` o trecho de seis linhas do começo do capítulo e execute:
+
+```bash
+python quedas.py
+```
+
+```text
+sitio-mangueira      4 quedas
+fazenda-boa-vista    3 quedas
+chacara-do-ze        2 quedas
+```
+
+**7. Provoque um erro de propósito.** Crie `sinal.py` com o exemplo dos níveis de sinal e rode. Você deve ver o `ValueError` com o traceback apontando a linha 4 e a expressão `float(leitura)`. Leia a última linha do traceback antes de qualquer outra coisa: é ela que diz o que aconteceu. Ler traceback é a habilidade que mais economiza tempo em Python, e tem um capítulo só para isso ainda no Volume 1.
+
+**8. Peça as chaves.** Para fechar:
+
+```bash
+python -c "from __future__ import braces"
+```
+
+```text
+  File "<string>", line 1
+SyntaxError: not a chance
+```
+
+O número da linha muda conforme a forma de execução — dentro de um arquivo, ele aponta a linha do arquivo.
+
+**9. Saia do ambiente** com `deactivate`. O diretório `~/lab01` fica para os próximos capítulos.
+
+## Resumo
+
+- Python nasceu em dezembro de 1989, no CWI, em Amsterdã, como um ABC corrigido: a mesma legibilidade, mas extensível e capaz de falar com o sistema operacional. O nome vem do Monty Python.
+- A ruptura do Python 3, em 2008, existiu principalmente para separar texto de bytes de forma inegociável. Custou uma década de transição e terminou em 2020, com o fim de vida do 2.7.
+- Mudanças na linguagem passam por PEPs. O poder de decisão saiu do BDFL em 2018 e hoje está com um Conselho Diretor de cinco pessoas eleitas; desde a PEP 602 sai uma versão por ano, em outubro, com cinco anos de vida útil.
+- A versão de referência deste manual é a 3.13, com REPL novo, mensagens de erro mais precisas e os primeiros passos do interpretador sem GIL.
+- O Zen do Python (PEP 20, `import this`) resume os valores: legibilidade conta, explícito vence implícito, erro não passa em silêncio, e há uma maneira óbvia — embora a praticidade vença a pureza quando o custo da pureza é alto.
+- Código pythônico usa o vocabulário da linguagem: iterar sobre o objeto em vez de indexar, `Counter` em vez de contar na mão, f-string em vez de concatenar. Seis linhas legíveis valem mais que vinte e quatro literais.
