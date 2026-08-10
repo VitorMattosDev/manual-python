@@ -1,3 +1,528 @@
 # Como o Python executa código: interpretador, bytecode e CPython {#sec-cap002}
 
-*(em elaboracao)*
+Você entrega um script para um colega e ele volta com duas perguntas. A primeira: "apareceu uma pasta `__pycache__` no meio do projeto, posso apagar?". A segunda é mais interessante — ele digitou o script errado, com um `+` sobrando no fim de uma função que o programa nem chega a chamar, e nada rodou. Nem a primeira linha, que era um `print`. Se o Python é interpretado linha por linha, por que a primeira linha não executou?
+
+Porque ele não é interpretado linha por linha. Entre o arquivo `.py` e o resultado na tela existem quatro etapas, e saber quais são explica a pasta misteriosa, o erro que aparece antes de qualquer saída, o motivo de o segundo `import` de um módulo ser mais rápido que o primeiro e boa parte do vocabulário que você vai encontrar em discussão sobre desempenho de Python.
+
+## O erro que chega antes da primeira linha
+
+Vamos reproduzir a queixa do colega. Salve isto como `sintaxe.py`:
+
+```python
+print("esta linha nunca vai aparecer")
+
+
+def nunca_chamada():
+    return 1 +
+```
+
+A função com o `+` solto nunca é chamada. Ainda assim:
+
+```text
+  File "C:\Users\Usuario\lab02\sintaxe.py", line 5
+    return 1 +
+              ^
+SyntaxError: invalid syntax
+```
+
+O `print` não rodou. Agora troque o erro de sintaxe por um erro de nome — uma variável que não existe, também dentro da função que ninguém chama. Salve como `nome.py`:
+
+```python
+print("esta linha aparece")
+
+
+def nunca_chamada():
+    return taxa_de_juros * 2
+```
+
+```text
+esta linha aparece
+```
+
+Nenhum erro. A variável `taxa_de_juros` não existe em lugar nenhum, e o programa terminou com sucesso.
+
+A diferença entre os dois casos é a diferença entre as duas fases da execução. Antes de rodar qualquer coisa, o Python lê o arquivo **inteiro** e o traduz para uma forma interna. Um `+` sobrando impede a tradução: não há como traduzir o que não é Python válido, então nada roda. Já `taxa_de_juros` é sintaticamente perfeito — é um nome, e nomes são resolvidos no momento em que a linha executa. Como aquela linha nunca executou, ninguém foi procurar a variável.
+
+Essa é a regra prática que vale guardar: **erro de sintaxe é detectado antes de o programa começar; quase todo o resto só aparece quando a linha é alcançada**. É por isso que um `if` com um trecho errado num galho raro pode ficar meses em produção sem ninguém notar, e por isso existem verificadores estáticos e testes — assunto do Volume 11.
+
+## As quatro etapas
+
+O caminho do arquivo até o resultado está em @fig-pipeline-execucao.
+
+::: {#fig-pipeline-execucao}
+```{.tikz}
+%%| filename: pipeline-execucao
+%%| alt: Diagrama do caminho do codigo-fonte ate a maquina virtual, passando por tokens, arvore sintatica e bytecode, com o cache em disco
+\begin{tikzpicture}[
+  etapa/.style={draw=manualblue, thick, rounded corners, fill=manualblue!8,
+                text width=2.4cm, align=center, minimum height=1.6cm,
+                font=\footnotesize},
+  disco/.style={draw=manualyellow, thick, rounded corners, fill=manualyellow!12,
+                text width=2.9cm, align=center, minimum height=1.2cm,
+                font=\footnotesize},
+  motor/.style={draw=manualgreen, thick, rounded corners, fill=manualgreen!8,
+                text width=2.4cm, align=center, minimum height=1.6cm,
+                font=\footnotesize},
+  fluxo/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[etapa] (fonte) at (0,0)    {\textbf{Fonte}\\\texttt{media.py}};
+  \node[etapa] (tok)   at (3.6,0)  {\textbf{Tokens}\\palavras e símbolos};
+  \node[etapa] (ast)   at (7.2,0)  {\textbf{AST}\\árvore sintática};
+  \node[etapa] (byte)  at (10.8,0) {\textbf{Bytecode}\\objeto de código};
+  \node[motor] (mv)    at (14.4,0) {\textbf{Máquina virtual}\\laço de avaliação};
+
+  \draw[fluxo] (fonte) -- (tok);
+  \draw[fluxo] (tok)   -- (ast);
+  \draw[fluxo] (ast)   -- (byte);
+  \draw[fluxo] (byte)  -- (mv);
+
+  \foreach \xx/\tit in {
+    1.8/{análise\\léxica},
+    5.4/{análise\\sintática},
+    9.0/{compilação},
+    12.6/{execução}}
+  {
+    \node[lb, anchor=south, text width=1.9cm] at (\xx,1.0) {\tit};
+  }
+
+  \node[disco] (pyc) at (10.8,-2.5)
+    {\texttt{\_\_pycache\_\_/}\\\texttt{media.cpython-313.pyc}};
+  \draw[fluxo,<->] (byte) -- node[lb,right,xshift=3pt]{cache em disco} (pyc);
+
+  \node[lb, anchor=north, text width=5.2cm] at (1.8,-1.3)
+    {as quatro primeiras etapas acontecem \textbf{antes} de a primeira linha rodar};
+\end{tikzpicture}
+```
+Do arquivo `.py` ao resultado: quatro etapas e um cache.
+:::
+
+**Análise léxica.** O texto do arquivo é quebrado em *tokens* — as menores unidades com significado. A linha `total = preco * 3` vira seis tokens: o nome `total`, o sinal de igual, o nome `preco`, o asterisco, o número `3` e o fim de linha. É nesta etapa que a indentação é convertida em tokens de abertura e fechamento de bloco, o que faz do espaço em branco uma parte da gramática — tema do @sec-cap006.
+
+**Análise sintática.** Os tokens são organizados numa árvore que representa a estrutura do programa: a *AST*, de *Abstract Syntax Tree*, árvore sintática abstrata. É aqui que o `+` solto do exemplo anterior derruba tudo: a gramática do Python não tem nenhuma forma válida em que um `+` seja seguido de fim de linha dentro de um `return`. Você pode ver a árvore com o módulo `ast`:
+
+```python
+import ast
+
+arvore = ast.parse("total = preco * 3")
+print(ast.dump(arvore, indent=2))
+```
+
+```text
+Module(
+  body=[
+    Assign(
+      targets=[
+        Name(id='total', ctx=Store())],
+      value=BinOp(
+        left=Name(id='preco', ctx=Load()),
+        op=Mult(),
+        right=Constant(value=3)))])
+```
+
+Leia de dentro para fora: uma operação binária (`BinOp`) de multiplicação (`Mult`) entre o nome `preco`, lido (`Load`), e a constante `3`; o resultado é atribuído (`Assign`) ao nome `total`, agora escrito (`Store`). A distinção entre `Load` e `Store` no mesmo tipo de nó é o que diferencia ler de uma variável e escrever nela.
+
+**Compilação.** A árvore é traduzida para *bytecode*: uma sequência de instruções simples para uma máquina imaginária. O bytecode não é código de máquina — nenhum processador real sabe executá-lo. Ele fica guardado num **objeto de código**, que é um valor de primeira classe em Python, como um número ou uma lista:
+
+```python
+codigo = compile("preco = 19.9\ntotal = preco * 3", "<exemplo>", "exec")
+print(type(codigo))
+print(codigo.co_consts)
+print(codigo.co_names)
+```
+
+```text
+<class 'code'>
+(19.9, 3, None)
+('preco', 'total')
+```
+
+O objeto de código carrega as constantes que aparecem no trecho (`co_consts`) e os nomes que ele usa (`co_names`), separados. É o formato que a máquina virtual consome.
+
+**Execução.** A máquina virtual — na prática, um laço em C que lê uma instrução, faz o que ela manda e passa para a seguinte — avalia o bytecode. É esse laço que as pessoas chamam de "o interpretador", e é dele que vem a fama de lentidão do Python: cada operação que em C seria uma instrução de processador aqui custa uma volta no laço, com desvio, verificação de tipo e contagem de referências.
+
+Então o Python é compilado ou interpretado? As duas coisas, e a pergunta é mal colocada. Ele é **compilado para bytecode e o bytecode é interpretado**. Java faz o mesmo. A diferença prática em relação a C é que a compilação acontece automaticamente, na hora de rodar, e não numa etapa separada que produz um executável.
+
+## O bytecode por dentro
+
+O módulo `dis` — de *disassemble*, desmontar — mostra o bytecode em forma legível. Crie `media.py`:
+
+```python
+def media(valores):
+    total = 0
+    for v in valores:
+        total += v
+    return total / len(valores)
+```
+
+E `ver.py`:
+
+```python
+import dis
+from media import media
+
+dis.dis(media)
+```
+
+```text
+  1           RESUME                   0
+
+  2           LOAD_CONST               1 (0)
+              STORE_FAST               1 (total)
+
+  3           LOAD_FAST                0 (valores)
+              GET_ITER
+      L1:     FOR_ITER                 7 (to L2)
+              STORE_FAST               2 (v)
+
+  4           LOAD_FAST_LOAD_FAST     18 (total, v)
+              BINARY_OP               13 (+=)
+              STORE_FAST               1 (total)
+              JUMP_BACKWARD            9 (to L1)
+
+  3   L2:     END_FOR
+              POP_TOP
+
+  5           LOAD_FAST                1 (total)
+              LOAD_GLOBAL              1 (len + NULL)
+              LOAD_FAST                0 (valores)
+              CALL                     1
+              BINARY_OP               11 (/)
+              RETURN_VALUE
+```
+
+A primeira coluna é a linha do arquivo original — é assim que o traceback consegue dizer em que linha o erro aconteceu, assunto do @sec-cap007. Depois vem o nome da instrução, o argumento numérico e, entre parênteses, o que aquele número significa.
+
+Duas coisas para notar. A primeira é `LOAD_FAST` contra `LOAD_GLOBAL`: variáveis locais de uma função moram num vetor de tamanho fixo, acessado por posição, enquanto `len` é procurada num dicionário de nomes globais e depois nos embutidos. É a razão técnica de a busca de local ser mais rápida que a de global, e de o truque antigo de copiar uma função global para uma variável local em laço apertado às vezes ainda render alguma coisa.
+
+A segunda é `LOAD_FAST_LOAD_FAST`, que carrega duas variáveis locais numa única instrução. Não existe nada disso no código-fonte: é o compilador juntando duas operações frequentes numa só para gastar menos voltas no laço de avaliação. Instruções combinadas assim vêm crescendo desde o Python 3.11, e é boa parte do ganho de velocidade dessas versões.
+
+### A máquina é uma pilha
+
+O detalhe que torna o bytecode legível é que a máquina virtual do CPython é uma **máquina de pilha**: não existem registradores nomeados, apenas uma pilha de valores. Instrução que começa com `LOAD` empilha; operação consome do topo e devolve o resultado ao topo; `STORE` retira do topo e guarda num nome. @fig-pilha-avaliacao acompanha a avaliação de `total = preco * 3`.
+
+::: {#fig-pilha-avaliacao}
+```{.tikz}
+%%| filename: pilha-avaliacao
+%%| alt: Quatro estados da pilha de avaliacao durante a execucao de uma multiplicacao seguida de atribuicao
+\begin{tikzpicture}[
+  celula/.style={draw=manualblue, thick, fill=manualblue!10,
+                 minimum width=2.0cm, minimum height=0.66cm, font=\small},
+  vazio/.style={draw=manualgray, dashed, fill=none,
+                minimum width=2.0cm, minimum height=0.66cm, font=\small,
+                text=manualgray},
+  base/.style={very thick, manualgray},
+  instr/.style={font=\ttfamily\scriptsize, text=manualred, align=center},
+  lb/.style={font=\scriptsize, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \foreach \xx/\instr in {
+    0/{LOAD\_NAME\\preco},
+    4.2/{LOAD\_CONST\\3},
+    8.4/{BINARY\_OP\\ *},
+    12.6/{STORE\_NAME\\total}}
+  {
+    \draw[base] (\xx-1.15,-0.42) -- (\xx+1.15,-0.42);
+    \node[instr, anchor=north] at (\xx,-0.62) {\instr};
+  }
+
+  \node[celula] at (0,0)   {19.9};
+
+  \node[celula] at (4.2,0)    {19.9};
+  \node[celula] at (4.2,0.68) {3};
+
+  \node[celula] at (8.4,0) {59.7};
+
+  \node[vazio]  at (12.6,0) {vazia};
+
+  \node[lb, anchor=south, text width=2.3cm] at (0,1.5)
+    {empilha o valor\\da variável};
+  \node[lb, anchor=south, text width=2.3cm] at (4.2,1.5)
+    {empilha a\\constante};
+  \node[lb, anchor=south, text width=2.3cm] at (8.4,1.5)
+    {consome dois,\\devolve um};
+  \node[lb, anchor=south, text width=2.3cm] at (12.6,1.5)
+    {retira e guarda\\no nome};
+
+\end{tikzpicture}
+```
+A pilha de avaliação durante `total = preco * 3`, com `preco` valendo 19.9. A pilha cresce para cima; a linha grossa é o fundo.
+:::
+
+Quatro instruções, quatro estados da pilha, e no fim ela volta a ficar vazia. Toda expressão Python, por complicada que seja, é decomposta nesse vaivém.
+
+### O compilador faz pouca coisa — mas faz
+
+O compilador do CPython não é um otimizador agressivo, e não pretende ser. Ainda assim, algumas simplificações óbvias ele resolve na compilação, de graça:
+
+```python
+import dis
+
+dis.dis("segundos = 2 * 60 * 60")
+```
+
+```text
+  0           RESUME                   0
+
+  1           LOAD_CONST               0 (7200)
+              STORE_NAME               0 (segundos)
+              RETURN_CONST             1 (None)
+```
+
+Não há multiplicação nenhuma no bytecode: o `7200` já está calculado. Isso se chama *constant folding*, dobramento de constantes, e a consequência prática é boa notícia para a legibilidade — escrever `2 * 60 * 60` em vez de `7200` documenta a intenção e **não custa nada em tempo de execução**. Vale para expressões entre literais. Não vale se qualquer operando for uma variável, porque aí o valor só é conhecido na hora.
+
+O que o compilador **não** faz é reorganizar o seu algoritmo. Compare montar um texto concatenando em laço com montar usando `join`:
+
+```bash
+python -m timeit -s "partes=['abc']*2000" "s=''
+for p in partes: s+=p"
+python -m timeit -s "partes=['abc']*2000" "s=''.join(partes)"
+```
+
+```text
+2000 loops, best of 5: 259 usec per loop
+50000 loops, best of 5: 6.77 usec per loop
+```
+
+Quase quarenta vezes de diferença, e os números na sua máquina vão ser outros — o que se mantém é a ordem de grandeza. Nenhuma otimização de bytecode salva o primeiro caso, porque o problema não está nas instruções: está em criar dois mil textos intermediários em vez de um. Escolher a estrutura e o algoritmo certos vale mais do que qualquer coisa que se faça no nível da instrução, e é por isso que este manual gasta um volume inteiro em estruturas de dados antes de falar de desempenho.
+
+## `__pycache__`, o cache que aparece sozinho
+
+Compilar custa tempo. Fazer isso a cada execução de um módulo que não mudou seria desperdício, então o CPython guarda o resultado. Depois de rodar `ver.py`, o diretório tem uma pasta nova:
+
+```bash
+ls __pycache__
+```
+
+```text
+media.cpython-313.pyc
+```
+
+Observe **o que não está ali**: não há `ver.cpython-313.pyc`. O arquivo executado diretamente não é cacheado; só os módulos **importados** são. Faz sentido — o script de entrada roda uma vez, o módulo importado tende a ser reaproveitado por vários programas.
+
+O nome do arquivo traz a implementação e a versão (`cpython-313`) justamente para que instalações diferentes de Python convivam no mesmo diretório sem se atropelar. O formato do bytecode muda entre versões menores, e um `.pyc` do 3.12 é ilegível para o 3.13.
+
+O cabeçalho do `.pyc` tem 16 bytes e explica como a invalidação funciona:
+
+```python
+from pathlib import Path
+import struct
+
+dados = Path("__pycache__/media.cpython-313.pyc").read_bytes()
+magic, flags, mtime, tam = struct.unpack("<4sIII", dados[:16])
+print("magic", magic)
+print("flags", flags)
+print("mtime no pyc  ", mtime)
+print("mtime do fonte", int(Path("media.py").stat().st_mtime))
+print("tamanho fonte no pyc", tam, "| real", Path("media.py").stat().st_size)
+```
+
+```text
+magic b'\xf3\r\r\n'
+flags 0
+mtime no pyc   1786393562
+mtime do fonte 1786393562
+tamanho fonte no pyc 107 | real 107
+```
+
+São quatro campos. O *número mágico* identifica a versão do formato de bytecode — se não bater com o do interpretador, o cache é descartado. Os `flags` dizem qual estratégia de invalidação está em uso. E os dois últimos campos são a data de modificação e o tamanho do arquivo-fonte no momento em que o cache foi escrito: a cada `import`, o Python compara esses dois valores com os do `.py` em disco e recompila se algum diferir.
+
+Duas consequências práticas. A primeira é que **você pode apagar `__pycache__` sem medo** — ela é recriada. Responda isso ao colega, e acrescente `__pycache__/` ao `.gitignore`, porque cache não entra no controle de versão. A segunda é mais sutil: a invalidação depende do relógio. Se um processo de build restaura arquivos com data antiga, ou se um contêiner tem relógio deslocado, é possível ficar com bytecode velho rodando fonte novo. Para esses casos existe o modo baseado em hash do conteúdo (PEP 552), ativado por um bit nos `flags`.
+
+Duas variáveis de ambiente e duas opções de linha de comando aparecem em torno disso. `python -B`, ou `PYTHONDONTWRITEBYTECODE=1`, desliga a escrita do cache — comum em imagem de contêiner, onde o `.pyc` só engorda a camada. E `python -O` produz um arquivo com sufixo diferente:
+
+```bash
+python -O -c "import media"
+ls __pycache__
+```
+
+```text
+media.cpython-313.opt-1.pyc
+media.cpython-313.pyc
+```
+
+O que o `-O` faz merece atenção porque o nome engana. Ele não otimiza nada de verdade: apenas remove as instruções `assert` e trecho protegido por `if __debug__`. Compare:
+
+```bash
+python -c "assert False, 'estourou'"
+python -O -c "assert False, 'estourou'; print('passou reto')"
+```
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    assert False, 'estourou'
+           ^^^^^
+AssertionError: estourou
+passou reto
+```
+
+Com `-O`, a asserção desaparece. Essa é a razão de nunca usar `assert` para validar entrada de usuário ou verificar permissão: alguém rodando com `-O` some com a sua checagem. `assert` é para condição que você acredita ser sempre verdadeira, como rede de segurança durante o desenvolvimento e nos testes.
+
+## CPython e as outras implementações
+
+Vale repetir a distinção do @sec-cap001, agora com conteúdo técnico: **Python é a linguagem, CPython é o programa que a executa**. O interpretador sabe se apresentar:
+
+```bash
+python -c "import sys; print(sys.implementation.name); print(sys.version)"
+```
+
+```text
+cpython
+3.13.15 (main, Aug  7 2026, 02:25:50) [MSC v.1944 64 bit (AMD64)]
+```
+
+Tudo que descrevemos até aqui — bytecode de pilha, `__pycache__`, contagem de referências, GIL — é decisão de projeto do CPython, não exigência da linguagem. Outras implementações fazem diferente:
+
+- **PyPy** compila em tempo de execução, com JIT: ele observa quais trechos rodam muito e gera código de máquina de verdade para eles. Em laço numérico puro chega a ser uma ordem de grandeza mais rápido que o CPython. Em troca, a interface com extensões escritas em C é mais frágil e o consumo de memória é maior.
+- **MicroPython** e **CircuitPython** rodam em microcontrolador, com biblioteca padrão reduzida ao que cabe em poucas centenas de kilobytes.
+- **GraalPy** roda sobre a máquina virtual da JVM, o que interessa a quem precisa conviver com código Java.
+
+O CPython também está mudando por dentro. O 3.11 trouxe o *interpretador especializante* (PEP 659): a máquina virtual observa os tipos que passam por cada instrução e a substitui por uma versão especializada — um `BINARY_OP` genérico vira uma soma de inteiros direta quando os dois operandos vêm sendo inteiros. É otimização em tempo de execução dentro do interpretador, sem JIT. O 3.13 acrescentou um compilador JIT experimental (PEP 744), desligado por padrão, e o build sem GIL (PEP 703). Nada disso muda o que você escreve; muda quanto tempo leva para rodar. O Volume 15 trata do assunto com o cuidado que ele merece.
+
+Um efeito colateral útil de saber que o `import` custa: quando um programa de linha de comando demora a responder, muitas vezes o culpado é o que ele importa, não o que ele faz. A opção `-X importtime` cobra o tempo de cada `import`, em microssegundos:
+
+```bash
+python -X importtime -c "import json"
+```
+
+```text
+import time:      1646 |       4792 |       re._compiler
+import time:       758 |        758 |       copyreg
+import time:      1864 |      10631 |     re
+import time:       305 |        305 |       _json
+import time:      7730 |       8034 |     json.scanner
+import time:     11253 |      29918 |   json.decoder
+import time:      7461 |       7461 |   json.encoder
+import time:     10180 |      47558 | json
+```
+
+A primeira coluna é o tempo do módulo em si; a segunda, o acumulado com tudo que ele arrasta; a indentação mostra quem importou quem. Aqui, importar `json` custou 47 milissegundos, e quase dois terços disso foram gastos em `json.decoder` e no `re` que ele carrega. Numa ferramenta de linha de comando que precisa responder rápido, esse é o tipo de conta que compensa fazer.
+
+## 🐍 Jeito Pythônico
+
+O erro pythônico mais comum em torno deste assunto é usar o `dis` como árbitro de desempenho. Contar instruções não mede tempo: `LOAD_FAST` e `CALL` aparecem iguais na listagem e custam ordens de grandeza diferentes, e o interpretador especializante troca instruções por outras durante a execução, então a listagem estática nem descreve o que rodou. A forma correta de comparar é medir:
+
+```python
+# antipadrão: decidir por contagem de instrução no dis
+# "a versão A tem 12 instruções e a B tem 14, então A é mais rápida"
+
+# pythônico: medir, com a mesma entrada, no mesmo ambiente
+python -m timeit -s "setup" "trecho"
+```
+
+O `dis` serve para **entender semântica**, não velocidade: descobrir por que um `for` sobre um dicionário percorre chaves, o que exatamente um decorador acrescentou, por que uma comparação com `is` deu um resultado inesperado. Para velocidade existem o `timeit` e os *profilers*, assunto reservado ao Volume 15.
+
+Três regras que caem direto no dia a dia:
+
+**`__pycache__/` no `.gitignore`, sempre.** E jamais distribua `.pyc` no lugar do `.py` como proteção de código: o bytecode é trivial de desmontar com o próprio `dis` da biblioteca padrão, e você amarra o pacote a uma versão exata do interpretador.
+
+**`assert` não é validação.** Como `-O` remove as asserções, entrada de usuário e verificação de permissão pedem `if` com `raise` explícito:
+
+```python
+# antipadrão: some com -O
+assert idade >= 18, "menor de idade"
+
+# pythônico: sobrevive a qualquer modo de execução
+if idade < 18:
+    raise ValueError("menor de idade")
+```
+
+**Prefira legibilidade a pré-cálculo.** Como o dobramento de constantes resolve expressão entre literais na compilação, escreva `60 * 60 * 24` e não `86400`; `1024 ** 2` e não `1048576`. Custa zero e explica o número.
+
+Sobre versões, o que muda por aqui:
+
+- **Python 3.11** — interpretador especializante (PEP 659) e tracebacks com marcação de coluna. O formato do bytecode mudou bastante; qualquer código que dependa de instruções específicas precisa ser revisto a cada versão.
+- **Python 3.12** — `dis` passou a mostrar as instruções combinadas e os saltos com rótulos (`L1`, `L2`), como na saída deste capítulo.
+- **Python 3.13** — JIT experimental (PEP 744) e build sem GIL (PEP 703), ambos opcionais.
+
+A moral: **bytecode é detalhe de implementação**. É legítimo e útil olhar para ele para entender o que a linguagem está fazendo. Não é lugar para construir código que dependa de instrução específica, porque isso quebra na próxima versão sem aviso e sem culpa de ninguém.
+
+## 🧪 Laboratório
+
+Objetivo: observar cada etapa da execução no seu próprio ambiente — ver o erro de compilação chegar antes da execução, desmontar bytecode, decodificar o cabeçalho de um `.pyc` na mão e provocar a invalidação do cache. Só biblioteca padrão.
+
+**1. Prepare o diretório e o ambiente.** No Linux:
+
+```bash
+mkdir -p ~/lab02 && cd ~/lab02
+python3 -m venv .venv
+source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.15
+```
+
+No Windows, `py -3 -m venv .venv` e `.\.venv\Scripts\Activate.ps1`.
+
+**2. Veja a compilação acontecer antes da execução.** Crie `sintaxe.py` e `nome.py` com o conteúdo mostrado no começo do capítulo e rode os dois. O primeiro não imprime nada e falha com `SyntaxError` apontando a linha 5; o segundo imprime a mensagem e termina normalmente, apesar de conter uma variável inexistente. Se você inverter — chamando `nunca_chamada()` no fim do `nome.py` — aí sim aparece o `NameError`, e apenas então.
+
+**3. Desmonte uma função.** Crie `media.py` e `ver.py` como no capítulo e rode `python ver.py`. Compare a saída com a listagem mostrada aqui. Localize na sua saída: onde o laço volta (`JUMP_BACKWARD`), onde `len` é buscada (`LOAD_GLOBAL`) e onde as locais são lidas (`LOAD_FAST`).
+
+**4. Escreva uma variante e compare.** Troque o corpo de `media.py` pela versão com `sum`:
+
+```python
+def media(valores):
+    return sum(valores) / len(valores)
+```
+
+Rode `python ver.py` de novo:
+
+```text
+  1           RESUME                   0
+
+  2           LOAD_GLOBAL              1 (sum + NULL)
+              LOAD_FAST                0 (valores)
+              CALL                     1
+              LOAD_GLOBAL              3 (len + NULL)
+              LOAD_FAST                0 (valores)
+              CALL                     1
+              BINARY_OP               11 (/)
+              RETURN_VALUE
+```
+
+Nove instruções contra as dezenove da versão com laço, e o laço em si desapareceu — ele agora acontece dentro de `sum`, escrita em C. Este é o padrão que se repete em Python: empurrar a repetição para dentro de uma função da biblioteca padrão.
+
+**5. Encontre o cache.** Rode `ls __pycache__` (ou `dir __pycache__` no `cmd`). Deve haver `media.cpython-313.pyc` e **não** deve haver nada referente a `ver.py`. Se a sua versão for outra, o número no nome muda.
+
+**6. Decodifique o cabeçalho.** Crie `cabecalho.py` com o trecho do `struct.unpack` mostrado no capítulo e rode. Os valores de `mtime` na sua máquina serão outros, mas os dois têm de ser **iguais entre si**, e o tamanho no cabeçalho tem de bater com o tamanho real do `media.py`.
+
+**7. Provoque a invalidação.** Acrescente uma linha em branco no fim de `media.py`, salve e rode `python cabecalho.py` de novo. Os dois `mtime` agora divergem — o do cache é o antigo. Rode `python ver.py`, que importa o módulo e força a recompilação, e depois `python cabecalho.py` mais uma vez: voltaram a bater, e o tamanho subiu um byte (ou dois, no Windows, por causa do fim de linha).
+
+**8. Desligue o cache.** Apague a pasta e rode com `-B`:
+
+```bash
+rm -rf __pycache__
+python -B ver.py
+ls __pycache__
+```
+
+A listagem falha porque a pasta não foi criada. Rode sem o `-B` e ela volta.
+
+**9. Meça em vez de contar instruções.** Reproduza a comparação de concatenação:
+
+```bash
+python -m timeit -s "partes=['abc']*2000" "s=''
+for p in partes: s+=p"
+python -m timeit -s "partes=['abc']*2000" "s=''.join(partes)"
+```
+
+Os números absolutos vão diferir dos deste capítulo; a diferença entre eles, não muito.
+
+**10. Veja o custo dos imports.** Rode `python -X importtime -c "import json"` e depois com `import decimal` e `import asyncio`. O `asyncio` é o mais caro dos três com folga — é bom saber disso antes de importá-lo num script que precisa responder em milissegundos.
+
+**11. Feche com `deactivate`.** O diretório `~/lab02` fica para consulta.
+
+## Resumo
+
+- Python não é interpretado linha por linha: o arquivo inteiro é lido, analisado e compilado para bytecode **antes** de qualquer linha rodar. Por isso erro de sintaxe aparece antes do primeiro `print`, e erro de nome só aparece quando a linha é alcançada.
+- São quatro etapas: análise léxica (tokens), análise sintática (AST), compilação (bytecode em um objeto de código) e execução na máquina virtual, que é o laço de avaliação escrito em C.
+- A máquina virtual do CPython é uma máquina de pilha: `LOAD` empilha, operação consome do topo, `STORE` retira e guarda num nome. O módulo `dis` mostra tudo isso, com a linha do fonte na primeira coluna.
+- `__pycache__` guarda o bytecode dos módulos **importados**, com a versão no nome do arquivo. A invalidação compara data e tamanho do fonte gravados no cabeçalho de 16 bytes. Pode apagar, pode ignorar no Git, não serve para esconder código.
+- `-O` não otimiza: remove `assert` e `if __debug__`. Logo, `assert` nunca é validação de entrada — para isso, `if` com `raise`.
+- Bytecode é detalhe de implementação do CPython, não da linguagem, e muda a cada versão. Use `dis` para entender semântica e `timeit` para medir velocidade; nunca conte instruções para prever desempenho.
