@@ -22,7 +22,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 - [x] **cap 008** - Objetos, variáveis e o modelo de referências - `vol02/cap008-objetos-variaveis-e-o-modelo-de-referencias.qmd`
 - [x] **cap 009** - Números inteiros, de ponto flutuante e complexos - `vol02/cap009-numeros-inteiros-de-ponto-flutuante-e.qmd`
-- [ ] **cap 010** - Precisão numérica: decimal, fractions e as armadilhas do float - `vol02/cap010-precisao-numerica-decimal-fractions-e-as.qmd`
+- [x] **cap 010** - Precisão numérica: decimal, fractions e as armadilhas do float - `vol02/cap010-precisao-numerica-decimal-fractions-e-as.qmd`
 - [ ] **cap 011** - Booleanos, valor-verdade e os operadores lógicos - `vol02/cap011-booleanos-valor-verdade-e-os-operadores.qmd`
 - [ ] **cap 012** - Strings: criação, indexação e fatiamento - `vol02/cap012-strings-criacao-indexacao-e-fatiamento.qmd`
 - [ ] **cap 013** - Métodos de string, formatação e f-strings - `vol02/cap013-metodos-de-string-formatacao-e-f-strings.qmd`

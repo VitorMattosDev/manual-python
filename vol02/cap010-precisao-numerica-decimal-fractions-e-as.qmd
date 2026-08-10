@@ -1,3 +1,751 @@
 # Precisão numérica: decimal, fractions e as armadilhas do float {#sec-cap010}
 
-*(em elaboracao)*
+A fatura tem três linhas. Link de 100 Mbps por R\$ 39,90, IP fixo por R\$ 19,90, suporte por R\$ 5,10. Qualquer pessoa soma isso de cabeça: R\$ 64,90.
+
+```python
+ITENS = [("Link 100M", 39.90), ("IP fixo", 19.90), ("Suporte", 5.10)]
+
+total = 0.0
+for nome, valor in ITENS:
+    total += valor
+
+print(repr(total))
+print(total == 64.90)
+```
+
+```text
+64.89999999999999
+False
+```
+
+O relatório imprime `64.90`, porque a formatação esconde o problema. O teste automatizado, que compara com `64.90`, falha. E a conciliação com o sistema do banco, que trabalha em centavos, acusa uma diferença de um centavo num lote de trinta mil faturas.
+
+Nada disso é bug do Python. O mesmo cálculo, em C, Java, JavaScript, Go ou numa planilha, dá o mesmo resultado — porque todos usam o mesmo `float` IEEE 754 de 64 bits do @sec-cap009. O que muda é que o Python te dá três saídas, e este capítulo é sobre escolher a certa.
+
+## Por que 0,1 não é 0,1
+
+O `float` guarda o número em **base 2**. Um número tem representação finita em base 2 se, e somente se, seu denominador for uma potência de 2. Meio (1/2), um quarto (1/4), 0,75 (3/4): exatos. Um décimo (1/10) tem o fator 5 no denominador, e vira dízima periódica em binário — exatamente como 1/3 vira dízima em decimal.
+
+Como só há 53 bits de precisão, a dízima é cortada. O que fica guardado não é 0,1:
+
+```python
+print(f"{0.1:.55f}")
+print((0.1).hex())
+print((0.1).as_integer_ratio())
+```
+
+```text
+0.1000000000000000055511151231257827021181583404541015625
+0x1.999999999999ap-4
+(3602879701896397, 36028797018963968)
+```
+
+Três formas de ver a mesma coisa. A primeira mostra o valor decimal exato do objeto que o Python chama de `0.1`. A segunda mostra a mantissa em hexadecimal — repare no `999999999999a`, que é o `0,1999…` periódico cortado e arredondado no último dígito. A terceira dá a fração exata: 3602879701896397 dividido por 2⁵⁵.
+
+::: {#fig-float-binario}
+```{.tikz}
+%%| filename: float-binario
+%%| alt: O caminho de 0,1 decimal ate o valor realmente armazenado: expansao binaria periodica, corte em 53 bits e o valor decimal exato resultante
+\begin{tikzpicture}[
+  bx/.style={draw=manualgray, thick, rounded corners, fill=white,
+             text width=11.0cm, align=center, minimum height=0.92cm,
+             font=\ttfamily\small, inner sep=5pt},
+  bxr/.style={draw=manualred, very thick, rounded corners, fill=manualred!8,
+              text width=11.0cm, align=center, minimum height=1.05cm,
+              font=\ttfamily\scriptsize, inner sep=5pt},
+  bxb/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!8,
+              text width=11.0cm, align=center, minimum height=0.92cm,
+              font=\ttfamily\scriptsize, inner sep=5pt},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, text width=4.6cm}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[bx]  (a) at (0, 3.30) {0.1};
+  \node[bxb] (b) at (0, 1.90) {0.0001100110011001100110011...};
+  \node[bxr] (c) at (0, 0.45) {0.0001100110011001100110011001100110011001100110011001101};
+  \node[bx]  (d) at (0,-1.00) {0.1000000000000000055511151231257827021181583404541015625};
+
+  \draw[fl] (a) -- (b);
+  \draw[fl] (b) -- (c);
+  \draw[fl] (c) -- (d);
+
+  \node[lb, anchor=west] at (5.9, 3.30) {o que você escreveu};
+  \node[lb, anchor=west] at (5.9, 2.60) {em base 2 vira\\dízima periódica};
+  \node[lb, anchor=west, text=manualred] at (5.9, 1.15)
+    {só cabem \textbf{53 bits}:\\corta e arredonda};
+  \node[lb, anchor=west] at (5.9,-1.00) {o valor exato que\\ficou guardado};
+\end{tikzpicture}
+```
+O caminho de `0.1` até o número que o computador realmente guarda.
+:::
+
+Todos os "erros" de ponto flutuante saem daí. O `float` não erra a conta: ele acerta a conta sobre números que não são os que você digitou.
+
+E o Python é honesto sobre isso — só que discretamente. Desde a versão 3.1, `repr()` de um `float` mostra a **menor** cadeia de dígitos que volta ao mesmo objeto, e é por isso que `0.1` aparece como `0.1` e não como a monstruosidade acima. A informação não some; ela fica escondida até o momento em que se acumula o suficiente para vazar.
+
+## O erro se acumula (e a soma de Python não deixa mais)
+
+Somar cem mil décimos deveria dar dez mil:
+
+```python
+total = 0.0
+for _ in range(1000):
+    total += 0.1
+
+print(repr(total))
+print(total == 100.0, abs(total - 100.0))
+```
+
+```text
+99.9999999999986
+False 1.4068746168049984e-12
+```
+
+Cada soma arredonda um pouquinho, e mil arredondamentos deixam rastro na décima segunda casa. Agora o mesmo cálculo com a função embutida:
+
+```python
+print(repr(sum([0.1] * 1000)))
+```
+
+```text
+100.0
+```
+
+Exato. E não por sorte: desde o **Python 3.12**, `sum()` usa **somatório compensado** (algoritmo de Neumaier) quando os valores são `float`, mantendo um termo de correção que recupera os bits perdidos a cada passo. O contraste mais brutal:
+
+```python
+print(repr(sum([1e16, 1.0, -1e16])))
+
+acumulado = 0.0
+for v in [1e16, 1.0, -1e16]:
+    acumulado += v
+print(repr(acumulado))
+```
+
+```text
+1.0
+0.0
+```
+
+No laço, o `1.0` é engolido: somado a 10¹⁶, ele cai fora dos 53 bits e desaparece. `sum()` guarda a perda e a devolve no fim. Em Python 3.11 as duas linhas davam `0.0`.
+
+Isso é motivo suficiente para preferir `sum(lista)` a acumular num laço — e não só por elegância. Quando a compensação de `sum` não bastar, existe `math.fsum`, que é exato por construção (soma em precisão estendida e arredonda uma vez só) e mais lento.
+
+## Comparar `float` com tolerância
+
+Se a igualdade exata não vale, o que vale é a proximidade:
+
+```python
+import math
+
+print(0.1 + 0.2 == 0.3)
+print(math.isclose(0.1 + 0.2, 0.3))
+```
+
+```text
+False
+True
+```
+
+`math.isclose(a, b)` existe desde o Python 3.5 (PEP 485) e usa **tolerância relativa** de 10⁻⁹ por padrão: os valores podem diferir em uma parte por bilhão. Isso é o certo para grandezas de escala desconhecida — mas tem um ponto cego:
+
+```python
+print(math.isclose(1e-18, 0.0))
+print(math.isclose(1e-18, 0.0, abs_tol=1e-12))
+```
+
+```text
+False
+True
+```
+
+Tolerância relativa a zero é zero, então **nada** é "próximo de zero" por padrão. Sempre que um dos lados puder ser zero, passe `abs_tol` com a menor diferença que ainda importa no seu domínio.
+
+## `decimal`: aritmética como a de um contador
+
+O módulo `decimal` implementa a norma IEEE 854 / IBM para aritmética decimal. Ele guarda os números em **base 10**, com precisão configurável, e as contas saem como saem no papel:
+
+```python
+from decimal import Decimal
+
+print(Decimal("0.1") + Decimal("0.2") == Decimal("0.3"))
+print(Decimal("1.10") + Decimal("2.20"))
+```
+
+```text
+True
+0.3
+3.30
+```
+
+Repare no `3.30`, com o zero à direita preservado. `Decimal` guarda a **escala** — o número de casas decimais — como parte do valor, e isso é exatamente o que uma fatura precisa: R\$ 3,30 e R\$ 3,3 são o mesmo número e não são a mesma apresentação.
+
+A regra número um do módulo: **construa sempre a partir de string**, nunca de `float`.
+
+```python
+print(Decimal("0.1"))
+print(Decimal(0.1))
+```
+
+```text
+0.1
+0.1000000000000000055511151231257827021181583404541015625
+```
+
+`Decimal(0.1)` está correto — ele representa fielmente o `float` que recebeu, com todo o lixo binário. O problema é que o lixo já estava lá antes de o `Decimal` entrar em cena. Passar pelo `float` é o erro; `Decimal` só o torna visível.
+
+O contexto controla precisão e arredondamento:
+
+```python
+from decimal import getcontext, localcontext
+
+print(getcontext().prec, getcontext().rounding)
+print(Decimal(1) / Decimal(7))
+
+with localcontext() as ctx:
+    ctx.prec = 50
+    print(Decimal(1) / Decimal(7))
+```
+
+```text
+28 ROUND_HALF_EVEN
+0.1428571428571428571428571429
+0.14285714285714285714285714285714285714285714285714
+```
+
+Vinte e oito dígitos significativos por padrão, arredondamento para o par mais próximo — o mesmo do `round` embutido, pelo mesmo motivo estatístico do @sec-cap009. `localcontext()` altera só dentro do bloco `with` e restaura na saída, o que é a forma segura de mexer nisso.
+
+Para dinheiro, o método essencial é `quantize`, que fixa a escala e arredonda **de forma exata**:
+
+```python
+from decimal import ROUND_HALF_UP
+
+v = Decimal("2.675")
+print(v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+print(round(2.675, 2))
+```
+
+```text
+2.68
+2.67
+```
+
+Aqui está a diferença que fecha o assunto. `round(2.675, 2)` devolve `2.67` porque o `float` `2.675` é um tiquinho **menor** que 2,675 — o vizinho mais próximo com duas casas é mesmo 2,67. `Decimal("2.675")` é exatamente 2,675, e o arredondamento comercial manda subir. A legislação brasileira e a maioria dos contratos pedem `ROUND_HALF_UP`; a norma IEEE pede `ROUND_HALF_EVEN`. Escolha explicitamente, e escreva no código qual você escolheu.
+
+Duas armadilhas do `decimal` que pegam quem vem do `float`:
+
+```python
+Decimal("0.1") + 0.2
+```
+
+```text
+TypeError: unsupported operand type(s) for +: 'decimal.Decimal' and 'float'
+```
+
+Aritmética entre `Decimal` e `float` é **proibida**, de propósito, para você não misturar sem perceber. Comparação, porém, funciona:
+
+```python
+print(Decimal("0.1") > 0.1)
+```
+
+```text
+False
+```
+
+E o resultado é `False` porque o `float` `0.1` é ligeiramente maior que um décimo exato — a comparação é feita com precisão total, e o `Decimal` perde por 5,55 × 10⁻¹⁸.
+
+A segunda armadilha é a divisão inteira, que **não** segue a regra do @sec-cap009:
+
+```python
+print(Decimal("-7") // Decimal("2"), Decimal("-7") % Decimal("2"))
+print(-7 // 2, -7 % 2)
+```
+
+```text
+-3 -1
+-4 1
+```
+
+`Decimal` trunca em direção ao zero, como C; `int` arredonda para baixo. É o único ponto do Python em que os dois convivem, e a norma decimal é a razão — ela especifica truncagem. Se você escrever uma função que aceita os dois tipos, `//` vai devolver respostas diferentes conforme o que entrar.
+
+## `fractions`: exatidão sem arredondamento nenhum
+
+Onde `Decimal` é exato em base 10, `Fraction` é exato e ponto. Ele guarda numerador e denominador inteiros, já reduzidos:
+
+```python
+from fractions import Fraction
+
+f = Fraction(1, 3)
+print(f, f + Fraction(1, 6), f * 3, f * 3 == 1)
+print(Fraction(3, 6))
+```
+
+```text
+1/3 1/2 1 True
+1/2
+```
+
+`1/3 * 3 == 1` é verdadeiro — coisa que nem `float` nem `Decimal` conseguem, porque um terço não tem representação finita nem em base 2 nem em base 10. Toda aritmética racional é exata, sem contexto, sem precisão a configurar.
+
+O mesmo cuidado com a construção vale aqui:
+
+```python
+print(Fraction("0.1"))
+print(Fraction(0.1))
+print(Fraction(0.1).limit_denominator(1000))
+```
+
+```text
+1/10
+3602879701896397/36028797018963968
+1/10
+```
+
+A segunda linha é o `float` 0,1 mostrado como fração exata — o mesmo par de inteiros de `as_integer_ratio`. E `limit_denominator` é a ferramenta que recupera a fração "que a pessoa quis dizer" a partir de um `float`, útil para converter medidas e para achar aproximações racionais.
+
+O preço é o desempenho. Uma soma, 200 mil vezes, no mesmo equipamento:
+
+```text
+int            30 ns     1.3x
+float          23 ns     1.0x
+Decimal        68 ns     3.0x
+Fraction      503 ns    21.9x
+```
+
+`Decimal` custa cerca de três vezes um `float`; `Fraction` custa vinte e duas. Para uma fatura de trinta linhas, irrelevante. Para um laço de milhões de iterações, decisivo — e o número exato varia com a máquina e com o tamanho dos operandos, então meça o seu caso antes de decidir.
+
+## Centavos em `int`: a resposta que quase sempre serve
+
+Antes de alcançar o `decimal`, considere a alternativa mais simples: **guarde dinheiro em centavos, como inteiro**. Não há arredondamento, não há contexto, não há dependência, e a aritmética é a mais rápida da linguagem.
+
+```python
+CENTAVOS = [3990, 1990, 510]
+
+total = sum(CENTAVOS)
+print(total, f"R$ {total // 100},{total % 100:02d}")
+```
+
+```text
+6490 R$ 64,90
+```
+
+Exato, e é assim que a maioria dos sistemas financeiros trabalha por dentro. As duas fronteiras exigem cuidado: na entrada, converter para centavos **sem passar pelo `float`**; na saída, formatar.
+
+E é na conversão que mora o erro mais comum de todos:
+
+```python
+print(4.35 * 100)
+print(int(4.35 * 100), round(4.35 * 100))
+```
+
+```text
+434.99999999999994
+434 435
+```
+
+`int(4.35 * 100)` dá **434 centavos**. Um centavo a menos, silenciosamente, e `int()` trunca justamente na direção que esconde o problema. A forma correta nunca multiplica um `float` por 100:
+
+```python
+from decimal import Decimal
+
+print(int(Decimal("4.35") * 100))
+```
+
+```text
+435
+```
+
+Nem `Decimal` é obrigatório se o dado nasce como texto — `"4.35"` vira `435` com um `replace` do separador e um `int`, sem tocar em ponto flutuante em momento algum.
+
+@fig-escolha-numerica resume a decisão.
+
+::: {#fig-escolha-numerica}
+```{.tikz}
+%%| filename: escolha-numerica
+%%| alt: Arvore de decisao para escolher o tipo numerico: centavos inteiros ou Decimal para dinheiro, Fraction para racionais exatos, float para medidas fisicas
+\begin{tikzpicture}[
+  qs/.style={draw=manualgray, thick, rounded corners, fill=manualgray!6,
+             text width=3.5cm, align=center, minimum height=1.0cm,
+             font=\scriptsize},
+  rs/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=3.1cm, align=center, minimum height=1.15cm,
+             font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  eg/.style={font=\tiny, text=manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[qs] (q1) at (0, 3.3) {é \textbf{dinheiro} ou valor contábil?};
+  \node[qs] (q2) at (0, 0.9) {precisa de fração \textbf{exata} (1/3, 2/7)?};
+  \node[qs] (q3) at (0,-1.5) {é medida física ou\\cálculo científico?};
+
+  \node[rs] (r1) at (5.6, 3.3) {\texttt{int} em centavos\\ou \texttt{Decimal}};
+  \node[rs] (r2) at (5.6, 0.9) {\texttt{Fraction}};
+  \node[rs] (r3) at (5.6,-1.5) {\texttt{float}\\com \texttt{math.isclose}};
+  \node[rs] (r4) at (0,-3.7) {na dúvida: \texttt{Decimal}\\a partir de \texttt{str}};
+
+  \draw[fl] (q1) -- node[eg,above]{sim} (r1);
+  \draw[fl] (q2) -- node[eg,above]{sim} (r2);
+  \draw[fl] (q3) -- node[eg,above]{sim} (r3);
+  \draw[fl] (q1) -- node[eg,right]{não} (q2);
+  \draw[fl] (q2) -- node[eg,right]{não} (q3);
+  \draw[fl] (q3) -- node[eg,right]{não} (r4);
+
+  \node[eg, anchor=west, text width=3.4cm] at (7.4, 3.3)
+    {exato, escala preservada, arredondamento explícito};
+  \node[eg, anchor=west, text width=3.4cm] at (7.4, 0.9)
+    {exato sempre, mas cerca de 20x mais lento};
+  \node[eg, anchor=west, text width=3.4cm] at (7.4,-1.5)
+    {rápido; o erro do instrumento é maior que o do tipo};
+\end{tikzpicture}
+```
+Qual tipo numérico usar, e por quê.
+:::
+
+O último ramo merece defesa: para uma medida física, `float` é a escolha **certa**, não uma concessão. A potência óptica lida pelo equipamento tem incerteza na primeira casa decimal; discutir o erro na décima sexta é ruído. Exatidão só importa quando o número é uma contagem ou um contrato, não quando é uma medição.
+
+## 🐍 Jeito Pythônico
+
+**`Decimal` nasce de `str`, nunca de `float`.** Se o valor vem de JSON, de CSV ou de formulário, ele já é texto — construa direto e o `float` nunca entra na história. Se vier de um `float` alheio, use `Decimal(str(x))` e assuma conscientemente o arredondamento do `repr`.
+
+**Arredondamento é decisão de negócio, e vai explícito.** `quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)` diz o que faz. Confiar no padrão do contexto funciona até alguém mudar o contexto.
+
+**Prefira `sum()` a acumular em laço.** Desde o 3.12 ele compensa o erro de graça, e mesmo antes era mais rápido e mais legível:
+
+```python
+# antipadrão
+total = 0.0
+for v in valores:
+    total += v
+```
+
+```python
+# pythônico
+total = sum(valores)
+# quando a exatidão da soma for crítica:
+total = math.fsum(valores)
+```
+
+**Nunca `==` entre `float`.** E nunca `math.isclose(x, 0.0)` sem `abs_tol` — o padrão relativo nunca dá verdadeiro contra zero.
+
+**Não misture os tipos numa mesma cadeia de cálculo.** A conversão vai nas bordas: converte na entrada, calcula num tipo só, formata na saída. Um `Decimal` que encosta num `float` no meio do caminho perde tudo o que estava garantindo.
+
+```python
+# antipadrão: exatidão jogada fora no meio
+subtotal = Decimal("39.90") + Decimal("19.90")
+com_desconto = float(subtotal) * 0.9
+```
+
+```python
+# pythônico: fica em Decimal do começo ao fim
+subtotal = Decimal("39.90") + Decimal("19.90")
+com_desconto = (subtotal * Decimal("0.9")).quantize(Decimal("0.01"),
+                                                    rounding=ROUND_HALF_UP)
+```
+
+**Formate no fim, calcule antes.** `f"{total:.2f}"` é apresentação e mente sobre o valor guardado — foi o que escondeu o erro na fatura da abertura. Se o número precisa ser 64,90 de verdade, ele tem de ser 64,90 no tipo, não na string.
+
+Um antipadrão que aparece muito em código de importação de dados:
+
+```python
+centavos = int(float(linha["valor"]) * 100)     # perde um centavo em 4.35
+```
+
+```python
+centavos = int(Decimal(linha["valor"]) * 100)   # exato
+```
+
+Sobre versões:
+
+- **Python 3.1** — `repr()` de `float` passou a mostrar a menor cadeia que faz a ida e volta. Antes saía `0.10000000000000001`.
+- **Python 3.2** — comparação entre `Decimal` e `float` passou a ser exata (antes dava resultado arbitrário).
+- **Python 3.3** — o `decimal` ganhou implementação em C (`_decimal`), entre 30 e 100 vezes mais rápida que a versão anterior em Python puro.
+- **Python 3.5** — `math.isclose` (PEP 485).
+- **Python 3.12** — `sum()` com somatório compensado para `float`; `Fraction` ganhou suporte a formatação com `format()`.
+
+## 🧪 Laboratório
+
+Objetivo: enxergar o valor real de um `float`, medir o erro acumulado, reproduzir o centavo perdido e reescrever a fatura da abertura de três formas exatas.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab10 && cd ~/lab10
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza a fatura.** Crie `fatura.py` com o código da abertura e rode:
+
+```bash
+python fatura.py
+```
+
+```text
+64.89999999999999
+False
+```
+
+Depois imprima `f"{total:.2f}"` e observe: o relatório sai bonito e errado.
+
+**3. Veja o valor real.**
+
+```bash
+python -c "
+for x in (0.1, 0.5, 0.25, 39.90):
+    print(x, '->', f'{x:.25f}', x.hex())
+"
+```
+
+```text
+0.1 -> 0.1000000000000000055511151 0x1.999999999999ap-4
+0.5 -> 0.5000000000000000000000000 0x1.0000000000000p-1
+0.25 -> 0.2500000000000000000000000 0x1.0000000000000p-2
+39.9 -> 39.8999999999999985789145285 0x1.3f33333333333p+5
+```
+
+Meio e um quarto são exatos (denominador é potência de 2); um décimo e 39,90 não são. Explique a diferença antes de continuar.
+
+**4. Meça o erro acumulado.**
+
+```bash
+python -c "
+acc = 0.0
+for _ in range(1000):
+    acc += 0.1
+print(repr(acc), acc == 100.0, abs(acc - 100.0))
+"
+```
+
+```text
+99.9999999999986 False 1.4068746168049984e-12
+```
+
+**5. Veja a compensação de `sum`.**
+
+```bash
+python -c "
+import math
+print(repr(sum([0.1] * 1000)))
+print(repr(sum([1e16, 1.0, -1e16])))
+acc = 0.0
+for v in [1e16, 1.0, -1e16]:
+    acc += v
+print(repr(acc))
+print(repr(math.fsum([1e16, 1.0, -1e16])))
+"
+```
+
+```text
+100.0
+1.0
+0.0
+1.0
+```
+
+O `1.0` sumiu no laço e sobreviveu em `sum`. Se tiver um Python 3.11 à mão (`uv run --python 3.11`), rode a segunda linha lá e veja `0.0` — a compensação entrou no 3.12.
+
+**6. O ponto cego do `isclose`.**
+
+```bash
+python -c "
+import math
+print(math.isclose(0.1 + 0.2, 0.3))
+print(math.isclose(1e-18, 0.0))
+print(math.isclose(1e-18, 0.0, abs_tol=1e-12))
+"
+```
+
+```text
+True
+False
+True
+```
+
+**7. Perca um centavo.**
+
+```bash
+python -c "
+print(4.35 * 100)
+print(int(4.35 * 100), round(4.35 * 100))
+from decimal import Decimal
+print(int(Decimal('4.35') * 100))
+"
+```
+
+```text
+434.99999999999994
+434 435
+435
+```
+
+Multiplique mentalmente por trinta mil faturas e escreva quanto some.
+
+**8. `Decimal` a partir de `str` contra a partir de `float`.**
+
+```bash
+python -c "
+from decimal import Decimal
+print(Decimal('0.1'))
+print(Decimal(0.1))
+print(Decimal('0.1') == Decimal(0.1))
+print(Decimal('0.1') > 0.1)
+"
+```
+
+```text
+0.1
+0.1000000000000000055511151231257827021181583404541015625
+False
+False
+```
+
+A última linha é a mais sutil: o `float` `0.1` é maior que um décimo, então o `Decimal` exato perde a comparação.
+
+**9. Contexto e arredondamento.**
+
+```bash
+python -c "
+from decimal import Decimal, getcontext, localcontext, ROUND_HALF_UP, ROUND_HALF_EVEN
+print(getcontext().prec, getcontext().rounding)
+print(Decimal(1) / Decimal(7))
+with localcontext() as ctx:
+    ctx.prec = 50
+    print(Decimal(1) / Decimal(7))
+q = Decimal('0.01')
+for v in ('2.675', '2.665', '2.345', '-2.675'):
+    d = Decimal(v)
+    print(v, d.quantize(q, rounding=ROUND_HALF_UP), d.quantize(q, rounding=ROUND_HALF_EVEN))
+"
+```
+
+```text
+28 ROUND_HALF_EVEN
+0.1428571428571428571428571429
+0.14285714285714285714285714285714285714285714285714
+2.675 2.68 2.68
+2.665 2.67 2.66
+2.345 2.35 2.34
+-2.675 -2.68 -2.68
+```
+
+Compare as duas colunas em `2.665` e `2.345`: o arredondamento comercial sobe, o do banqueiro vai para o par. Confira qual regra o seu contrato exige.
+
+**10. A divisão inteira que muda de regra.**
+
+```bash
+python -c "
+from decimal import Decimal
+print(Decimal('-7') // Decimal('2'), Decimal('-7') % Decimal('2'))
+print(-7 // 2, -7 % 2)
+"
+```
+
+```text
+-3 -1
+-4 1
+```
+
+`Decimal` trunca, `int` arredonda para baixo. Isso é uma armadilha real numa função que aceita os dois tipos.
+
+**11. Exatidão total com `Fraction`.**
+
+```bash
+python -c "
+from fractions import Fraction
+print(Fraction(1, 3) * 3 == 1)
+print(sum(Fraction(1, 10) for _ in range(10)) == 1)
+print(Fraction(0.1))
+print(Fraction(0.1).limit_denominator(1000))
+print(float(Fraction(22, 7)))
+"
+```
+
+```text
+True
+True
+3602879701896397/36028797018963968
+1/10
+3.142857142857143
+```
+
+**12. Meça o custo.**
+
+```bash
+python -c "
+import timeit
+n = 200000
+f = timeit.timeit('a + b', setup='a, b = 1.1, 2.2', number=n)
+d = timeit.timeit('a + b', setup=\"from decimal import Decimal; a, b = Decimal('1.1'), Decimal('2.2')\", number=n)
+r = timeit.timeit('a + b', setup='from fractions import Fraction; a, b = Fraction(11,10), Fraction(22,10)', number=n)
+i = timeit.timeit('a + b', setup='a, b = 110, 220', number=n)
+for nome, t in (('int', i), ('float', f), ('Decimal', d), ('Fraction', r)):
+    print(f'{nome:<9} {t/n*1e9:7.0f} ns {t/f:5.1f}x')
+"
+```
+
+```text
+int            30 ns   1.3x
+float          23 ns   1.0x
+Decimal        68 ns   3.0x
+Fraction      503 ns  21.9x
+```
+
+Os seus números vão diferir; as **proporções** não devem diferir muito.
+
+**13. Reescreva a fatura, três vezes.** Crie `fatura3.py`:
+
+```python
+"""A mesma fatura, exata de tres formas."""
+
+from decimal import Decimal, ROUND_HALF_UP
+
+ITENS = [("Link 100M", "39.90"), ("IP fixo", "19.90"), ("Suporte", "5.10")]
+CENTAVO = Decimal("0.01")
+
+# a) Decimal a partir de string
+total_d = sum(Decimal(v) for _, v in ITENS)
+
+# b) centavos em int, sem tocar em float
+total_c = sum(int(Decimal(v) * 100) for _, v in ITENS)
+
+# c) float, comparado com tolerancia
+total_f = sum(float(v) for _, v in ITENS)
+
+print("Decimal ", total_d, total_d == Decimal("64.90"))
+print("centavos", total_c, total_c == 6490)
+print("float   ", repr(total_f), total_f == 64.90)
+
+desconto = (total_d * Decimal("0.9")).quantize(CENTAVO, rounding=ROUND_HALF_UP)
+print("com 10% ", desconto)
+```
+
+```bash
+python fatura3.py
+```
+
+```text
+Decimal  64.90 True
+centavos 6490 True
+float    64.89999999999999 False
+com 10%  58.41
+```
+
+As duas primeiras passam no teste que a original reprovava, e a terceira mostra por que ela reprovava. Note que `total_d` saiu `64.90`, com o zero à direita — a escala veio junto, sem formatação nenhuma.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- `float` guarda em base 2: só frações com denominador potência de 2 são exatas. `0.1` fica guardado como 0,1000000000000000055511151231257827021181583404541015625, e todo "erro de ponto flutuante" nasce daí.
+- Desde o 3.1, `repr()` mostra a menor cadeia que faz a ida e volta — o que esconde o problema até ele acumular. `f"{x:.55f}"`, `x.hex()` e `x.as_integer_ratio()` mostram o valor real.
+- Desde o **3.12**, `sum()` compensa o erro de arredondamento em `float`; acumular num laço não compensa. `math.fsum` é exato quando isso não bastar.
+- Compare `float` com `math.isclose`, e passe `abs_tol` sempre que um dos lados puder ser zero.
+- `Decimal` é exato em base 10, preserva a escala e tem arredondamento explícito via `quantize`. Construa **sempre** de `str`; aritmética com `float` é `TypeError`, e `//` trunca em direção ao zero, ao contrário do `int`.
+- `Fraction` é exato para qualquer racional (`1/3 * 3 == 1`), ao custo de ser cerca de vinte vezes mais lento que `float`.
+- Dinheiro: centavos em `int` ou `Decimal`, decidido nas bordas do sistema. `int(4.35 * 100)` devolve 434, e esse é o bug de um centavo que aparece só na conciliação.
