@@ -1,3 +1,779 @@
 # Objetos, variáveis e o modelo de referências {#sec-cap008}
 
-*(em elaboracao)*
+O script de provisionamento roda há meses. Ele pega uma configuração padrão, troca a descrição pelo nome do cliente e devolve a configuração pronta. Hoje o segundo cliente da fila nasceu com uma porta que ninguém pediu.
+
+```python
+PADRAO = {"vlan": 100, "portas": [1, 2], "descricao": "cliente novo"}
+
+
+def provisionar(nome):
+    config = PADRAO.copy()
+    config["descricao"] = nome
+    return config
+
+
+sitio = provisionar("sitio-mangueira")
+sitio["portas"].append(3)          # este cliente pediu a porta 3
+
+fazenda = provisionar("fazenda-boa-vista")
+print(fazenda)
+```
+
+```text
+{'vlan': 100, 'portas': [1, 2, 3], 'descricao': 'fazenda-boa-vista'}
+```
+
+A `fazenda-boa-vista` recebeu a porta 3 que era do `sitio-mangueira`. E tem mais: o `PADRAO`, que ninguém tocou, também foi alterado. Há um `.copy()` bem ali na segunda linha da função, e ele não impediu nada.
+
+Nada disso é bug do Python. É o modelo de objetos da linguagem funcionando exatamente como documentado — e ele é diferente do que a intuição de "variável é uma caixa que guarda um valor" sugere. Este capítulo troca essa intuição pela correta. Sem ela, o Volume 4 inteiro (listas, dicionários, conjuntos) vira uma sequência de surpresas.
+
+## Tudo é objeto, e todo objeto tem três coisas
+
+Em Python, **todo** valor é um objeto: o número 3, a string `"kali"`, a lista `[1, 2]`, a função `len`, o módulo `math`, a própria classe `int`. Não existe a divisão entre "tipos primitivos" e "objetos" que C++, Java ou C# fazem.
+
+```python
+print(isinstance(1, object), isinstance(len, object), isinstance(int, object))
+print(type(int))
+```
+
+```text
+True True True
+<class 'type'>
+```
+
+Até `int` é um objeto — uma instância de `type`. Isso não é curiosidade: é o que permite guardar uma classe numa variável, passar uma função como argumento e escrever decoradores, temas dos volumes 3 e 8.
+
+Todo objeto carrega três atributos, e a distinção entre eles é o assunto deste capítulo:
+
+- **Identidade** — *qual* objeto é. Fixa da criação à destruição, obtida por `id()`.
+- **Tipo** — o que ele sabe fazer. Também fixo, obtido por `type()`.
+- **Valor** — o conteúdo. Este pode ou não mudar, e é o que separa mutável de imutável.
+
+A `id()` devolve um inteiro que identifica o objeto de forma única enquanto ele existe. No CPython, esse número é o endereço de memória, mas isso é detalhe de implementação: o contrato é apenas "único e constante durante a vida do objeto". O valor muda a cada execução do programa, então **nunca** o use como chave, nem o cole num teste.
+
+## O nome é uma etiqueta, não uma caixa
+
+A afirmação central: em Python, atribuição **não copia valor**. Ela liga um nome a um objeto que já existe.
+
+Comparar com C ajuda. Em C, `int a = 5;` reserva um espaço na memória chamado `a` e escreve 5 lá dentro; `int b = a;` reserva outro espaço e copia o 5. São dois valores independentes desde o primeiro instante.
+
+Em Python, `a = 5` cria (ou reaproveita) um objeto inteiro com valor 5 e pendura nele a etiqueta `a`. `b = a` pendura no **mesmo objeto** uma segunda etiqueta. Não há cópia, não há segundo espaço.
+
+@fig-modelo-referencias mostra os dois estados que confundem: duas etiquetas no mesmo objeto e o que acontece quando uma delas é religada.
+
+::: {#fig-modelo-referencias}
+```{.tikz}
+%%| filename: modelo-referencias
+%%| alt: Dois nomes apontando para a mesma lista; depois de uma nova atribuicao, um dos nomes passa a apontar para outra lista e o primeiro objeto permanece intacto
+\begin{tikzpicture}[
+  nm/.style={draw=manualgray, thick, rounded corners, fill=white,
+             minimum width=1.05cm, minimum height=0.52cm,
+             font=\ttfamily\small},
+  obj/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!8,
+              minimum width=2.9cm, minimum height=1.05cm, align=center,
+              font=\ttfamily\scriptsize},
+  obj2/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!10,
+               minimum width=2.9cm, minimum height=1.05cm, align=center,
+               font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, align=center, text=manualgray},
+  ti/.style={font=\small\bfseries, align=center},
+  reg/.style={draw=manualgray, dashed, rounded corners, inner sep=10pt}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[ti] at (-1.7, 2.45) {depois de \texttt{b = a}};
+  \node[nm] (na) at (-3.3, 1.35) {a};
+  \node[nm] (nb) at (-3.3, 0.25) {b};
+  \node[obj] (o1) at (-0.5, 0.80) {\lbrack 10, 20\rbrack};
+  \draw[fl] (na.east) -- (o1.west);
+  \draw[fl] (nb.east) -- (o1.west);
+  \node[lb, text width=3.2cm] at (-1.7,-0.55)
+    {um objeto, dois nomes\\\texttt{a is b} é \texttt{True}};
+
+  \node[ti] at (6.2, 2.45) {depois de \texttt{b = b + [40]}};
+  \node[nm] (ma) at (4.0, 1.55) {a};
+  \node[nm] (mb) at (4.0, 0.05) {b};
+  \node[obj]  (p1) at (7.0, 1.55) {\lbrack 10, 20, 30\rbrack};
+  \node[obj2] (p2) at (7.0, 0.05) {\lbrack 10, 20, 30, 40\rbrack};
+  \draw[fl] (ma.east) -- (p1.west);
+  \draw[fl, manualgreen] (mb.east) -- (p2.west);
+  \node[lb, text width=4.4cm] at (6.2,-1.05)
+    {a atribuição religou só a etiqueta \texttt{b};\\o objeto da esquerda não mudou};
+\end{tikzpicture}
+```
+Atribuição liga nomes a objetos. Religar um nome não altera o objeto antigo.
+:::
+
+O REPL confirma cada passo:
+
+```text
+>>> a = [10, 20]
+>>> b = a
+>>> id(a) == id(b)
+True
+>>> b.append(30)
+>>> a
+[10, 20, 30]
+>>> b = b + [40]
+>>> id(a) == id(b)
+False
+>>> a
+[10, 20, 30]
+>>> b
+[10, 20, 30, 40]
+```
+
+Duas operações, dois efeitos opostos. `b.append(30)` é uma **mutação**: mexe no objeto, e quem estiver olhando para ele — inclusive `a` — vê a mudança. `b = b + [40]` é uma **religação**: cria um objeto novo e aponta `b` para ele, deixando o antigo intacto.
+
+Essa distinção entre mutar e religar é a chave do capítulo inteiro. Guarde-a: `.append()`, `.sort()`, `d[k] = v`, `lst[0] = x` mutam; `nome = ...` religa.
+
+## Contagem de referências
+
+Se ninguém apontar mais para um objeto, ele não serve para nada. O CPython aproveita isso: cada objeto guarda quantas referências apontam para ele, e quando esse número chega a zero a memória é liberada na hora.
+
+```python
+import sys
+
+lista = ["a"]
+print(sys.getrefcount(lista))
+outra = lista
+print(sys.getrefcount(lista))
+del outra
+print(sys.getrefcount(lista))
+```
+
+```text
+2
+3
+2
+```
+
+Por que 2 e não 1? Porque passar `lista` como argumento para `getrefcount` cria mais uma referência temporária — a do próprio parâmetro. `sys.getrefcount` sempre devolve um a mais do que você espera, e a documentação diz isso explicitamente. O que interessa é a **variação**: subiu com `outra = lista`, voltou com `del outra`.
+
+E note o que `del` faz: ele apaga o **nome**, não o objeto. O objeto morre como consequência, se aquele era o último nome.
+
+A contagem de referências tem um ponto cego: objetos que apontam uns para os outros num ciclo nunca chegam a zero, mesmo sem ninguém de fora olhando. Para esse caso existe o coletor de lixo geracional, no módulo `gc`:
+
+```python
+import gc
+
+
+class No:
+    def __init__(self, nome):
+        self.nome = nome
+        self.par = None
+
+    def __del__(self):
+        print("coletado:", self.nome)
+
+
+x = No("x")
+y = No("y")
+x.par = y          # x aponta para y
+y.par = x          # e y aponta de volta para x
+del x, y
+print("nomes apagados, objetos ainda vivos")
+print("gc.collect() liberou:", gc.collect())
+```
+
+```text
+nomes apagados, objetos ainda vivos
+coletado: x
+coletado: y
+gc.collect() liberou: 9
+```
+
+O `print` saiu **antes** dos "coletado" — prova de que apagar os dois nomes não bastou. Cada objeto continuava com uma referência: a do outro. Só o `gc.collect()` detectou o ciclo e desmontou. (O número 9 conta outros objetos internos que também estavam no lixo e varia entre execuções; o que importa é ser maior que zero.)
+
+Sem ciclo, o comportamento é o esperado:
+
+```python
+z = No("z")
+del z
+print("depois do del")
+```
+
+```text
+coletado: z
+depois do del
+```
+
+Contagem de referências para o caso comum, coletor cíclico para o resto. O Volume 15 volta a esse assunto com `weakref` e ajuste de gerações.
+
+## Mutável e imutável
+
+O terceiro atributo — o valor — pode ou não mudar depois da criação. Essa é a divisão mais importante entre os tipos nativos:
+
+| Imutáveis | Mutáveis |
+|---|---|
+| `int`, `float`, `complex`, `bool` | `list` |
+| `str`, `bytes` | `dict` |
+| `tuple`, `frozenset` | `set`, `bytearray` |
+| `range`, `None` | instâncias de classes suas (por padrão) |
+
+Imutável significa que **não existe operação que altere o objeto**. Toda operação que parece alterar na verdade devolve um objeto novo:
+
+```python
+nome = "kali"
+antes = id(nome)
+nome += "-linux"
+print(antes == id(nome), nome)
+```
+
+```text
+False kali-linux
+```
+
+O `+=` numa string não muda a string: cria outra e religa o nome. Numa lista, o mesmo `+=` muta no lugar — é `list.__iadd__`, equivalente a `extend`. O mesmo operador, dois comportamentos, decididos pelo tipo do objeto da esquerda.
+
+Imutabilidade é rasa. Uma tupla garante que **suas próprias posições** não mudam; nada garante sobre os objetos que estão nelas:
+
+```python
+config = (["a"], 1)
+config[0].append("b")
+print(config)
+config[1] = 2
+```
+
+```text
+(['a', 'b'], 1)
+TypeError: 'tuple' object does not support item assignment
+```
+
+A tupla continua apontando para a mesma lista — só que a lista mudou. É por isso que uma tupla com lista dentro não pode ser chave de dicionário:
+
+```python
+print(hash((1, 2)))
+hash([1, 2])
+```
+
+```text
+-3550055125485641917
+TypeError: unhashable type: 'list'
+```
+
+A regra é direta: hashável exige que o valor não mude, porque o dicionário calcula a posição a partir dele. Muda o valor, o objeto some da estrutura. O Volume 4 detalha.
+
+## `is` e `==` não são a mesma pergunta
+
+Com o modelo na cabeça, os dois operadores ficam óbvios:
+
+- `==` pergunta **valem o mesmo?** — compara valor, e o tipo decide como.
+- `is` pergunta **são o mesmo objeto?** — compara identidade, e é o mesmo que `id(a) == id(b)`.
+
+```python
+a = [1, 2]
+b = [1, 2]
+print(a == b, a is b)
+print(1 == 1.0)
+print(True == 1, False == 0)
+```
+
+```text
+True False
+True
+True True
+```
+
+Duas listas com o mesmo conteúdo são iguais e não são a mesma. `1 == 1.0` é verdadeiro apesar dos tipos diferentes, porque `int` e `float` sabem se comparar. E `True == 1` é verdadeiro porque `bool` **é** subclasse de `int` — assunto do @sec-cap011.
+
+Agora a parte que engana. Digite isto no REPL:
+
+```text
+>>> r = 257
+>>> s = 257
+>>> r is s
+False
+>>> r == s
+True
+>>> p = 256
+>>> q = 256
+>>> p is q
+True
+```
+
+O CPython mantém um cache de inteiros pequenos, de −5 a 256, criados uma vez na inicialização. Todo `256` do seu programa é o mesmo objeto; cada `257` tende a ser um objeto novo. Comportamento idêntico com strings: nomes curtos parecidos com identificadores são *internados* automaticamente e compartilhados.
+
+Só que o mesmo teste **dentro de um script** responde outra coisa:
+
+```python
+def f():
+    a = 257
+    b = 257
+    return a is b
+
+
+print(f())
+print(f.__code__.co_consts)
+```
+
+```text
+True
+(None, 257)
+```
+
+`True`, e não `False`. O compilador guarda as constantes de cada bloco de código numa tabela — `co_consts` — e o `257` aparece ali **uma vez só**, reaproveitado nas duas atribuições. No REPL cada linha é uma unidade de compilação separada, então não há tabela comum e os objetos saem diferentes.
+
+Isso é mais do que trivialidade. Significa que **o resultado de `is` entre valores iguais depende de otimização do interpretador**, e otimização não é contrato. Construa os valores em tempo de execução e a mágica some:
+
+```python
+r = 257
+s = int("257")
+print(r == s, r is s)
+
+w = "manual de python"
+z = " ".join(["manual", "de", "python"])
+print(z == w, z is w)
+```
+
+```text
+True False
+True False
+```
+
+Daí a regra, sem exceção prática: **`is` só para singletons**. `None`, `True`, `False`, e sentinelas que você mesmo criou. Para qualquer outra coisa, `==`.
+
+O Python leva isso tão a sério que avisa quando você erra:
+
+```text
+SyntaxWarning: "is" with 'int' literal. Did you mean "=="?
+```
+
+Esse aviso aparece na compilação, antes de o programa rodar. Ele não impede nada — e o código que ele denuncia costuma funcionar em teste e falhar em produção, quando o número passa de 256.
+
+## Cópia rasa e cópia profunda
+
+Voltemos ao bug da abertura. `PADRAO.copy()` fez uma cópia **rasa**: criou um dicionário novo com as mesmas três chaves apontando para os mesmos três objetos. A string e o inteiro não importam, porque são imutáveis. A lista importa muito:
+
+```python
+import copy
+
+original = {"cliente": "sitio", "portas": [1, 2]}
+raso = copy.copy(original)
+raso["cliente"] = "fazenda"
+raso["portas"].append(3)
+print(original)
+print(raso)
+```
+
+```text
+{'cliente': 'sitio', 'portas': [1, 2, 3]}
+{'cliente': 'fazenda', 'portas': [1, 2, 3]}
+```
+
+Trocar `raso["cliente"]` foi religação numa chave do dicionário novo — o original não sentiu. Já `raso["portas"].append(3)` foi mutação no objeto compartilhado, e os dois viram.
+
+`copy.deepcopy` percorre a estrutura inteira e duplica tudo que encontra:
+
+```python
+original = {"cliente": "sitio", "portas": [1, 2]}
+fundo = copy.deepcopy(original)
+fundo["portas"].append(3)
+print(original)
+print(fundo)
+```
+
+```text
+{'cliente': 'sitio', 'portas': [1, 2]}
+{'cliente': 'sitio', 'portas': [1, 2, 3]}
+```
+
+@fig-copia-rasa-profunda põe os dois lado a lado.
+
+::: {#fig-copia-rasa-profunda}
+```{.tikz}
+%%| filename: copia-rasa-profunda
+%%| alt: Copia rasa cria um dicionario novo que compartilha a lista interna com o original; copia profunda duplica tambem a lista interna
+\begin{tikzpicture}[
+  dic/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!8,
+              minimum width=2.5cm, minimum height=0.95cm, align=center,
+              font=\ttfamily\scriptsize},
+  dic2/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!10,
+               minimum width=2.5cm, minimum height=0.95cm, align=center,
+               font=\ttfamily\scriptsize},
+  lst/.style={draw=manualred, thick, rounded corners, fill=manualred!10,
+              minimum width=1.9cm, minimum height=0.62cm, align=center,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, align=center, text=manualgray},
+  ti/.style={font=\small\bfseries, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[ti] at (0, 2.6) {\texttt{copy.copy} --- rasa};
+  \node[dic]  (d1) at (-1.5, 1.5) {original};
+  \node[dic2] (d2) at ( 1.5, 1.5) {cópia};
+  \node[lst]  (l1) at ( 0.0, 0.0) {\lbrack 1, 2\rbrack};
+  \draw[fl] (d1.south) -- (l1.north west);
+  \draw[fl] (d2.south) -- (l1.north east);
+  \node[lb, text width=5.0cm] at (0,-0.95)
+    {uma lista só: mutar por um lado\\aparece do outro};
+
+  \node[ti] at (7.5, 2.6) {\texttt{copy.deepcopy} --- profunda};
+  \node[dic]  (e1) at ( 6.0, 1.5) {original};
+  \node[dic2] (e2) at ( 9.0, 1.5) {cópia};
+  \node[lst]  (m1) at ( 6.0, 0.0) {\lbrack 1, 2\rbrack};
+  \node[lst]  (m2) at ( 9.0, 0.0) {\lbrack 1, 2\rbrack};
+  \draw[fl] (e1.south) -- (m1.north);
+  \draw[fl] (e2.south) -- (m2.north);
+  \node[lb, text width=5.0cm] at (7.5,-0.95)
+    {duas listas independentes:\\nenhuma mutação atravessa};
+\end{tikzpicture}
+```
+A cópia rasa duplica o recipiente; a profunda duplica também o conteúdo.
+:::
+
+Para listas há três formas equivalentes de cópia rasa, e todas produzem objeto novo:
+
+```python
+a = [1, 2, 3]
+b = a[:]
+c = list(a)
+```
+
+O truque de multiplicação é a versão mais cruel dessa armadilha:
+
+```python
+grade = [[0] * 3] * 2
+grade[0][0] = 9
+print(grade)
+
+grade2 = [[0] * 3 for _ in range(2)]
+grade2[0][0] = 9
+print(grade2)
+```
+
+```text
+[[9, 0, 0], [9, 0, 0]]
+[[9, 0, 0], [0, 0, 0]]
+```
+
+`[x] * 2` repete a **referência** duas vezes, não o objeto. Para matriz, sempre compreensão de lista — tema do @sec-cap026.
+
+## Argumentos de função
+
+A pergunta "Python passa por valor ou por referência?" não tem resposta boa, porque a linguagem não faz nem uma coisa nem outra no sentido clássico. O que ela faz é **ligar o nome do parâmetro ao mesmo objeto do argumento**. Sabendo isso, o comportamento é previsível:
+
+```python
+def acrescenta(destino, valor):
+    destino.append(valor)          # muta o objeto
+
+
+def substitui(destino, valor):
+    destino = destino + [valor]    # religa o nome local
+    return destino
+
+
+alvo = [1]
+acrescenta(alvo, 2)
+print(alvo)
+retorno = substitui(alvo, 3)
+print(alvo, retorno)
+```
+
+```text
+[1, 2]
+[1, 2] [1, 2, 3]
+```
+
+`acrescenta` mudou o objeto de quem chamou. `substitui` não: a atribuição dentro da função religou apenas o nome local `destino`, e o objeto de fora ficou como estava. Nenhuma regra especial sobre funções — é a mesma diferença entre mutar e religar, dentro de outro escopo.
+
+E daí vem a armadilha mais famosa da linguagem:
+
+```python
+def registrar(evento, log=[]):
+    log.append(evento)
+    return log
+
+
+print(registrar("queda"))
+print(registrar("religou"))
+print(registrar.__defaults__)
+```
+
+```text
+['queda']
+['queda', 'religou']
+(['queda', 'religou'],)
+```
+
+O valor padrão é avaliado **uma vez**, quando o `def` executa, e fica guardado em `registrar.__defaults__` pelo resto da vida do programa. Duas chamadas independentes compartilham a mesma lista. A correção é o padrão de sentinela:
+
+```python
+def registrar_ok(evento, log=None):
+    if log is None:
+        log = []
+    log.append(evento)
+    return log
+
+
+print(registrar_ok("queda"))
+print(registrar_ok("religou"))
+```
+
+```text
+['queda']
+['religou']
+```
+
+Repare no `is None` — o único `is` que deve aparecer no código do dia a dia.
+
+## 🐍 Jeito Pythônico
+
+**`is` para singletons, `==` para valor.** `if x is None:` é a forma canônica, recomendada pela PEP 8, e não é preferência estética: `==` chama `__eq__`, que uma classe pode redefinir para dizer que é igual a `None` — enquanto `is` compara identidade e não pode mentir. `if not x:` **não** é substituto, porque `0`, `""`, `[]` e `False` também são falsos (@sec-cap011).
+
+**Não copie o que não muda.** Copiar `str`, `int` ou `tuple` (de imutáveis) é gasto sem função — o objeto não pode mudar, compartilhá-lo é seguro. `copy.copy` de uma tupla imutável devolve a própria tupla.
+
+**Prefira o valor novo à mutação, quando for barato.** Código que não muta o argumento de quem chamou é mais fácil de testar e não produz o bug da abertura:
+
+```python
+# antipadrão: efeito colateral escondido no argumento
+def normalizar(config):
+    config["descricao"] = config["descricao"].strip().lower()
+```
+
+```python
+# pythônico: devolve novo, não mexe no de quem chamou
+def normalizar(config):
+    return config | {"descricao": config["descricao"].strip().lower()}
+```
+
+O operador `|` entre dicionários existe desde o **Python 3.9** (PEP 584) e produz um dicionário novo. Quando a mutação for mesmo o objetivo, deixe isso claro no nome (`atualizar_config`) e não devolva nada — é o contrato de `list.sort()`, que muta e devolve `None`, contra `sorted()`, que devolve lista nova. Essa simetria se repete por toda a biblioteca padrão e é um bom guia para desenhar as suas funções.
+
+**Use tupla quando a coleção não deve mudar.** É documentação executável: quem lê sabe que o dado é fixo, e uma mutação acidental vira `TypeError` em vez de bug silencioso.
+
+**`deepcopy` é o último recurso.** Ele é lento, percorre grafos inteiros, precisa lidar com ciclos e trava em objetos não copiáveis (soquete, arquivo aberto). Muitas vezes a resposta melhor é construir o objeto do zero — trocar a constante `PADRAO` por uma função `padrao()` que devolve um dicionário novo a cada chamada, ou usar `dataclasses.field(default_factory=list)`, do @sec-cap046, que é o mesmo padrão de sentinela com outro nome.
+
+Três antipadrões, para fechar:
+
+```python
+if type(x) is list:            # frágil: recusa subclasses de list
+if x is 257:                   # SyntaxWarning; funciona por acidente
+def f(itens=[]):               # padrão mutável compartilhado entre chamadas
+```
+
+O primeiro se escreve `isinstance(x, list)`; o segundo, `x == 257`; o terceiro, `itens=None` com sentinela.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o bug da abertura, provar cada afirmação do capítulo com `id`, `is` e `sys.getrefcount`, e consertar o script de provisionamento.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab08 && cd ~/lab08
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza o bug.** Crie `provisionar.py` com o código da abertura e rode. Confirme que os dois clientes e o `PADRAO` compartilham a mesma lista:
+
+```bash
+python -c "
+from provisionar import PADRAO, provisionar
+a = provisionar('sitio'); a['portas'].append(3)
+b = provisionar('fazenda')
+print(b)
+print(a['portas'] is b['portas'] is PADRAO['portas'])
+"
+```
+
+```text
+{'vlan': 100, 'portas': [1, 2, 3], 'descricao': 'fazenda'}
+True
+```
+
+O `True` é o diagnóstico: uma lista, três donos.
+
+**3. Etiquetas, não caixas.** No REPL, refaça a sequência da @fig-modelo-referencias e confirme cada `id`. Depois responda sem rodar, e só então confirme: depois de `x = [1]; y = x; y = [2]`, quanto vale `x`?
+
+**4. Mutar contra religar.** Rode:
+
+```bash
+python -c "
+n = 'kali'; antes = id(n); n += '-linux'; print(antes == id(n))
+l = [1]; antes = id(l); l += [2]; print(antes == id(l))
+"
+```
+
+```text
+False
+True
+```
+
+O mesmo `+=`: religou a string, mutou a lista. Explique a diferença em uma frase antes de seguir.
+
+**5. Conte referências.**
+
+```bash
+python -c "
+import sys
+lista = ['a']
+print(sys.getrefcount(lista))
+outra = lista
+print(sys.getrefcount(lista))
+del outra
+print(sys.getrefcount(lista))
+"
+```
+
+```text
+2
+3
+2
+```
+
+Justifique o 2 inicial (a referência do parâmetro de `getrefcount`).
+
+**6. Veja um ciclo sobreviver ao `del`.** Crie `ciclo.py` com a classe `No` do capítulo e rode. Confirme que os `coletado:` saem **depois** do `print`, e só após o `gc.collect()`.
+
+**7. Imutabilidade é rasa.**
+
+```bash
+python -c "
+t = (['a'], 1)
+t[0].append('b')
+print(t)
+t[1] = 2
+"
+```
+
+```text
+(['a', 'b'], 1)
+Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+    t[1] = 2
+    ~^^^
+TypeError: 'tuple' object does not support item assignment
+```
+
+A lista dentro da tupla aceitou o `append`; a posição da tupla recusou a atribuição. Duas garantias diferentes, no mesmo objeto.
+
+**8. Provoque a divergência do `is`.** Primeiro no REPL, uma linha por vez:
+
+```text
+>>> r = 257
+>>> s = 257
+>>> r is s
+False
+```
+
+Agora o mesmo em arquivo:
+
+```bash
+python -c "r = 257; s = 257; print(r is s)"
+```
+
+```text
+True
+```
+
+Mesmo código, respostas opostas. A causa é a tabela de constantes do bloco compilado:
+
+```bash
+python -c "
+def f():
+    a = 257
+    b = 257
+    return a is b
+print(f.__code__.co_consts)
+"
+```
+
+```text
+(None, 257)
+```
+
+Um `257` só na tabela, usado nas duas atribuições. É por isso que `is` vale apenas para singletons.
+
+**9. Ouça o aviso.**
+
+```bash
+python -c "print(1 is 1.0)"
+```
+
+```text
+<string>:1: SyntaxWarning: "is" with 'int' literal. Did you mean "=="?
+False
+```
+
+**10. Compare as cópias.** Crie `copias.py` com os blocos de `copy.copy` e `copy.deepcopy` do capítulo, rode e confirme as quatro linhas de saída. Depois teste a multiplicação:
+
+```bash
+python -c "
+g = [[0]*3]*2; g[0][0] = 9; print(g)
+h = [[0]*3 for _ in range(2)]; h[0][0] = 9; print(h)
+"
+```
+
+```text
+[[9, 0, 0], [9, 0, 0]]
+[[9, 0, 0], [0, 0, 0]]
+```
+
+**11. Argumentos.** Crie `args.py` com `acrescenta` e `substitui`, rode e explique por que só a primeira alterou `alvo`.
+
+**12. Padrão mutável.**
+
+```bash
+python -c "
+def registrar(evento, log=[]):
+    log.append(evento); return log
+print(registrar('queda')); print(registrar('religou'))
+print(registrar.__defaults__)
+"
+```
+
+```text
+['queda']
+['queda', 'religou']
+(['queda', 'religou'],)
+```
+
+O `__defaults__` mostra a lista guardada na função. Reescreva com `log=None` e confirme que as duas chamadas voltam a ser independentes.
+
+**13. Conserte o provisionamento.** Duas soluções, e a segunda é melhor:
+
+```python
+import copy
+
+
+def provisionar_a(nome):
+    config = copy.deepcopy(PADRAO)
+    config["descricao"] = nome
+    return config
+
+
+def padrao():
+    return {"vlan": 100, "portas": [1, 2], "descricao": "cliente novo"}
+
+
+def provisionar_b(nome):
+    return padrao() | {"descricao": nome}
+```
+
+Rode o teste do passo 2 contra as duas:
+
+```text
+{'vlan': 100, 'portas': [1, 2], 'descricao': 'fazenda'}
+False
+```
+
+O `False` é o conserto: cada cliente com a sua lista. A versão `b` dispensa `deepcopy`, não depende de uma constante global mutável e é a que você quer manter.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- Todo valor em Python é objeto, e todo objeto tem identidade (`id`), tipo (`type`) e valor. Identidade e tipo são fixos; valor muda só nos mutáveis.
+- Atribuição não copia: liga um nome a um objeto existente. `b = a` cria uma segunda etiqueta no mesmo objeto.
+- Mutar (`append`, `d[k] = v`) altera o objeto e é visto por todos os nomes que apontam para ele; religar (`nome = ...`) troca só a etiqueta e deixa o objeto antigo intacto.
+- O CPython libera memória por contagem de referências; ciclos exigem o coletor do módulo `gc`. `del` apaga o nome, não o objeto.
+- `==` compara valor, `is` compara identidade. Use `is` apenas com `None`, `True`, `False` e sentinelas — o resultado de `is` entre iguais depende de cache de inteiros e da tabela de constantes do bloco compilado, e muda entre REPL e script.
+- Cópia rasa (`copy.copy`, `d.copy()`, `lst[:]`) duplica o recipiente e compartilha o conteúdo; `copy.deepcopy` duplica tudo, com custo. `[[0]*3]*2` repete referência, não objeto.
+- Argumentos são ligados ao mesmo objeto do chamador: a função pode mutá-lo, mas religar o parâmetro não afeta quem chamou. Valor padrão é avaliado uma vez no `def` — para mutáveis, use `None` como sentinela.
