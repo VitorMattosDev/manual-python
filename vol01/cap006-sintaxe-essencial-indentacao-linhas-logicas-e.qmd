@@ -1,3 +1,642 @@
 # Sintaxe essencial: indentação, linhas lógicas e comentários {#sec-cap006}
 
-*(em elaboracao)*
+Você copiou um trecho de um site, colou no seu arquivo e o programa parou de rodar. A mensagem fala de indentação numa linha que parece idêntica às outras. Você apaga os espaços e digita de novo, um por um, e aí funciona — sem que nada tenha mudado na tela.
+
+Mudou. O que estava lá era um caractere de tabulação e o que você digitou foram espaços; os dois desenham a mesma coisa e são bytes diferentes. Em quase toda linguagem isso seria irrelevante, porque o espaço em branco não significa nada. Em Python, o espaço em branco **é** a estrutura do programa, e este capítulo explica exatamente até onde essa afirmação vai.
+
+## O bloco é a indentação
+
+Em C, Java, JavaScript e Rust, um bloco é o que está entre chaves; a indentação é enfeite para humanos. Em Python não existem chaves — e o `from __future__ import braces` do @sec-cap001 responde `not a chance` a quem pede. O bloco é definido pela quantidade de espaço à esquerda.
+
+Isso não é convenção: é gramática, resolvida na análise léxica do @sec-cap002. O módulo `tokenize` mostra o mecanismo. Para este arquivo de três linhas:
+
+```python
+if x:
+    y = 1
+z = 2
+```
+
+Os tokens que o Python produz são:
+
+```python
+import tokenize
+
+with open("t1.py", "rb") as f:
+    for tok in tokenize.tokenize(f.readline):
+        print(f"{tokenize.tok_name[tok.type]:<12} {tok.string!r}")
+```
+
+```text
+ENCODING     'utf-8'
+NAME         'if'
+NAME         'x'
+OP           ':'
+NEWLINE      '\n'
+INDENT       '    '
+NAME         'y'
+OP           '='
+NUMBER       '1'
+NEWLINE      '\n'
+DEDENT       ''
+NAME         'z'
+OP           '='
+NUMBER       '2'
+NEWLINE      '\n'
+ENDMARKER    ''
+```
+
+Ali estão os tokens `INDENT` e `DEDENT`. Eles são o equivalente exato da chave que abre e da chave que fecha em outras linguagens — só que o Python os gera a partir do espaço em branco em vez de exigir que você os digite. O `DEDENT` sai com string vazia porque não corresponde a nenhum caractere: é uma marca posicional.
+
+@fig-indent-dedent põe as duas notações lado a lado.
+
+::: {#fig-indent-dedent}
+```{.tikz}
+%%| filename: indent-dedent
+%%| alt: Comparacao entre um bloco delimitado por chaves e o mesmo bloco em Python delimitado por indentacao, com os tokens INDENT e DEDENT gerados pelo analisador
+\begin{tikzpicture}[
+  lin/.style={font=\ttfamily\scriptsize, anchor=west},
+  tk/.style={font=\ttfamily\scriptsize, anchor=west, text=manualred},
+  cx/.style={draw=manualgray, thick, rounded corners, fill=manualgray!5},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  ti/.style={font=\scriptsize\bfseries, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[ti] at (1.7,1.5) {outras linguagens};
+  \node[cx, minimum width=5.0cm, minimum height=2.5cm] at (1.7,-0.05) {};
+  \node[lin] at (-0.5, 0.85) {if (x) \{};
+  \node[lin] at (-0.5, 0.35) {\ \ \ \ y = 1;};
+  \node[lin] at (-0.5,-0.15) {\}};
+  \node[lin] at (-0.5,-0.65) {z = 2;};
+  \node[lb, text width=4.6cm] at (1.7,-1.75)
+    {as chaves delimitam; a indentação é decoração};
+
+  \node[ti] at (8.4,1.5) {Python};
+  \node[cx, minimum width=5.6cm, minimum height=2.5cm] at (8.4,-0.05) {};
+  \node[lin] at (6.1, 0.85) {if x:};
+  \node[tk]  at (8.9, 0.85) {NEWLINE};
+  \node[lin] at (6.1, 0.35) {\ \ \ \ y = 1};
+  \node[tk]  at (8.9, 0.35) {INDENT};
+  \node[lin] at (6.1,-0.15) {z = 2};
+  \node[tk]  at (8.9,-0.15) {DEDENT};
+  \node[lb, text width=5.2cm] at (8.4,-1.75)
+    {a indentação delimita; o analisador gera os tokens em vermelho};
+\end{tikzpicture}
+```
+`INDENT` e `DEDENT` são as chaves que você não digita.
+:::
+
+A consequência é que **errar o espaço em branco é errar a sintaxe**, com mensagem de erro e tudo. Vale conhecer as quatro que aparecem.
+
+**Indentação onde não cabia bloco nenhum:**
+
+```python
+preco = 10
+    total = preco * 2
+```
+
+```text
+  File "/tmp/lab06/e1.py", line 2
+    total = preco * 2
+IndentationError: unexpected indent
+```
+
+**Bloco prometido e não entregue.** Todo `:` no fim de uma linha abre um bloco, e o bloco tem de existir:
+
+```python
+if preco > 5:
+print("caro")
+```
+
+```text
+  File "/tmp/lab06/e2.py", line 2
+    print("caro")
+    ^^^^^
+IndentationError: expected an indented block after 'if' statement on line 1
+```
+
+Repare na precisão da mensagem: ela diz qual comando abriu o bloco e em que linha. Esse nível de detalhe é recente e economiza tempo.
+
+**Volta para um nível que não existe:**
+
+```python
+def f():
+        a = 1
+    b = 2
+```
+
+```text
+  File "/tmp/lab06/e5.py", line 3
+    b = 2
+         ^
+IndentationError: unindent does not match any outer indentation level
+```
+
+O `b` está a quatro espaços, mas o único nível aberto era o de oito. Não há para onde fechar.
+
+**Tabulação misturada com espaço** — o erro da abertura do capítulo:
+
+```text
+  File "/tmp/lab06/e4.py", line 3
+    	b = 2
+    ^
+TabError: inconsistent use of tabs and spaces in indentation
+```
+
+`TabError` é uma subclasse de `IndentationError`, que por sua vez é subclasse de `SyntaxError`. Ou seja: os três são detectados na compilação, antes de qualquer linha rodar, exatamente como descrito no @sec-cap002.
+
+Quanto ao tamanho da indentação, a linguagem só exige **consistência dentro do bloco**. Dois espaços funcionam:
+
+```python
+def f():
+  return 1
+
+
+print(f())
+```
+
+```text
+1
+```
+
+Funciona e ninguém escreve assim. A PEP 8 pede **quatro espaços, nunca tabulação**, e essa é uma das poucas regras de estilo que o ecossistema trata como obrigatória: todo editor, todo formatador e todo projeto usam quatro espaços. Configure o editor para inserir espaços ao apertar Tab e o problema desaparece de vez.
+
+## Linha física e linha lógica
+
+A segunda ideia estrutural do capítulo é que **uma instrução não precisa caber numa linha do arquivo**. O Python distingue a *linha física* (o que termina com Enter) da *linha lógica* (uma instrução completa).
+
+Normalmente as duas coincidem. Dentro de parênteses, colchetes ou chaves, não:
+
+```python
+clientes = [
+    "sitio-mangueira",
+    "fazenda-boa-vista",
+]
+
+total = (
+    10
+    + 20
+    + 30
+)
+```
+
+São duas linhas lógicas escritas em nove linhas físicas. Isso se chama **continuação implícita**, e é o mecanismo que os tokens revelam. Para o `total` acima:
+
+```text
+ENCODING     'utf-8'
+NAME         'total'
+OP           '='
+OP           '('
+NL           '\n'
+NUMBER       '1'
+NL           '\n'
+OP           '+'
+NUMBER       '2'
+NL           '\n'
+OP           ')'
+NEWLINE      '\n'
+ENDMARKER    ''
+```
+
+Aqui está a distinção inteira, num lugar onde ela é visível: as quebras **dentro** dos parênteses viraram `NL`, e só a de depois do parêntese que fecha virou `NEWLINE`. `NEWLINE` termina uma linha lógica; `NL` é uma quebra de linha física que não termina nada. Uma linha lógica, quatro linhas físicas.
+
+@fig-linha-logica mostra o efeito.
+
+::: {#fig-linha-logica}
+```{.tikz}
+%%| filename: linha-logica
+%%| alt: Quatro linhas fisicas dentro de parenteses formando uma unica linha logica, com os tokens NL nas quebras internas e NEWLINE apenas no final
+\begin{tikzpicture}[
+  fis/.style={draw=manualgray, thick, fill=manualgray!6,
+              text width=3.7cm, align=left, minimum height=0.62cm,
+              font=\ttfamily\scriptsize, inner xsep=5pt},
+  tk/.style={font=\ttfamily\scriptsize, anchor=west, text=manualred},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  chave/.style={decorate, thick, manualblue}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[lb, font=\scriptsize\bfseries, anchor=south] at (0,1.35)
+    {linhas físicas};
+  \node[fis] at (0, 0.9) {total = (};
+  \node[fis] at (0, 0.2) {\ \ \ \ 10};
+  \node[fis] at (0,-0.5) {\ \ \ \ + 20};
+  \node[fis] at (0,-1.2) {)};
+
+  \node[tk] at (2.1, 0.9) {NL};
+  \node[tk] at (2.1, 0.2) {NL};
+  \node[tk] at (2.1,-0.5) {NL};
+  \node[tk] at (2.1,-1.2) {NEWLINE};
+
+  \draw[chave] (4.4, 1.2) -- (4.75,1.2) -- (4.75,-1.5) -- (4.4,-1.5);
+  \node[lb, anchor=west, text width=4.4cm, text=manualblue] at (5.0,-0.15)
+    {\textbf{uma} linha lógica\\o parêntese aberto mantém a instrução viva};
+
+  \node[lb, anchor=north, text width=10.0cm] at (3.0,-2.1)
+    {só a quebra que fecha a instrução é \texttt{NEWLINE};
+     as de dentro dos parênteses são \texttt{NL} e não terminam nada};
+\end{tikzpicture}
+```
+Dentro de parênteses, a quebra de linha não termina a instrução.
+:::
+
+Existe também a **continuação explícita**, com barra invertida no fim da linha:
+
+```python
+soma = 1 + \
+       2
+```
+
+Ela funciona, e a comunidade evita. O motivo é prático: um único espaço depois da barra invertida quebra o arquivo, e o espaço é invisível. Quando você precisa dividir uma linha, o caminho é acrescentar parênteses e usar a continuação implícita, que é robusta.
+
+Isso resolve o problema real de manter linhas curtas. A PEP 8 pede no máximo 79 caracteres (as ferramentas modernas usam 88, como vimos no @sec-cap005), e a continuação implícita é como se obedece a esse limite sem ficar com código ilegível:
+
+```python
+# em vez de uma linha de 120 caracteres
+mensagem = f"cliente {cliente} teve {quedas} quedas entre {inicio} e {fim}"
+
+# quebre dentro dos parênteses que já existem
+mensagem = (
+    f"cliente {cliente} teve {quedas} quedas "
+    f"entre {inicio} e {fim}"
+)
+```
+
+Duas strings literais adjacentes são concatenadas pelo compilador — outro caso de trabalho feito antes de o programa rodar, como o dobramento de constantes do @sec-cap002.
+
+E o inverso, colocar várias instruções numa linha com ponto e vírgula, também é legal:
+
+```bash
+python3 -c "a = 1; b = 2; print(a + b)"
+```
+
+```text
+3
+```
+
+Legal e desaprovado. Em `python3 -c`, onde não há arquivo, é a única saída e está tudo bem. Em arquivo, é uma linha para cada instrução.
+
+## Comando e expressão
+
+Uma distinção que evita confusão desde já: **expressão** é algo que tem valor; **comando** é algo que acontece. `2 + 3` é expressão. `x = 5` é comando. É por isso que o REPL do @sec-cap004 responde ao primeiro e fica calado com o segundo.
+
+Onde a linguagem espera uma expressão, um comando é erro de sintaxe:
+
+```bash
+python3 -c "x = (z = 5)"
+```
+
+```text
+    x = (z = 5)
+         ^^^^^
+SyntaxError: invalid syntax. Maybe you meant '==' or ':=' instead of '='?
+```
+
+A mensagem já sugere as duas coisas que provavelmente você queria. `==` compara e é expressão. E `:=`, o operador morsa do @sec-cap001, atribui **e** produz valor, o que o torna uma expressão:
+
+```bash
+python3 -c "x = (y := 5); print(x, y)"
+```
+
+```text
+5 5
+```
+
+Esse é justamente o motivo de o morsa ter sido criado: permitir atribuição em lugares que exigem expressão, como a condição de um `if` ou de um `while`. O Volume 3 volta ao assunto.
+
+## Nomes
+
+Um identificador em Python começa com letra ou underscore e continua com letras, dígitos ou underscore. Não pode começar com dígito:
+
+```bash
+python3 -c "2gatos = 1"
+```
+
+```text
+    2gatos = 1
+    ^
+SyntaxError: invalid decimal literal
+```
+
+O que surpreende quem vem de outras linguagens é que "letra" quer dizer letra Unicode, não apenas ASCII. Isto é Python válido:
+
+```python
+café = 3
+preço_final = café * 2
+print(preço_final)
+```
+
+```text
+6
+```
+
+Funciona, e este manual **não** recomenda. Nome de identificador em inglês ou em português sem acento, sempre — porque acento em nome de variável cria problemas de codificação em ferramentas antigas, dificulta digitar em teclado alheio e, pior, permite dois nomes visualmente idênticos e diferentes para o interpretador. Texto de mensagem, comentário e documentação, esses sim vão em português correto, com acento.
+
+As palavras reservadas não podem ser usadas como nome. São 35:
+
+```python
+import keyword
+
+print(len(keyword.kwlist))
+print(keyword.kwlist)
+```
+
+```text
+35
+['False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield']
+```
+
+E existe uma segunda lista, curiosa e recente — as **palavras reservadas suaves**:
+
+```python
+print(keyword.softkwlist)
+```
+
+```text
+['_', 'case', 'match', 'type']
+```
+
+Essas quatro só são especiais no contexto em que a gramática as espera. Fora dele, continuam sendo nomes comuns: `match = re.match(...)` é código perfeitamente válido, e é exatamente por isso que a lista suave existe. Quando o `match` foi acrescentado no Python 3.10, torná-lo palavra reservada de verdade quebraria uma quantidade enorme de código que já usava `match` como variável.
+
+Sobre convenção de nomes, a PEP 8 é curta e o ecossistema segue à risca:
+
+| Tipo | Convenção | Exemplo |
+|:---|:---|:---|
+| função, variável, módulo | `snake_case` | `media_niveis`, `taxa_juros` |
+| classe | `CamelCase` | `ConfiguracaoInvalida` |
+| constante | `MAIUSCULA_COM_UNDERSCORE` | `TAXA_PADRAO` |
+| interno ao módulo | um underscore à frente | `_cache` |
+
+O `ruff` do @sec-cap005 verifica isso com as regras da família `N`, e foi o `N802` que reclamou de `Media`.
+
+## Comentários e documentação
+
+Comentário começa com o sinal de cerquilha e vale até o fim da linha física. Não existe comentário de bloco em Python.
+
+O que existe, e é diferente, é a **docstring**: um literal de texto como primeira instrução de um módulo, função, classe ou método. A diferença não é estilística — comentário é descartado pelo compilador, docstring é um objeto guardado no atributo `__doc__`:
+
+```python
+"""Documentacao do modulo."""
+# comentario comum
+
+
+def f():
+    """Doc da funcao."""
+    pass
+```
+
+```bash
+python3 -c "import d; print(repr(d.__doc__)); print(repr(d.f.__doc__))"
+```
+
+```text
+'Documentacao do modulo.'
+'Doc da funcao.'
+```
+
+O comentário não aparece em lugar nenhum; as duas docstrings estão acessíveis em tempo de execução. É delas que o `help` do @sec-cap004 tira o texto, e é nelas que geradores de documentação se apoiam. Um texto entre três aspas no meio de uma função, por outro lado, não é docstring: é uma expressão de string cujo valor é jogado fora — funciona como comentário multilinha por acidente, e não é para isso que serve.
+
+Sobre o conteúdo dos comentários, a regra que economiza mais tempo de leitura: **comente o porquê, não o quê.**
+
+```python
+# antipadrão: repete o código em português
+# soma os niveis e divide pelo total
+media = sum(niveis) / len(niveis)
+
+# pythônico: explica o que o código não pode dizer
+# o equipamento reporta -99 quando a porta esta apagada;
+# incluir esses valores derrubaria a media do enlace
+niveis = [n for n in niveis if n != -99]
+```
+
+O primeiro comentário vira mentira na primeira vez que alguém mudar a linha. O segundo carrega informação que não está em lugar nenhum do código.
+
+E aquele `pass` do exemplo: ele existe porque a gramática exige um bloco depois do `:`, e às vezes você não tem nada para colocar ali ainda. `pass` é o comando que não faz nada, e serve exatamente para satisfazer a gramática.
+
+## Uma nota sobre codificação
+
+Arquivo `.py` é **UTF-8 por padrão** desde o Python 3, e é por isso que `café` e os acentos deste manual funcionam sem cerimônia. Você ainda vai encontrar, em código antigo, uma linha como esta no topo:
+
+```python
+# -*- coding: utf-8 -*-
+```
+
+É a declaração de codificação da PEP 263, obrigatória no Python 2, onde o padrão era ASCII. Hoje ela é redundante e pode ser apagada. Só faz diferença se o arquivo estiver **em outra** codificação, o que é um problema a resolver e não a documentar.
+
+## 🐍 Jeito Pythônico
+
+A PEP 8 é o guia de estilo da linguagem, e a maior parte dela se resume a coisas que uma ferramenta aplica sozinha. O resumo do que importa neste capítulo:
+
+```python
+# pythônico
+def media_niveis(niveis: list[float]) -> float:
+    """Media dos niveis validos, ignorando portas apagadas."""
+    validos = [n for n in niveis if n != -99]
+    if not validos:
+        raise ValueError("nenhum nivel valido")
+    return sum(validos) / len(validos)
+```
+
+Quatro espaços por nível, `snake_case`, docstring em vez de comentário no topo, duas linhas em branco entre funções de nível superior, uma instrução por linha, e nada de barra invertida.
+
+Os antipadrões correspondentes:
+
+```python
+# antipadrão: tabulação (ou mistura com espaço)
+# antipadrão: continuação com barra invertida
+mensagem = "cliente " + cliente + \
+           " teve problemas"
+
+# antipadrão: várias instruções numa linha
+if not validos: raise ValueError("nenhum nivel valido")
+
+# antipadrão: comentário de bloco com três aspas no meio da função
+"""
+esta parte calcula a media
+"""
+
+# antipadrão: acento em identificador
+média = sum(níveis) / len(níveis)
+```
+
+Sobre versões, o que mudou na sintaxe e a partir de quando:
+
+- **Python 3.8** — o operador morsa `:=` (PEP 572), que faz da atribuição uma expressão.
+- **Python 3.10** — `match` e `case` como palavras reservadas **suaves** (PEP 634), e mensagens de erro de sintaxe muito melhores, com o comando que abriu o bloco identificado por nome e linha.
+- **Python 3.11** — marcação de coluna no traceback, com `~` e `^` apontando o trecho exato (PEP 657).
+- **Python 3.12** — `type` entrou na lista de palavras suaves, junto com a sintaxe nova de genéricos (PEP 695), e f-strings deixaram de ter restrição sobre aspas e barras invertidas no interior (PEP 701).
+
+Uma reflexão para fechar. A indentação obrigatória é a decisão de projeto mais criticada do Python por quem chega de fora, e a que a comunidade defende com mais convicção depois de um tempo. O argumento é simples: em toda linguagem, programador competente indenta o código de qualquer maneira. A diferença é que nas outras a indentação pode **mentir** — o bloco pode ser diferente do que os olhos veem, porque quem manda são as chaves. Em Python, o que você vê é o que executa. É o "legibilidade conta" da PEP 20 aplicado ao nível do caractere.
+
+## 🧪 Laboratório
+
+Objetivo: provocar cada erro de indentação de propósito, observar os tokens que o analisador produz e distinguir na prática linha física de linha lógica.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab06 && cd ~/lab06
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. Provoque os quatro erros.** Crie um arquivo para cada caso, rode e leia a mensagem inteira antes de corrigir. Este é o passo em que se aprende a reconhecer o erro pelo texto.
+
+`e1.py` — indentação inesperada:
+
+```python
+preco = 10
+    total = preco * 2
+```
+
+`e2.py` — bloco que faltou:
+
+```python
+preco = 10
+if preco > 5:
+print("caro")
+```
+
+`e5.py` — volta para nível inexistente:
+
+```python
+def f():
+        a = 1
+    b = 2
+```
+
+Confirme que os três dão `IndentationError` e que o texto de cada um é diferente.
+
+**3. Produza um `TabError`.** Este exige cuidado, porque o editor pode converter tabulação em espaço automaticamente. Gere o arquivo pelo terminal, onde você controla os bytes:
+
+```bash
+printf 'def f():\n    a = 1\n\tb = 2\n' > e4.py
+cat -A e4.py
+python e4.py
+```
+
+O `cat -A` mostra os caracteres invisíveis: `^I` é tabulação e `$` é fim de linha. Você deve ver a terceira linha começando com `^I` e as outras com espaços. E o erro:
+
+```text
+TabError: inconsistent use of tabs and spaces in indentation
+```
+
+**4. Confirme o parentesco das exceções.**
+
+```bash
+python -c "print(TabError.__mro__)"
+```
+
+```text
+(<class 'TabError'>, <class 'IndentationError'>, <class 'SyntaxError'>, <class 'Exception'>, <class 'BaseException'>, <class 'object'>)
+```
+
+`TabError` é um `IndentationError`, que é um `SyntaxError`. Por isso os três param o programa antes de a primeira linha rodar. A hierarquia de exceções é assunto do @sec-cap007 e do Volume 6.
+
+**5. Veja os tokens de indentação.** Crie `t1.py` com o `if`/`y`/`z` do capítulo e rode o trecho do `tokenize`. Localize na saída o `INDENT` com quatro espaços e o `DEDENT` com string vazia.
+
+**6. Veja `NL` contra `NEWLINE`.** Crie `t2.py`:
+
+```python
+a = 1
+
+# comentario
+b = 2
+```
+
+Rode o mesmo `tokenize`. Você deve ver `NEWLINE` depois de cada instrução e `NL` na linha em branco e depois do comentário — porque nenhuma das duas termina instrução alguma. Agora `t3.py`:
+
+```python
+total = (
+    1
+    + 2
+)
+```
+
+Aqui há **um** `NEWLINE` só, no fim, e `NL` nas quebras internas. Uma linha lógica em quatro físicas.
+
+**7. Compare as duas continuações.** Crie `cont.py` com o conteúdo do capítulo (a lista, o `total` entre parênteses e a `soma` com barra invertida) e rode:
+
+```bash
+python cont.py
+```
+
+```text
+['sitio-mangueira', 'fazenda-boa-vista'] 60 3
+```
+
+Agora **acrescente um espaço depois da barra invertida** da `soma` e rode de novo. O programa quebra, e a mensagem não ajuda muito, porque o caractere culpado é invisível. Desfaça. Foi por isso que a comunidade abandonou a barra invertida.
+
+**8. Explore as palavras reservadas.**
+
+```bash
+python -c "import keyword; print(len(keyword.kwlist))"
+python -c "import keyword; print(keyword.softkwlist)"
+python -c "import keyword; print(keyword.iskeyword('match'), keyword.issoftkeyword('match'))"
+```
+
+A última linha deve responder `False True`: `match` não é palavra reservada, é suave. Confirme que dá para usá-la como variável:
+
+```bash
+python -c "match = 42; print(match)"
+```
+
+**9. Teste um nome inválido e um exótico.**
+
+```bash
+python -c "2gatos = 1"
+python -c "café = 3; print(café * 2)"
+```
+
+O primeiro falha, o segundo imprime `6`. Sabendo que funciona, continue não usando.
+
+**10. Prove que docstring é dado e comentário não.** Crie `d.py` com o conteúdo do capítulo e rode:
+
+```bash
+python -c "import d; print(repr(d.__doc__)); print(repr(d.f.__doc__))"
+python -c "import d; help(d.f)"
+```
+
+Não há forma de recuperar o comentário — ele não existe depois da compilação.
+
+**11. Deixe a ferramenta arrumar o que é mecânico.**
+
+```bash
+python -m pip install ruff
+printf 'x=1\ny   =   2\nif x>0:\n        print( x+y )\n' > torto.py
+ruff format torto.py
+cat torto.py
+```
+
+```text
+1 file reformatted
+x = 1
+y = 2
+if x > 0:
+    print(x + y)
+```
+
+O formatador normalizou os espaços e trouxe a indentação de oito para quatro. O que ele **não** faz é adivinhar a estrutura de um bloco errado:
+
+```bash
+printf 'x=1\nif x>0:\nprint(x)\n' > quebrado.py
+ruff format quebrado.py; echo "exit=$?"
+```
+
+```text
+error: Failed to parse quebrado.py:3:1: Expected an indented block after `if` statement
+exit=2
+```
+
+Arquivo que não compila não pode ser formatado — o formatador precisa da árvore sintática do @sec-cap002, e não há árvore aqui.
+
+**12. Feche com `deactivate`.**
+
+## Resumo
+
+- Em Python o bloco é a indentação, e isso é gramática: o analisador emite os tokens `INDENT` e `DEDENT`, que fazem o papel das chaves de outras linguagens. `tokenize` mostra isso.
+- Quatro erros de espaço em branco valem reconhecer de cara: `unexpected indent`, `expected an indented block`, `unindent does not match any outer indentation level` e `TabError`. Todos são `SyntaxError` por herança e param o programa antes da primeira linha.
+- A linguagem só exige consistência; a PEP 8 exige quatro espaços e nenhuma tabulação, e o ecossistema inteiro obedece.
+- Linha física é o que termina com Enter; linha lógica é a instrução completa. Dentro de parênteses, colchetes ou chaves, a quebra vira `NL` e não termina nada — é a continuação implícita, e é como se quebra linha longa. Barra invertida funciona e se evita.
+- Expressão tem valor, comando acontece. `=` é comando e não cabe onde se espera expressão; `==` compara e `:=` atribui produzindo valor.
+- São 35 palavras reservadas e 4 suaves (`_`, `case`, `match`, `type`), que só valem no contexto da gramática e continuam servindo como nome comum.
+- Comentário é descartado na compilação; docstring vira `__doc__` e alimenta o `help`. Comente o porquê, não o quê. Arquivo `.py` é UTF-8 por padrão, e `# -*- coding: utf-8 -*-` é herança do Python 2.
