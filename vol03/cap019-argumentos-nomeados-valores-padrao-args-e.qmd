@@ -1,3 +1,905 @@
 # Argumentos nomeados, valores padrão, `*args` e `**kwargs` {#sec-cap019}
 
-*(em elaboracao)*
+A função guarda o histórico de ONUs visitadas numa lista, e quem chama pode passar a sua própria lista ou deixar que a função comece uma:
+
+```python
+def registrar(onu, historico=[]):
+    historico.append(onu)
+    return historico
+
+
+print(registrar("onu-01"))
+print(registrar("onu-02"))
+print(registrar("onu-03"))
+print("o padrao em si:", registrar.__defaults__)
+```
+
+Três chamadas independentes, três listas de um elemento — é o que a leitura do código promete. É o seguinte que acontece:
+
+```text
+['onu-01']
+['onu-01', 'onu-02']
+['onu-01', 'onu-02', 'onu-03']
+o padrao em si: (['onu-01', 'onu-02', 'onu-03'],)
+```
+
+Cada chamada devolveu uma lista **maior** que a anterior, e a última linha explica tudo: o valor padrão não é "uma lista vazia", é **aquela** lista, criada uma única vez e guardada dentro do objeto função. Toda chamada que omite o argumento recebe a mesma lista de sempre, com tudo que as chamadas anteriores deixaram lá.
+
+Num programa de verdade, isso vaza estado entre requisições, entre testes e entre clientes — e o vazamento é cumulativo, então o sintoma aparece depois de horas no ar.
+
+Este capítulo é sobre as regras que governam a passagem de argumentos: quando o padrão é avaliado, como forçar nome em vez de posição, e o que `*` e `**` fazem dos dois lados da chamada.
+
+## Valores padrão são avaliados **uma vez**, na definição
+
+Essa é a frase inteira. O `def` roda quando o módulo é importado; a expressão do padrão roda ali, naquele instante, e o objeto resultante fica preso ao objeto função.
+
+```python
+import time
+
+
+def carimbo(t=time.time()):
+    return t
+
+
+print(f"{carimbo():.3f}")
+time.sleep(1)
+print(f"{carimbo():.3f}")
+print(f"{carimbo(time.time()):.3f}")
+```
+
+```text
+1786439046.981
+1786439046.981
+1786439047.981
+```
+
+Um segundo separa a primeira da segunda chamada, e as duas devolveram o mesmo instante — o instante em que o `def` foi executado. Só a terceira, que passou o argumento, viu o relógio andar.
+
+::: {#fig-padrao-mutavel}
+```{.tikz}
+%%| filename: padrao-mutavel
+%%| alt: Linha do tempo mostrando que a lista do valor padrao e criada uma unica vez na execucao do def, e que todas as chamadas que omitem o argumento apontam para o mesmo objeto, acumulando itens
+\begin{tikzpicture}[
+  ev/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=3.3cm, align=center, minimum height=0.78cm,
+             font=\ttfamily\scriptsize},
+  obj/.style={draw=manualred, very thick, rounded corners, fill=manualred!10,
+              text width=4.3cm, align=center, minimum height=1.5cm,
+              font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fr/.style={->,>=stealth, very thick, manualred}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-2.4, 2.6) rectangle (14.4,-5.2);
+
+  \node[ev, draw=manualgreen, fill=manualgreen!12] (d) at (0, 1.7) {def registrar(...)};
+  \node[ev] (c1) at (0, 0.3) {registrar("onu-01")};
+  \node[ev] (c2) at (0,-1.0) {registrar("onu-02")};
+  \node[ev] (c3) at (0,-2.3) {registrar("onu-03")};
+
+  \draw[fl] (d) -- (c1);
+  \draw[fl] (c1) -- (c2);
+  \draw[fl] (c2) -- (c3);
+
+  \node[lb, anchor=east, text width=2.0cm, align=right, text=manualgreen] at (-1.9, 1.7)
+    {\textbf{import}};
+  \node[lb, anchor=east, text width=2.0cm, align=right] at (-1.9,-1.0)
+    {tempo de execução};
+
+  \node[obj] (o) at (7.4, 0.0)
+    {\textbf{uma lista, uma só}\\[3pt]
+     registrar.\_\_defaults\_\_\\
+     ('onu-01', 'onu-02',\\ 'onu-03')};
+
+  \draw[fr] (d.east) -- node[lb, pos=0.45, above, text=manualgreen] {cria} (o.north west);
+  \draw[fr] (c1.east) -- node[lb, pos=0.5, above] {append} (o.west);
+  \draw[fr] (c2.east) -- (o.south west);
+  \draw[fr] (c3.east) -- node[lb, pos=0.5, below] {append} (o.south);
+
+  \node[lb, anchor=west, text width=4.2cm, text=manualred] at (10.0, 0.0)
+    {\textbf{o padrão não é ``lista vazia''} --- é \textbf{esta} lista, que
+     sobrevive a todas as chamadas};
+
+  \node[lb, text width=13.6cm] at (-2.2,-4.2)
+    {A regra que evita a classe inteira: \textbf{valor padrão só imutável}
+     (\texttt{None}, número, string, tupla). Quando o padrão precisa ser mutável,
+     o padrão é \texttt{None} e a função cria o objeto no corpo --- aí ele nasce
+     de novo a cada chamada.};
+\end{tikzpicture}
+```
+O padrão é criado uma vez, na definição, e todas as chamadas compartilham o mesmo objeto.
+:::
+
+A correção é sempre a mesma — `None` como sentinela e a criação dentro do corpo:
+
+```python
+def registrar(onu, historico=None):
+    if historico is None:
+        historico = []
+    historico.append(onu)
+    return historico
+
+
+print(registrar("onu-01"))
+print(registrar("onu-02"))
+meu = ["onu-00"]
+print(registrar("onu-03", meu), meu)
+```
+
+```text
+['onu-01']
+['onu-02']
+['onu-00', 'onu-03'] ['onu-00', 'onu-03']
+```
+
+As duas primeiras chamadas agora são independentes. E a terceira mostra o outro lado da moeda do @sec-cap018: quando a lista **é** passada, a função continua modificando a de quem chamou — o que aqui é o comportamento desejado, e por isso a última linha imprime a mesma lista duas vezes.
+
+O padrão mutável é tão conhecido que o `ruff` tem uma regra própria para ele (`B006`), e vale ligar.
+
+## Argumentos por nome
+
+Todo parâmetro comum pode ser preenchido por posição ou por nome:
+
+```python
+def alerta(onu, nivel, unidade="dBm", urgente=False):
+    marca = "!! " if urgente else "   "
+    return f"{marca}{onu}: {nivel} {unidade}"
+
+
+print(alerta("onu-01", -19.5))
+print(alerta("onu-02", -31.2, urgente=True))
+print(alerta(nivel=-8.0, onu="onu-05", unidade="dBm"))
+print(alerta.__defaults__)
+```
+
+```text
+   onu-01: -19.5 dBm
+!! onu-02: -31.2 dBm
+   onu-05: -8.0 dBm
+('dBm', False)
+```
+
+Três coisas se veem aí. O nomeado permite **pular** parâmetros com padrão (`urgente=True` sem mencionar `unidade`). Permite **reordenar** (`nivel` antes de `onu`). E os padrões ficam guardados em `__defaults__`, na ordem em que aparecem.
+
+Duas regras de sintaxe: argumento posicional nunca vem depois de nomeado na chamada, e parâmetro com padrão nunca vem antes de parâmetro sem padrão na definição — as duas coisas são `SyntaxError`.
+
+Os erros de chamada valem decorar, porque a mensagem diz exatamente o que falta:
+
+```python
+def alerta(onu, nivel, unidade="dBm"):
+    return f"{onu}: {nivel} {unidade}"
+```
+
+```text
+TypeError: alerta() missing 1 required positional argument: 'nivel'
+TypeError: alerta() takes from 2 to 3 positional arguments but 4 were given
+TypeError: alerta() got an unexpected keyword argument 'unit'
+TypeError: alerta() got multiple values for argument 'onu'
+```
+
+O último é o mais curioso: `alerta("onu-01", -19.5, onu="onu-02")` deu o valor de `onu` duas vezes, uma por posição e outra por nome.
+
+## `*args`: os posicionais que sobraram
+
+Um parâmetro precedido de `*` recolhe todos os argumentos posicionais restantes numa **tupla**:
+
+```python
+def media(*leituras):
+    print(f"  recebi {leituras!r} ({type(leituras).__name__})")
+    return sum(leituras) / len(leituras) if leituras else 0.0
+
+
+print(media(-19.5, -21.3))
+print(media())
+print(media(*[-19.5, -21.3, -20.2]))
+```
+
+```text
+  recebi (-19.5, -21.3) (tuple)
+-20.4
+  recebi () (tuple)
+0.0
+  recebi (-19.5, -21.3, -20.2) (tuple)
+-20.333333333333332
+```
+
+Sem argumento nenhum, `leituras` é uma tupla vazia — nunca `None`. E a terceira chamada mostra o `*` do **outro lado**: na definição ele empacota; na chamada ele desempacota.
+
+O nome `args` é convenção, não sintaxe: `*leituras` é igual de válido e diz mais.
+
+## `**kwargs`: os nomeados que sobraram
+
+O `**` faz o mesmo com argumentos nomeados, recolhendo-os num **dicionário**:
+
+```python
+def conectar(host, **opcoes):
+    print(f"  {host} com {opcoes!r} ({type(opcoes).__name__})")
+    porta = opcoes.get("porta", 22)
+    return f"{host}:{porta}"
+
+
+print(conectar("olt-norte"))
+print(conectar("olt-sul", porta=830, timeout=5))
+config = {"porta": 161, "comunidade": "publica"}
+print(conectar("olt-leste", **config))
+```
+
+```text
+  olt-norte com {} (dict)
+olt-norte:22
+  olt-sul com {'porta': 830, 'timeout': 5} (dict)
+olt-sul:830
+  olt-leste com {'porta': 161, 'comunidade': 'publica'} (dict)
+olt-leste:161
+```
+
+O dicionário preserva a ordem em que os nomes foram passados, e as chaves são sempre strings.
+
+## A ordem canônica dos parâmetros
+
+Tudo junto, na única ordem possível:
+
+```python
+def registrar(onu, /, nivel, *extras, unidade="dBm", **meta):
+    return {
+        "onu": onu,
+        "nivel": nivel,
+        "extras": extras,
+        "unidade": unidade,
+        "meta": meta,
+    }
+
+
+print(registrar("onu-01", -19.5))
+print(registrar("onu-01", -19.5, "manha", "campo", unidade="mW", tecnico="ana"))
+```
+
+```text
+{'onu': 'onu-01', 'nivel': -19.5, 'extras': (), 'unidade': 'dBm', 'meta': {}}
+{'onu': 'onu-01', 'nivel': -19.5, 'extras': ('manha', 'campo'), 'unidade': 'mW', 'meta': {'tecnico': 'ana'}}
+```
+
+::: {#fig-ordem-parametros}
+```{.tikz}
+%%| filename: ordem-parametros
+%%| alt: As cinco regioes de uma lista de parametros em Python, separadas pela barra e pelo asterisco: so-posicionais, posicionais ou nomeados, var-posicional, so-nomeados e var-nomeado
+\begin{tikzpicture}[
+  reg/.style={draw=manualgray, very thick, rounded corners=1pt,
+              text width=2.65cm, align=center, minimum height=0.72cm,
+              font=\ttfamily\scriptsize},
+  sep/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!12,
+              minimum width=0.62cm, minimum height=0.72cm,
+              font=\ttfamily\small, text=manualred},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  seta/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.4, 3.3) rectangle (14.6,-5.2);
+
+  \node[reg, fill=manualblue!12, draw=manualblue] (a) at (0.9, 0.0) {onu};
+  \node[sep] (b1) at (2.6, 0.0) {/};
+  \node[reg, fill=manualgreen!12, draw=manualgreen] (c) at (4.5, 0.0) {nivel};
+  \node[reg, fill=manualyellow!30] (d) at (7.4, 0.0) {*extras};
+  \node[reg, fill=manualgreen!12, draw=manualgreen] (e) at (10.3, 0.0) {unidade="dBm"};
+  \node[reg, fill=manualyellow!30] (f) at (13.2, 0.0) {**meta};
+
+  \node[lb, text width=2.9cm] at (0.9, 1.75)
+    {\textbf{só-posicional}\\ nunca por nome};
+  \node[lb, text width=2.9cm] at (4.5, 1.75)
+    {\textbf{posicional ou nomeado}\\ o caso normal};
+  \node[lb, text width=2.9cm] at (7.4, 2.35)
+    {\textbf{var-posicional}\\ tupla com o que sobrou de posicional};
+  \node[lb, text width=2.9cm] at (10.3, 1.75)
+    {\textbf{só-nomeado}\\ depois do \texttt{*}};
+  \node[lb, text width=2.9cm] at (13.2, 2.35)
+    {\textbf{var-nomeado}\\ dicionário com o que sobrou de nomeado};
+
+  \draw[seta] (0.9, 1.15) -- (a.north);
+  \draw[seta] (4.5, 1.15) -- (c.north);
+  \draw[seta] (7.4, 1.55) -- (d.north);
+  \draw[seta] (10.3, 1.15) -- (e.north);
+  \draw[seta] (13.2, 1.55) -- (f.north);
+
+  \node[lb, text width=3.4cm, text=manualred, anchor=north] at (2.6,-0.75)
+    {tudo à \textbf{esquerda} da \texttt{/} só entra por posição (3.8+)};
+  \node[lb, text width=3.4cm, text=manualred, anchor=north] at (7.4,-1.9)
+    {tudo à \textbf{direita} do \texttt{*} só entra por nome --- e um
+     \texttt{*} sozinho serve de barreira, sem recolher nada};
+
+  \draw[manualred, thick, dashed] (2.6,-0.4) -- (2.6,-0.75);
+  \draw[manualred, thick, dashed] (7.4,-0.4) -- (7.4,-1.9);
+
+  \node[lb, text width=13.8cm] at (6.4,-4.5)
+    {A ordem é obrigatória e a lista pode pular qualquer região, mas nunca
+     trocá-las de lugar. \texttt{inspect.signature(f).parameters} devolve o
+     nome e a categoria de cada parâmetro --- é como se confere uma assinatura
+     alheia sem ler o código.};
+\end{tikzpicture}
+```
+As cinco regiões de uma lista de parâmetros, separadas por `/` e por `*`.
+:::
+
+A barra `/` marca o fim dos parâmetros **só-posicionais** (PEP 570, **Python 3.8**). Passar `onu` por nome deixa de ser possível:
+
+```python
+registrar(onu="onu-01", nivel=-19.5)
+```
+
+```text
+TypeError: registrar() missing 1 required positional argument: 'onu'
+```
+
+A mensagem parece estranha — `onu` foi passado! —, mas do ponto de vista da função o `onu=` foi para dentro de `**meta` e o parâmetro posicional continuou vazio. Isso é o que as funções embutidas sempre fizeram: `len(obj=[1,2])` também não funciona.
+
+Um detalhe que morde: com `*extras` no meio, o terceiro posicional **não** vai para `unidade`.
+
+```python
+print(registrar("onu-01", -19.5, "dBm")["extras"])
+```
+
+```text
+('dBm',)
+```
+
+`unidade` está depois do `*extras`, então é **só-nomeado**: `"dBm"` foi engolido pelos extras em silêncio. Quando um parâmetro fica depois de um `*`, a única forma de preenchê-lo é pelo nome.
+
+E é justamente para isso que serve o `*` sozinho, sem nome:
+
+```python
+def desligar(onu, *, confirmado=False):
+    if not confirmado:
+        return f"{onu}: recusado, falta confirmar"
+    return f"{onu}: desligada"
+
+
+print(desligar("onu-07"))
+print(desligar("onu-07", confirmado=True))
+print(desligar("onu-07", True))
+```
+
+```text
+onu-07: recusado, falta confirmar
+onu-07: desligada
+TypeError: desligar() takes 1 positional argument but 2 were given
+```
+
+`desligar("onu-07", True)` é recusado. É assim que se elimina a chamada ilegível com booleano solto — e a função fica documentada no ponto de uso.
+
+Para inspecionar uma assinatura alheia:
+
+```python
+import inspect
+
+
+def registrar(onu, /, nivel, *extras, unidade="dBm", **meta):
+    pass
+
+
+sig = inspect.signature(registrar)
+print(sig)
+for nome, p in sig.parameters.items():
+    print(f"  {nome:<10} {p.kind}")
+```
+
+```text
+(onu, /, nivel, *extras, unidade='dBm', **meta)
+  onu        POSITIONAL_ONLY
+  nivel      POSITIONAL_OR_KEYWORD
+  extras     VAR_POSITIONAL
+  unidade    KEYWORD_ONLY
+  meta       VAR_KEYWORD
+```
+
+## `*` e `**` na chamada
+
+Do lado da chamada, os mesmos símbolos fazem o inverso: **espalham** uma sequência em argumentos posicionais e um dicionário em argumentos nomeados.
+
+```python
+def alerta(onu, nivel, unidade="dBm"):
+    return f"{onu}: {nivel} {unidade}"
+
+
+args = ("onu-01", -19.5)
+kwargs = {"unidade": "mW"}
+print(alerta(*args, **kwargs))
+
+linhas = [("onu-01", -19.5), ("onu-02", -31.2)]
+for linha in linhas:
+    print(alerta(*linha))
+```
+
+```text
+onu-01: -19.5 mW
+onu-01: -19.5 dBm
+onu-02: -31.2 dBm
+```
+
+Combinar os dois lados é o que permite escrever um invólucro que repassa argumentos sem conhecer a assinatura de baixo:
+
+```python
+import time
+
+
+def com_tempo(funcao, *args, **kwargs):
+    """Chama funcao(*args, **kwargs) e devolve (resultado, milissegundos)."""
+    inicio = time.perf_counter()
+    resultado = funcao(*args, **kwargs)
+    return resultado, (time.perf_counter() - inicio) * 1000
+
+
+def soma_lenta(a, b, atraso=0.05):
+    time.sleep(atraso)
+    return a + b
+
+
+valor, ms = com_tempo(soma_lenta, 2, 3)
+print(f"soma_lenta(2, 3) = {valor} em ~{ms:.0f} ms")
+valor, ms = com_tempo(soma_lenta, 2, 3, atraso=0.2)
+print(f"com atraso=0.2  = {valor} em ~{ms:.0f} ms")
+valor, ms = com_tempo(sorted, [3, 1, 2], reverse=True)
+print(f"sorted(...)     = {valor} em ~{ms:.2f} ms")
+```
+
+```text
+soma_lenta(2, 3) = 5 em ~50 ms
+com atraso=0.2  = 5 em ~200 ms
+sorted(...)     = [3, 2, 1] em ~0.01 ms
+```
+
+O mesmo `com_tempo` serviu para uma função sua e para uma função embutida, com assinaturas completamente diferentes. Esse par `*args, **kwargs` no meio é a base de todo decorador, que é o Volume 8.
+
+## 🐍 Jeito Pythônico
+
+**Valor padrão só imutável.** `None`, número, string, tupla, `frozenset`. Para lista, dicionário, conjunto ou qualquer objeto seu, o padrão é `None` e o corpo cria.
+
+```python
+# antipadrão
+def registrar(onu, historico=[], meta={}):
+    ...
+```
+
+```python
+# pythônico
+def registrar(onu, historico=None, meta=None):
+    historico = [] if historico is None else historico
+    meta = {} if meta is None else meta
+```
+
+**Nada de expressão viva no padrão.** `time.time()`, `datetime.now()`, `uuid4()`, leitura de arquivo, consulta ao ambiente — tudo isso congela no instante do `import`.
+
+**Booleano em chamada é só-nomeado.** Um `*` antes dele custa um caractere e elimina a chamada `desligar("onu-07", True, False)`, que ninguém consegue ler.
+
+**`*args` e `**kwargs` só quando você realmente não sabe a lista.** Repasse genérico (decoradores, invólucros, subclasses) é o caso legítimo. Usá-los como "assinatura preguiçosa" apaga a documentação, engana o editor e transforma erro de digitação em chave silenciosa dentro de `kwargs`.
+
+```python
+# antipadrão: a assinatura não diz nada e "tiemout" passa batido
+def conectar(**opcoes):
+    ...
+```
+
+```python
+# pythônico: o que é conhecido, explícito; o resto, se houver, no kwargs
+def conectar(host, *, porta=22, timeout=5.0, **extras):
+    ...
+```
+
+**Passe por nome tudo que não for óbvio no ponto de chamada.** Uma chamada com três literais seguidos (`formatar(x, 2, True)`) só se entende abrindo a definição.
+
+**Não mute o argumento recebido sem que o nome diga isso.** É a regra do @sec-cap018 aplicada aos padrões: se a função recebe uma lista e a modifica, o nome dela deve ser `anexar_em`, não `calcular`.
+
+Sobre versões:
+
+- **Python 3.0** — parâmetros só-nomeados com `*` (PEP 3102).
+- **Python 3.7** — `**kwargs` passou a preservar a ordem de inserção, junto com a garantia de ordem dos dicionários.
+- **Python 3.8** — parâmetros só-posicionais com `/` (PEP 570); antes, só as funções em C tinham isso.
+- **Python 3.11** — mensagens de `TypeError` de chamada mais precisas, indicando o argumento problemático.
+- **Python 3.12** — `**kwargs` tipado com `TypedDict` via `Unpack` (PEP 692), para quem usa verificador estático.
+
+## 🧪 Laboratório
+
+Objetivo: ver o padrão mutável acumular estado entre chamadas, cronometrar o padrão que congelou no `import`, percorrer as cinco regiões de uma assinatura e terminar com um formatador de relatório configurável por opções nomeadas.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab19 && cd ~/lab19
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O padrão mutável.** Crie `acumula.py`:
+
+```python
+def registrar(onu, historico=[]):
+    historico.append(onu)
+    return historico
+
+
+print(registrar("onu-01"))
+print(registrar("onu-02"))
+print(registrar("onu-03"))
+print("o padrao em si:", registrar.__defaults__)
+```
+
+```bash
+python acumula.py
+```
+
+```text
+['onu-01']
+['onu-01', 'onu-02']
+['onu-01', 'onu-02', 'onu-03']
+o padrao em si: (['onu-01', 'onu-02', 'onu-03'],)
+```
+
+A última linha é a prova material: o padrão guardado no objeto função **cresceu**.
+
+**3. A correção com sentinela.**
+
+```bash
+python -c "
+def registrar(onu, historico=None):
+    if historico is None:
+        historico = []
+    historico.append(onu)
+    return historico
+print(registrar('onu-01'))
+print(registrar('onu-02'))
+meu = ['onu-00']
+print(registrar('onu-03', meu), meu)
+"
+```
+
+```text
+['onu-01']
+['onu-02']
+['onu-00', 'onu-03'] ['onu-00', 'onu-03']
+```
+
+**4. O padrão que parou o relógio.** Crie `quando.py`:
+
+```python
+import time
+
+
+def carimbo(t=time.time()):
+    return t
+
+
+print(f"{carimbo():.3f}")
+time.sleep(1)
+print(f"{carimbo():.3f}")
+print(f"{carimbo(time.time()):.3f}")
+```
+
+```bash
+python quando.py
+```
+
+```text
+1786439046.981
+1786439046.981
+1786439047.981
+```
+
+Os números mudam a cada execução; o que não muda é as duas primeiras linhas serem **idênticas** e a terceira ser um segundo maior.
+
+**5. Nomeados, e o que eles destravam.**
+
+```bash
+python -c "
+def alerta(onu, nivel, unidade='dBm', urgente=False):
+    marca = '!! ' if urgente else '   '
+    return f'{marca}{onu}: {nivel} {unidade}'
+print(alerta('onu-01', -19.5))
+print(alerta('onu-02', -31.2, urgente=True))
+print(alerta(nivel=-8.0, onu='onu-05', unidade='dBm'))
+print(alerta.__defaults__)
+"
+```
+
+```text
+   onu-01: -19.5 dBm
+!! onu-02: -31.2 dBm
+   onu-05: -8.0 dBm
+('dBm', False)
+```
+
+**6. Os quatro `TypeError` de chamada.** Crie `erros.py`:
+
+```python
+def alerta(onu, nivel, unidade="dBm"):
+    return f"{onu}: {nivel} {unidade}"
+
+
+chamadas = [
+    lambda: alerta("onu-01"),
+    lambda: alerta("onu-01", -19.5, "dBm", "extra"),
+    lambda: alerta("onu-01", -19.5, unit="dBm"),
+    lambda: alerta("onu-01", -19.5, onu="onu-02"),
+]
+for c in chamadas:
+    try:
+        print(c())
+    except TypeError as e:
+        print("TypeError:", e)
+```
+
+```bash
+python erros.py
+```
+
+```text
+TypeError: alerta() missing 1 required positional argument: 'nivel'
+TypeError: alerta() takes from 2 to 3 positional arguments but 4 were given
+TypeError: alerta() got an unexpected keyword argument 'unit'
+TypeError: alerta() got multiple values for argument 'onu'
+```
+
+Quatro mensagens diferentes para quatro erros diferentes. Vale ler cada uma com calma: elas aparecem muito, e cada uma diz precisamente o que aconteceu.
+
+**7. `*args`.**
+
+```bash
+python -c "
+def media(*leituras):
+    print(f'  recebi {leituras!r} ({type(leituras).__name__})')
+    return sum(leituras) / len(leituras) if leituras else 0.0
+print(media(-19.5, -21.3))
+print(media())
+print(media(*[-19.5, -21.3, -20.2]))
+"
+```
+
+```text
+  recebi (-19.5, -21.3) (tuple)
+-20.4
+  recebi () (tuple)
+0.0
+  recebi (-19.5, -21.3, -20.2) (tuple)
+-20.333333333333332
+```
+
+**8. `**kwargs`.**
+
+```bash
+python -c "
+def conectar(host, **opcoes):
+    print(f'  {host} com {opcoes!r} ({type(opcoes).__name__})')
+    porta = opcoes.get('porta', 22)
+    return f'{host}:{porta}'
+print(conectar('olt-norte'))
+print(conectar('olt-sul', porta=830, timeout=5))
+config = {'porta': 161, 'comunidade': 'publica'}
+print(conectar('olt-leste', **config))
+"
+```
+
+```text
+  olt-norte com {} (dict)
+olt-norte:22
+  olt-sul com {'porta': 830, 'timeout': 5} (dict)
+olt-sul:830
+  olt-leste com {'porta': 161, 'comunidade': 'publica'} (dict)
+olt-leste:161
+```
+
+**9. A assinatura completa.** Crie `assinatura.py`:
+
+```python
+def registrar(onu, /, nivel, *extras, unidade="dBm", **meta):
+    return {
+        "onu": onu,
+        "nivel": nivel,
+        "extras": extras,
+        "unidade": unidade,
+        "meta": meta,
+    }
+
+
+print(registrar("onu-01", -19.5))
+print(registrar("onu-01", -19.5, "manha", "campo", unidade="mW", tecnico="ana"))
+try:
+    registrar(onu="onu-01", nivel=-19.5)
+except TypeError as e:
+    print("TypeError:", e)
+print(registrar("onu-01", -19.5, "dBm")["extras"])
+```
+
+```bash
+python assinatura.py
+```
+
+```text
+{'onu': 'onu-01', 'nivel': -19.5, 'extras': (), 'unidade': 'dBm', 'meta': {}}
+{'onu': 'onu-01', 'nivel': -19.5, 'extras': ('manha', 'campo'), 'unidade': 'mW', 'meta': {'tecnico': 'ana'}}
+TypeError: registrar() missing 1 required positional argument: 'onu'
+('dBm',)
+```
+
+A última linha é a que pega gente experiente: `"dBm"` foi para `extras`, não para `unidade`.
+
+**10. A barreira `*`.** Crie `sokw.py`:
+
+```python
+def desligar(onu, *, confirmado=False):
+    if not confirmado:
+        return f"{onu}: recusado, falta confirmar"
+    return f"{onu}: desligada"
+
+
+print(desligar("onu-07"))
+print(desligar("onu-07", confirmado=True))
+try:
+    print(desligar("onu-07", True))
+except TypeError as e:
+    print("TypeError:", e)
+```
+
+```bash
+python sokw.py
+```
+
+```text
+onu-07: recusado, falta confirmar
+onu-07: desligada
+TypeError: desligar() takes 1 positional argument but 2 were given
+```
+
+**11. Leia a assinatura pelo `inspect`.**
+
+```bash
+python -c "
+import inspect
+def registrar(onu, /, nivel, *extras, unidade='dBm', **meta):
+    pass
+sig = inspect.signature(registrar)
+print(sig)
+for nome, p in sig.parameters.items():
+    print(f'  {nome:<10} {p.kind}')
+"
+```
+
+```text
+(onu, /, nivel, *extras, unidade='dBm', **meta)
+  onu        POSITIONAL_ONLY
+  nivel      POSITIONAL_OR_KEYWORD
+  extras     VAR_POSITIONAL
+  unidade    KEYWORD_ONLY
+  meta       VAR_KEYWORD
+```
+
+As cinco categorias da @fig-ordem-parametros, nomeadas pelo próprio Python.
+
+**12. Espalhar na chamada.**
+
+```bash
+python -c "
+def alerta(onu, nivel, unidade='dBm'):
+    return f'{onu}: {nivel} {unidade}'
+args = ('onu-01', -19.5)
+kwargs = {'unidade': 'mW'}
+print(alerta(*args, **kwargs))
+linhas = [('onu-01', -19.5), ('onu-02', -31.2)]
+for linha in linhas:
+    print(alerta(*linha))
+"
+```
+
+```text
+onu-01: -19.5 mW
+onu-01: -19.5 dBm
+onu-02: -31.2 dBm
+```
+
+**13. O invólucro que repassa tudo.** Crie `repassa.py`:
+
+```python
+"""Um invólucro que repassa argumentos sem conhecer a assinatura de baixo."""
+
+import time
+
+
+def com_tempo(funcao, *args, **kwargs):
+    """Chama funcao(*args, **kwargs) e devolve (resultado, milissegundos)."""
+    inicio = time.perf_counter()
+    resultado = funcao(*args, **kwargs)
+    return resultado, (time.perf_counter() - inicio) * 1000
+
+
+def soma_lenta(a, b, atraso=0.05):
+    time.sleep(atraso)
+    return a + b
+
+
+valor, ms = com_tempo(soma_lenta, 2, 3)
+print(f"soma_lenta(2, 3) = {valor} em ~{ms:.0f} ms")
+valor, ms = com_tempo(soma_lenta, 2, 3, atraso=0.2)
+print(f"com atraso=0.2  = {valor} em ~{ms:.0f} ms")
+valor, ms = com_tempo(sorted, [3, 1, 2], reverse=True)
+print(f"sorted(...)     = {valor} em ~{ms:.2f} ms")
+```
+
+```bash
+python repassa.py
+```
+
+```text
+soma_lenta(2, 3) = 5 em ~50 ms
+com atraso=0.2  = 5 em ~200 ms
+sorted(...)     = [3, 2, 1] em ~0.01 ms
+```
+
+**14. Junte tudo num relatório configurável.** Crie `relatorio.py`:
+
+```python
+"""Formatador de relatorio com padroes seguros e opcoes nomeadas."""
+
+LARGURA = 46
+
+
+def formatar(onu, nivel, *, unidade="dBm", casas=1, marca=None):
+    """Uma linha de relatorio; marca destaca a linha quando fornecida."""
+    prefixo = "" if marca is None else f"{marca} "
+    medida = "sem leitura" if nivel is None else f"{nivel:.{casas}f} {unidade}"
+    return f"{prefixo}{onu}: {medida}"
+
+
+def relatorio(leituras, *, titulo="Niveis opticos", **estilo):
+    """Monta o relatorio inteiro; estilo e repassado para formatar()."""
+    linhas = [titulo.center(LARGURA, "="), ""]
+    for onu, nivel in leituras:
+        linhas.append(formatar(onu, nivel, **estilo))
+    linhas.append("=" * LARGURA)
+    return "\n".join(linhas)
+
+
+LEITURAS = [("onu-01", -19.5), ("onu-02", -31.234), ("onu-03", None)]
+
+print(relatorio(LEITURAS))
+print()
+print(relatorio(LEITURAS, titulo="Varredura noturna", casas=2, marca="*"))
+```
+
+```bash
+python relatorio.py
+```
+
+```text
+================Niveis opticos================
+
+onu-01: -19.5 dBm
+onu-02: -31.2 dBm
+onu-03: sem leitura
+==============================================
+
+==============Varredura noturna===============
+
+* onu-01: -19.50 dBm
+* onu-02: -31.23 dBm
+* onu-03: sem leitura
+==============================================
+```
+
+Todos os padrões são imutáveis (`None`, `1`, `"dBm"`), toda opção é só-nomeada, e o `**estilo` repassa para `formatar` o que `relatorio` não precisa conhecer. Se alguém escrever `casa=2` em vez de `casas=2`, o erro aparece na hora, como `unexpected keyword argument` — porque `formatar` **não** tem `**kwargs`. Essa é a diferença entre repassar e engolir.
+
+**15. Feche com `deactivate`.**
+
+## Resumo
+
+- O valor padrão é avaliado **uma vez**, quando o `def` executa, e fica guardado em `__defaults__`. Padrão mutável é estado compartilhado entre todas as chamadas.
+- A correção é `None` como sentinela e a criação do objeto no corpo da função.
+- Expressão viva no padrão (`time.time()`, `datetime.now()`) congela no instante do `import`.
+- Argumento nomeado permite pular parâmetros com padrão e reordenar; posicional depois de nomeado é `SyntaxError`.
+- `*args` recolhe os posicionais restantes numa tupla (vazia, nunca `None`); `**kwargs` recolhe os nomeados restantes num dicionário.
+- Na chamada, `*` e `**` fazem o inverso: espalham sequência e dicionário em argumentos.
+- A ordem é fixa: só-posicionais, `/`, comuns, `*args`, só-nomeados, `**kwargs`. `/` é 3.8+; `*` sozinho serve de barreira para forçar nome.
+- Parâmetro depois de um `*` é **só-nomeado** — o posicional extra vai para `*args` em silêncio.
+- `inspect.signature` mostra assinatura e categoria de cada parâmetro sem abrir o código.
