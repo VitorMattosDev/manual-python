@@ -20,15 +20,15 @@ O que falta não é disciplina de nomes: é **hierarquia**. Um módulo é um arq
 
 ```text
 telemetria/
-├── __init__.py
-├── coletor.py
-├── relatorio/
-│   ├── __init__.py
-│   └── texto.py
-└── sondas/
-    ├── __init__.py
-    ├── latencia.py
-    └── potencia.py
+    __init__.py
+    coletor.py
+    relatorio/
+        __init__.py
+        texto.py
+    sondas/
+        __init__.py
+        latencia.py
+        potencia.py
 ```
 
 Isso é um pacote com dois subpacotes. Os nomes ficam qualificados — `telemetria.sondas.potencia` — e a colisão com a biblioteca padrão desaparece por construção: um arquivo chamado `csv.py` dentro de `telemetria/` é `telemetria.csv`, e ninguém confunde os dois.
@@ -462,18 +462,18 @@ O `PYTHONPATH=src` acima é muleta de demonstração. A forma correta é `pip in
 
 ```text
 projeto/
-├── pyproject.toml
-├── README.md
-├── src/
-│   └── telemetria/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── coletor.py
-│       ├── limiares.toml
-│       ├── relatorio/
-│       └── sondas/
-└── tests/
-    └── test_coletor.py
+    pyproject.toml
+    README.md
+    src/
+        telemetria/
+            __init__.py
+            __main__.py
+            coletor.py
+            limiares.toml
+            relatorio/
+            sondas/
+    tests/
+        test_coletor.py
 ```
 
 `tests/` fora do pacote, sem `__init__.py` — os testes não são parte do que se distribui, e o Volume 9 trata deles.

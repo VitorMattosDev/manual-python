@@ -1,3 +1,772 @@
 # Ambientes virtuais: venv, pip e o isolamento de dependências {#sec-cap031}
 
-*(em elaboracao)*
+O tutorial dizia `pip install cowsay`. O Kali respondeu com um muro:
+
+```bash
+pip3 install cowsay
+```
+
+```text
+error: externally-managed-environment
+
+× This environment is externally managed
++-> To install Python packages system-wide, try apt install
+    python3-xyz, where xyz is the package you are trying to
+    install.
+
+    If you wish to install a non-Kali-packaged Python package,
+    create a virtual environment using python3 -m venv path/to/venv.
+    Then use path/to/venv/bin/python and path/to/venv/bin/pip. Make
+    sure you have python3-full installed.
+
+    If you wish to install a non-Kali-packaged Python application,
+    it may be easiest to use pipx install xyz, which will manage a
+    virtual environment for you. Make sure you have pipx installed.
+
+note: If you believe this is a mistake, please contact your Python installation
+or OS distribution provider. You can override this, at the risk of breaking your
+Python installation or OS, by passing --break-system-packages.
+hint: See PEP 668 for the detailed specification.
+```
+
+Essa mensagem é o assunto do capítulo inteiro. Ela não é um bug da distribuição nem excesso de zelo: é a resposta certa a um problema real, e a última linha diz onde a decisão foi tomada — a PEP 668, de 2021, adotada por Debian, Ubuntu, Kali, Fedora e pelo Homebrew.
+
+O motivo está em um número:
+
+```bash
+dpkg -l | grep -c '^ii  python3-'
+```
+
+```text
+529
+```
+
+Quinhentos e vinte e nove pacotes Python instalados pelo sistema, dos quais dependem `apt`, `ufw`, ferramentas de rede, scripts de inicialização e boa parte do Kali. Todos moram em `/usr/lib/python3/dist-packages` — a entrada 5 do `sys.path` que vimos no @sec-cap029. Se um `pip install` sobrescrever ali uma versão de `urllib3` que o `apt` esperava, quem quebra não é o seu projeto: é o gerenciador de pacotes da máquina, e consertá-lo sem ele funcionando é um domingo perdido.
+
+A solução tem trinta anos de maturidade e três linhas de comando.
+
+## O que é um ambiente virtual
+
+```bash
+python3 -m venv .venv
+ls -1 .venv
+```
+
+```text
+bin
+include
+lib
+lib64
+pyvenv.cfg
+```
+
+É um diretório. Não há registro global, não há banco de dados, não há daemon: um venv é uma pasta com uma cópia mínima da estrutura de uma instalação de Python. O arquivo que a define tem cinco linhas:
+
+```bash
+cat .venv/pyvenv.cfg
+```
+
+```text
+home = /usr/bin
+include-system-site-packages = false
+version = 3.13.12
+executable = /usr/bin/python3.13
+command = /usr/bin/python3 -m venv /home/vitor/lab31/.venv
+```
+
+`home` aponta para o Python que criou o ambiente — e é ele que vai continuar rodando. **O venv não copia o interpretador**: o `bin/python` é um link para `/usr/bin/python3.13`. O que o venv troca é o *contexto* desse interpretador — para onde ele olha atrás de pacotes e onde ele os instala.
+
+```bash
+.venv/bin/python -c "
+import sys, sysconfig
+print('executable   :', sys.executable)
+print('prefix       :', sys.prefix)
+print('base_prefix  :', sys.base_prefix)
+print('em venv?     ', sys.prefix != sys.base_prefix)
+print('site-packages:', sysconfig.get_path('purelib'))
+"
+```
+
+```text
+executable   : /home/vitor/lab31/.venv/bin/python
+prefix       : /home/vitor/lab31/.venv
+base_prefix  : /usr
+em venv?      True
+site-packages: /home/vitor/lab31/.venv/lib/python3.13/site-packages
+```
+
+Aí está o mecanismo inteiro. Ao iniciar, o Python descobre `sys.prefix` a partir do caminho do executável — e, achando um `pyvenv.cfg` ao lado, adota o diretório do venv como prefixo, deixando o prefixo original em `sys.base_prefix`. O `site-packages` calculado a partir do novo prefixo é um diretório vazio, seu, gravável sem `sudo`. A biblioteca padrão continua vindo de `/usr/lib/python3.13`, porque `home` diz onde ela está.
+
+Comparado com o Python do sistema, onde os dois prefixos coincidem:
+
+```text
+prefix      : /usr
+base_prefix : /usr
+em venv?     False
+```
+
+Essa comparação é, aliás, a forma canônica de um script perguntar "estou num venv?".
+
+::: {#fig-anatomia-venv}
+```{.tikz}
+%%| filename: anatomia-venv
+%%| alt: Anatomia de um ambiente virtual - o diretorio venv com pyvenv.cfg, bin com links para o interpretador do sistema e site-packages proprio, e o que a ativacao muda no PATH
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=5.6cm, align=left, minimum height=0.6cm,
+             font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  sis/.style={draw=manualgray, thick, rounded corners, fill=manualgray!8,
+              text width=5.0cm, align=left, minimum height=0.6cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  vaz/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+              text width=5.6cm, align=left, minimum height=0.6cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  fl/.style={->,>=stealth, thick, manualblue},
+  fg/.style={->,>=stealth, thick, manualgreen!60!black}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.7, 2.0) rectangle (14.7,-5.4);
+
+  \node[hd] at (0.0, 1.5) {o venv, em disco};
+  \node[hd] at (8.6, 1.5) {o Python do sistema};
+
+  \node[bx]  at (0.0, 0.8) {.venv/pyvenv.cfg};
+  \node[lb, text width=2.4cm] at (5.9, 0.8) {5 linhas: quem criou e qual versão};
+
+  \node[bx]  at (0.0, 0.0) {.venv/bin/python};
+  \node[sis] at (8.6, 0.0) {/usr/bin/python3.13};
+  \node[lb, text width=5.0cm, anchor=north west] at (8.6,-0.5)
+       {o binário de verdade --- o venv só aponta};
+
+  \node[vaz] at (0.0,-1.4) {.venv/lib/python3.13/site-packages/};
+  \node[lb, text width=2.4cm] at (5.9,-1.4) {vazio no início; seu, gravável};
+
+  \node[sis] at (8.6,-2.2) {/usr/lib/python3.13/};
+  \node[lb, text width=5.0cm, anchor=north west] at (8.6,-2.7)
+       {biblioteca padrão --- continua vindo daqui};
+
+  \node[sis] at (8.6,-3.6) {/usr/lib/python3/dist-packages/};
+  \node[lb, text width=5.0cm, anchor=north west] at (8.6,-4.1)
+       {os 529 pacotes do \texttt{apt} --- \textbf{fora} do alcance do venv};
+
+  \draw[fl] (5.7, 0.0) -- (8.4, 0.0);
+  \draw[fl] (5.7,-1.9) .. controls (7.4,-1.9) and (7.4,-2.2) .. (8.4,-2.2);
+  \draw[fg] (2.8,-0.35) -- (2.8,-1.1);
+
+  \node[lb, text width=14.0cm, anchor=north west] at (-0.3,-4.6)
+    {\texttt{source .venv/bin/activate} não muda nada disso: só põe
+     \texttt{.venv/bin} na frente do \texttt{PATH} e define \texttt{VIRTUAL\_ENV}.
+     Chamar \texttt{.venv/bin/python} direto tem exatamente o mesmo efeito.};
+\end{tikzpicture}
+```
+Um venv é um prefixo alternativo: interpretador emprestado, `site-packages` próprio.
+:::
+
+O tamanho de um ambiente recém-criado, com 865 arquivos, é modesto:
+
+```bash
+du -sh .venv && find .venv -type f | wc -l
+```
+
+```text
+12M	.venv
+865
+```
+
+Doze megabytes por projeto é o preço do isolamento — e é barato. Quase tudo é o `pip`, a única coisa que vem instalada:
+
+```bash
+.venv/bin/pip list
+```
+
+```text
+Package Version
+------- -------
+pip     26.1.1
+```
+
+(Até o Python 3.11, `setuptools` e `wheel` vinham junto. Desde o 3.12 não vêm mais, e código antigo que fazia `import setuptools` sem declará-lo como dependência passou a falhar em ambiente novo — vale lembrar disso ao ressuscitar projeto parado.)
+
+## Ativar, e por que dá para não ativar
+
+```bash
+source .venv/bin/activate
+```
+
+O que esse comando faz cabe em três efeitos:
+
+```text
+depois: /home/vitor/lab31/.venv/bin/python | /home/vitor/lab31/.venv/bin/pip
+VIRTUAL_ENV=/home/vitor/lab31/.venv
+PATH comeca com: /home/vitor/lab31/.venv/bin
+```
+
+Ele põe `.venv/bin` na frente do `PATH`, define `VIRTUAL_ENV` e altera o prompt. Só. Não há mágica de processo, não há variável secreta: é o `PATH` fazendo com que `python` e `pip` resolvam para os do venv. O `deactivate` desfaz — é uma função de shell que o próprio `activate` definiu, guardando o `PATH` anterior.
+
+Consequência prática que economiza muita dor: **ativar é conveniência, não requisito**. `.venv/bin/python script.py` funciona igual, sem ativar nada, e é a forma certa de chamar código de venv em `crontab`, unidade `systemd`, `Makefile` ou hook de Git — lugares onde não há shell interativo para ativar coisa alguma.
+
+No Windows o arquivo é outro (`.venv\Scripts\activate.ps1` no PowerShell, `activate.bat` no `cmd`) e o diretório é `Scripts` em vez de `bin`, mas o mecanismo é o mesmo. Se o PowerShell recusar o script por política de execução, `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` resolve para aquela sessão. E vale a nota do @sec-cap003: ali o interpretador é `python`, não `python3`.
+
+## `pip` de verdade
+
+Com o ambiente ativo, o comando do tutorial finalmente funciona:
+
+```bash
+pip install cowsay
+```
+
+```text
+Collecting cowsay
+  Using cached cowsay-6.1-py3-none-any.whl.metadata (5.6 kB)
+Using cached cowsay-6.1-py3-none-any.whl (25 kB)
+Installing collected packages: cowsay
+Successfully installed cowsay-6.1
+```
+
+Onde foi parar:
+
+```bash
+pip show cowsay
+```
+
+```text
+Name: cowsay
+Version: 6.1
+Summary: The famous cowsay for GNU/Linux is now available for python
+Home-page: https://github.com/VaasuDevanS/cowsay-python
+Author: Vaasudevan Srinivasan
+License: GNU-GPL
+Location: /home/vitor/lab31/.venv/lib/python3.13/site-packages
+Requires:
+Required-by:
+```
+
+`Location` é o `site-packages` do venv — nada foi escrito fora do diretório do projeto. E o pacote trouxe também um comando de terminal, instalado em `.venv/bin`:
+
+```bash
+cowsay -t "onu-00042 caiu"
+```
+
+```text
+  ______________
+| onu-00042 caiu |
+  ==============
+              \
+               \
+                 ^__^
+                 (oo)\_______
+                 (__)\       )\/\
+                     ||----w |
+                     ||     ||
+```
+
+O isolamento se demonstra saindo dele:
+
+```bash
+python -c "import cowsay; print('dentro do venv: ok')"
+deactivate
+python3 -c "import cowsay"
+```
+
+```text
+dentro do venv: ok
+ModuleNotFoundError: No module named 'cowsay'
+```
+
+Mesmo interpretador, mesma máquina, mesmo segundo: dentro do ambiente o pacote existe; fora, não. É o `sys.path` mudando com o prefixo, e nada além disso.
+
+## Dependências transitivas
+
+Poucos pacotes vêm sozinhos:
+
+```bash
+pip install "rich==13.7.1"
+```
+
+```text
+Collecting rich==13.7.1
+Collecting markdown-it-py>=2.2.0 (from rich==13.7.1)
+Collecting pygments<3.0.0,>=2.13.0 (from rich==13.7.1)
+Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich==13.7.1)
+Installing collected packages: pygments, mdurl, markdown-it-py, rich
+Successfully installed markdown-it-py-4.2.0 mdurl-0.1.2 pygments-2.20.0 rich-13.7.1
+```
+
+Você pediu um pacote e recebeu quatro. `rich` precisa de `markdown-it-py` e `pygments`; `markdown-it-py` precisa de `mdurl`. As restrições viajam nos metadados e o resolvedor do `pip` procura um conjunto de versões que satisfaça todas ao mesmo tempo.
+
+Dá para ler esses metadados sem sair do Python, com `importlib.metadata`:
+
+```python
+from importlib.metadata import requires, version
+
+for p in ("rich", "cowsay"):
+    print(p, version(p), "->", requires(p))
+```
+
+```text
+rich 13.7.1 -> ['ipywidgets (>=7.5.1,<9) ; extra == "jupyter"', 'markdown-it-py (>=2.2.0)', 'pygments (>=2.13.0,<3.0.0)', 'typing-extensions (>=4.0.0,<5.0) ; python_version < "3.9"']
+cowsay 6.1 -> None
+```
+
+Duas coisas aparecem aí e valem para o @sec-cap032: `extra == "jupyter"` é dependência **opcional**, instalada só com `pip install "rich[jupyter]"`; e `python_version < "3.9"` é um **marcador de ambiente**, que faz a dependência valer só onde a condição bate. No nosso 3.13, `typing-extensions` não foi instalado — e é por isso que "as dependências" de um pacote não são uma lista fixa, mas uma função da plataforma.
+
+Os operadores de versão que você vai encontrar:
+
+| forma | significa | quando usar |
+|---|---|---|
+| `rich` | qualquer versão | quase nunca |
+| `rich==13.7.1` | exatamente esta | arquivo de trava |
+| `rich>=13,<14` | faixa | dependência de biblioteca |
+| `rich~=13.7` | `>=13.7,<14` | atalho da faixa acima |
+| `rich!=13.7.0` | tudo menos esta | contornar versão com defeito |
+
+## `requirements.txt` e a reprodutibilidade
+
+`pip freeze` despeja o que está instalado, no formato que o `pip` lê de volta:
+
+```bash
+pip freeze
+```
+
+```text
+cowsay==6.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
+Pygments==2.20.0
+rich==13.7.1
+```
+
+E aqui mora a confusão mais comum do ecossistema. Esses cinco pacotes **não** são as dependências do seu projeto: são o resultado de instalá-las. Misturar as duas coisas num arquivo só é o que produz aquele `requirements.txt` de duzentas linhas que ninguém sabe mais para que serve.
+
+A separação que funciona são dois arquivos com papéis diferentes:
+
+```text
+# requirements.txt - o que EU peço, com a intenção
+cowsay
+rich==13.7.1
+```
+
+```text
+# requirements.lock - o que o resolvedor DECIDIU, com tudo
+cowsay==6.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
+Pygments==2.20.0
+rich==13.7.1
+```
+
+O primeiro é escrito à mão e revisado em *code review*; o segundo é gerado (`pip freeze > requirements.lock`) e commitado para que outra máquina reproduza o ambiente exato. A reprodução:
+
+```bash
+python3 -m venv .venv-copia
+.venv-copia/bin/pip install -r requirements.lock
+diff <(.venv/bin/pip freeze) <(.venv-copia/bin/pip freeze) && echo "identicos"
+```
+
+```text
+identicos
+```
+
+Isso resolve 90% dos casos, e é honesto dizer o que os outros 10% exigem: o `.lock` do `pip freeze` não guarda **hashes** (então não protege contra um pacote adulterado no caminho), não guarda **de onde** veio cada pacote, não distingue dependência de desenvolvimento da de produção, e é específico da plataforma onde foi gerado — congelar num Linux e restaurar num Windows pode instalar coisas diferentes. É exatamente esse vazio que `uv`, `Poetry` e `pip-tools` vieram preencher, com arquivos de trava multiplataforma e com hash. É o @sec-cap033.
+
+Enquanto isso, `pip` sozinho ainda dá dois passos úteis: `pip install --dry-run` mostra o que aconteceria sem tocar em nada,
+
+```bash
+pip install --dry-run cowsay
+```
+
+```text
+Collecting cowsay
+  Using cached cowsay-6.1-py3-none-any.whl.metadata (5.6 kB)
+Would install cowsay-6.1
+```
+
+e `pip install --require-hashes -r requirements.lock` recusa a instalação se algum hash não estiver declarado no arquivo — a base do que ferramentas de auditoria automatizam.
+
+## O venv é descartável (e por que isso importa)
+
+Um ambiente virtual não é património: é cache. Ele se reconstrói em segundos a partir do arquivo de dependências, e a prova de que não deve ser tratado como parte do projeto é o que acontece ao movê-lo de lugar:
+
+```bash
+head -1 .venv/bin/pip
+mv .venv .venv-movido
+.venv-movido/bin/pip --version
+```
+
+```text
+#!/home/vitor/lab31/.venv/bin/python3
+bash: .venv-movido/bin/pip: /home/vitor/lab31/.venv/bin/python3: bad interpreter: No such file or directory
+```
+
+Os comandos instalados guardam o caminho absoluto do interpretador no shebang. Mover o diretório quebra todos eles de uma vez — e, pelo mesmo motivo, **um venv nunca funciona em outra máquina**, mesmo copiado inteiro. (Curiosidade útil: `.venv-movido/bin/python` continua rodando, porque é um link simbólico para o Python do sistema, não um script com shebang.)
+
+Daí as regras que se seguem sem discussão:
+
+- **`.venv/` no `.gitignore`.** Sempre. O que se versiona é o `requirements.txt`/`.lock`, não o resultado dele.
+- **Corrigir venv quebrado é `rm -rf .venv` e recriar.** Não perca a tarde investigando.
+- **Um venv por projeto**, dentro do próprio projeto, com o nome `.venv` — é o que VS Code, PyCharm, `uv`, `pytest` e a maioria das ferramentas procuram sozinhas.
+- **Nunca copie um venv** para outro caminho ou máquina; copie o arquivo de dependências.
+
+## Três casos que aparecem
+
+**Enxergar os pacotes do sistema.** `--system-site-packages` cria um ambiente que também vê o `dist-packages`:
+
+```bash
+python3 -m venv --system-site-packages .venv-aberto
+.venv-aberto/bin/python -c "import rich; print(rich.__file__)"
+```
+
+```text
+/usr/lib/python3/dist-packages/rich/__init__.py
+```
+
+É útil quando o sistema tem algo caro de compilar (`python3-numpy`, `python3-gi`, ligações de GTK ou de GDAL) e você quer aproveitar em vez de recompilar. O custo é abrir mão de metade do isolamento: o ambiente passa a depender do que a máquina tem instalado, e o problema volta a ser "na minha máquina funciona".
+
+**`pip` desatualizado.** O `pip` que vem no venv é o embutido no interpretador, que pode estar velho:
+
+```text
+[notice] A new release of pip is available: 26.1.1 -> 26.2.1
+```
+
+`python3 -m venv --upgrade-deps .venv` já cria o ambiente com o `pip` mais recente do PyPI, o que evita o aviso em todo comando.
+
+**`pip` ou `python -m pip`.** Dentro de um venv ativo, os dois são o mesmo programa. Fora dele, ou em máquina com vários Pythons, `pip` pode ser o de outra instalação — e você instala um pacote onde não queria, sem nenhum erro. `python -m pip` é sempre o `pip` **daquele** interpretador, por construção:
+
+```bash
+.venv/bin/python -m pip --version
+```
+
+```text
+pip 26.1.1 from /home/vitor/lab31/.venv/lib/python3.13/site-packages/pip (python 3.13)
+```
+
+Em script, em CI e em documentação, use a forma longa. Ela nunca erra o alvo.
+
+## Onde instalar o quê
+
+::: {#fig-onde-instalar}
+```{.tikz}
+%%| filename: onde-instalar
+%%| alt: Arvore de decisao sobre onde instalar um pacote Python - apt para dependencia do sistema, pipx para aplicacao de linha de comando, venv para biblioteca de projeto, e nunca sudo pip
+\begin{tikzpicture}[
+  perg/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+               text width=5.8cm, align=left, minimum height=0.7cm,
+               font=\scriptsize, anchor=west, inner xsep=7pt},
+  fer/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+              text width=3.5cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  nao/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!12,
+              text width=3.5cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.8, 1.8) rectangle (14.8,-4.9);
+
+  \node[hd] at (0.0, 1.3) {o que você quer instalar};
+  \node[hd] at (6.7, 1.3) {a ferramenta};
+  \node[hd] at (10.9, 1.3) {onde vai parar};
+
+  \node[perg] at (0.0, 0.5) {biblioteca que o \textbf{seu projeto} importa};
+  \node[fer]  at (8.2, 0.5) {venv + pip};
+  \node[lb, text width=3.9cm] at (10.9, 0.5) {\texttt{.venv/} do projeto};
+
+  \node[perg] at (0.0,-0.6) {aplicação de terminal (\texttt{ruff}, \texttt{httpie},
+                             \texttt{yt-dlp})};
+  \node[fer]  at (8.2,-0.6) {pipx install};
+  \node[lb, text width=3.9cm] at (10.9,-0.6) {venv próprio em
+                                              \texttt{\textasciitilde/.local}};
+
+  \node[perg] at (0.0,-1.7) {dependência de uma ferramenta \textbf{do sistema}};
+  \node[fer]  at (8.2,-1.7) {apt install python3-x};
+  \node[lb, text width=3.9cm] at (10.9,-1.7) {\texttt{/usr/lib/python3/dist-packages}};
+
+  \node[perg] at (0.0,-2.8) {experimento de dez segundos, descartável};
+  \node[fer]  at (8.2,-2.8) {uvx / pipx run};
+  \node[lb, text width=3.9cm] at (10.9,-2.8) {ambiente temporário};
+
+  \node[perg] at (0.0,-3.9) {qualquer coisa, com pressa};
+  \node[nao]  at (8.2,-3.9) {sudo pip install};
+  \node[lb, text width=3.9cm, text=manualred] at (10.9,-3.9)
+       {em cima do sistema --- é o que a PEP 668 barra};
+
+  \foreach \yy in {0.5,-0.6,-1.7,-2.8,-3.9}
+    \draw[fl] (5.9,\yy) -- (6.4,\yy);
+\end{tikzpicture}
+```
+A pergunta não é "como instalo", é "de quem é esse pacote".
+:::
+
+Sobre a saída de emergência que a mensagem de erro oferece: `--break-system-packages` faz exatamente o que o nome diz. Existe para conserto de sistema já quebrado e para contêiner descartável onde não há nada a preservar. Em máquina de trabalho, é a linha que você digita hoje e lamenta em três meses, quando o `apt` parar de funcionar por causa de uma versão de `urllib3`. `sudo pip install` é a mesma coisa com privilégio, e não tem justificativa nenhuma.
+
+## 🐍 Jeito Pythônico
+
+**Um venv por projeto, chamado `.venv`, no `.gitignore`.** O fluxo completo de um projeto novo cabe em quatro linhas:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip freeze > requirements.lock
+```
+
+**`python -m pip`, nunca `pip` solto**, em script e em documentação.
+
+**Duas listas, dois papéis**: `requirements.txt` escrito à mão com as dependências diretas; `requirements.lock` gerado por `pip freeze`. Quem confunde as duas acaba com um arquivo que ninguém ousa editar.
+
+```bash
+# antipadrão: um arquivo só, gerado, com tudo dentro
+pip freeze > requirements.txt   # 200 linhas, 6 delas suas
+```
+
+**Nunca `sudo pip`, nunca `--break-system-packages`** em máquina que você usa para trabalhar.
+
+**Ferramenta de linha de comando vai com `pipx`**, não no venv do projeto — `ruff`, `httpie` e `black` não são dependências do seu código, e instalá-las junto polui o `requirements.lock` de todo mundo.
+
+**Não versione o venv, não mova o venv, não conserte o venv.** Recrie.
+
+**Fixe versão em aplicação, use faixa em biblioteca.** Aplicação quer reprodutibilidade (`==`); biblioteca quer conviver com as escolhas de quem a usa (`>=13,<14`). Fixar versão exata numa biblioteca é a receita de conflito insolúvel para o resolvedor.
+
+Sobre versões:
+
+- **Python 3.3** — `venv` entrou na biblioteca padrão, substituindo o `virtualenv` externo (que ainda existe, é mais rápido e suporta Pythons antigos, mas raramente é necessário hoje).
+- **Python 3.9** — `importlib.metadata` estabilizou, tornando `pkg_resources` desnecessário para descobrir versões e dependências instaladas.
+- **Python 3.11** — `venv` passou a criar o ambiente bem mais rápido; PEP 668 começou a ser adotada pelas distribuições nesse período.
+- **Python 3.12** — `setuptools` e `wheel` deixaram de ser instalados por padrão em venv novo; projetos que dependiam disso implicitamente precisaram declarar.
+- **Python 3.13** — em ambientes com *free-threading* (a build sem GIL), pacotes com extensão em C precisam de roda própria; verifique `sys._is_gil_enabled()` antes de culpar o `pip`.
+
+## 🧪 Laboratório
+
+Objetivo: bater no muro da PEP 668, criar um ambiente, ver o que muda no `sys.prefix`, instalar com e sem isolamento, gerar e reproduzir um arquivo de trava, e provar que o venv é descartável.
+
+**1. O muro.**
+
+```bash
+mkdir -p ~/lab31 && cd ~/lab31
+pip3 install cowsay
+```
+
+```text
+error: externally-managed-environment
+
+× This environment is externally managed
++-> To install Python packages system-wide, try apt install
+    python3-xyz, where xyz is the package you are trying to install.
+```
+
+**2. O tamanho do problema.**
+
+```bash
+dpkg -l | grep -c '^ii  python3-'
+python3 -c "import rich; print(rich.__file__)"
+```
+
+```text
+529
+/usr/lib/python3/dist-packages/rich/__init__.py
+```
+
+Quinhentos e vinte e nove pacotes que o `apt` controla, e que um `pip install` descuidado sobrescreveria.
+
+**3. Crie o ambiente.**
+
+```bash
+python3 -m venv .venv
+ls -1 .venv
+cat .venv/pyvenv.cfg
+du -sh .venv
+```
+
+```text
+bin
+include
+lib
+lib64
+pyvenv.cfg
+home = /usr/bin
+include-system-site-packages = false
+version = 3.13.12
+executable = /usr/bin/python3.13
+command = /usr/bin/python3 -m venv /home/vitor/lab31/.venv
+12M	.venv
+```
+
+**4. Os dois prefixos.**
+
+```bash
+.venv/bin/python -c "
+import sys
+print('prefix     :', sys.prefix)
+print('base_prefix:', sys.base_prefix)
+print('em venv?   ', sys.prefix != sys.base_prefix)
+"
+python3 -c "import sys; print('em venv?   ', sys.prefix != sys.base_prefix)"
+```
+
+```text
+prefix     : /home/vitor/lab31/.venv
+base_prefix: /usr
+em venv?    True
+em venv?    False
+```
+
+**5. Ative e observe o `PATH`.**
+
+```bash
+source .venv/bin/activate
+which python
+echo "$VIRTUAL_ENV"
+echo "$PATH" | cut -d: -f1
+```
+
+```text
+/home/vitor/lab31/.venv/bin/python
+/home/vitor/lab31/.venv
+/home/vitor/lab31/.venv/bin
+```
+
+**6. Instale e confirme onde foi.**
+
+```bash
+python -m pip install cowsay
+python -m pip show cowsay | grep Location
+cowsay -t "onu-00042 caiu"
+```
+
+```text
+Successfully installed cowsay-6.1
+Location: /home/vitor/lab31/.venv/lib/python3.13/site-packages
+  ______________
+| onu-00042 caiu |
+  ==============
+              \
+               \
+                 ^__^
+                 (oo)\_______
+                 (__)\       )\/\
+                     ||----w |
+                     ||     ||
+```
+
+**7. Prove o isolamento.**
+
+```bash
+python -c "import cowsay; print('dentro: ok')"
+deactivate
+python3 -c "import cowsay"
+```
+
+```text
+dentro: ok
+ModuleNotFoundError: No module named 'cowsay'
+```
+
+**8. Dependências transitivas.**
+
+```bash
+source .venv/bin/activate
+python -m pip install "rich==13.7.1"
+python -m pip freeze
+```
+
+```text
+Successfully installed markdown-it-py-4.2.0 mdurl-0.1.2 pygments-2.20.0 rich-13.7.1
+cowsay==6.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
+Pygments==2.20.0
+rich==13.7.1
+```
+
+Você pediu dois pacotes e o arquivo tem cinco linhas.
+
+**9. As duas listas.** Escreva `requirements.txt` à mão:
+
+```text
+# dependencias diretas do coletor de telemetria
+cowsay
+rich==13.7.1
+```
+
+E gere a trava:
+
+```bash
+python -m pip freeze > requirements.lock
+wc -l requirements.txt requirements.lock
+```
+
+```text
+  3 requirements.txt
+  5 requirements.lock
+```
+
+**10. Reproduza noutro ambiente.**
+
+```bash
+deactivate
+python3 -m venv .venv-copia
+.venv-copia/bin/pip install -q -r requirements.lock
+diff <(.venv/bin/pip freeze) <(.venv-copia/bin/pip freeze) && echo "identicos"
+```
+
+```text
+identicos
+```
+
+**11. Quebre o venv de propósito.**
+
+```bash
+head -1 .venv/bin/pip
+mv .venv .venv-movido
+.venv-movido/bin/pip --version
+.venv-movido/bin/python -c "print('o python ainda roda')"
+mv .venv-movido .venv
+```
+
+```text
+#!/home/vitor/lab31/.venv/bin/python3
+bash: .venv-movido/bin/pip: /home/vitor/lab31/.venv/bin/python3: bad interpreter: No such file or directory
+o python ainda roda
+```
+
+O shebang com caminho absoluto é o motivo de venv não ser portátil.
+
+**12. O ambiente aberto.**
+
+```bash
+python3 -m venv --system-site-packages .venv-aberto
+.venv-aberto/bin/python -c "import rich; print(rich.__file__)"
+.venv/bin/python -c "import rich; print(rich.__file__)"
+```
+
+```text
+/usr/lib/python3/dist-packages/rich/__init__.py
+/home/vitor/lab31/.venv/lib/python3.13/site-packages/rich/__init__.py
+```
+
+Mesmo comando, dois ambientes, dois `rich` diferentes — um do sistema, um seu.
+
+**13. Limpe.**
+
+```bash
+rm -rf .venv .venv-copia .venv-aberto
+```
+
+Três diretórios apagados, nenhum dado perdido: é para isso que existe o `requirements.lock`.
+
+## Resumo
+
+- `error: externally-managed-environment` (PEP 668) não é obstáculo a contornar: é a distribuição protegendo os 529 pacotes Python dos quais o sistema depende.
+- Um venv é um diretório com `pyvenv.cfg`, um link para o interpretador do sistema e um `site-packages` vazio e gravável. Ele muda `sys.prefix`, mantém `sys.base_prefix`, e é essa diferença que o define.
+- `activate` só mexe no `PATH` e em `VIRTUAL_ENV`. Chamar `.venv/bin/python` direto é equivalente — e é a forma certa em `cron`, `systemd` e CI.
+- `pip install` num venv escreve só dentro do projeto; fora dele, o mesmo `import` falha. É todo o isolamento que existe, e basta.
+- Um pacote pedido traz os que ele precisa: `requirements.txt` guarda o que você pediu, `requirements.lock` (gerado por `pip freeze`) guarda o que o resolvedor decidiu. São arquivos diferentes com donos diferentes.
+- `pip freeze` não guarda hash, origem nem plataforma — as travas de verdade são assunto do @sec-cap033.
+- Venv não é portátil: os comandos instalados guardam o caminho absoluto no shebang. Não versione, não mova, não conserte: recrie.
+- `python -m pip` acerta o interpretador sempre; `pip` solto, não. `sudo pip` e `--break-system-packages` não têm lugar em máquina de trabalho.

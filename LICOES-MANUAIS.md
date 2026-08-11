@@ -51,6 +51,7 @@ YAML de referência: ver `.github/workflows/publish.yml` deste repositório.
 - **Dunder e asterisco em prosa viram formatação Markdown.** `__init__`, `__name__`, `*args`, `**kwargs` fora de crase são lidos como ênfase: os underscores/asteriscos somem e o miolo sai em negrito. Vale para título, legenda de figura, item de lista e linha de ROADMAP. Sempre em `code` inline.
 - **Underscore em texto corrido quebra o PDF.** `snake_case` fora de crase vira subscrito no LaTeX (`Missing $ inserted` ou, pior, sai renderizado errado sem erro). Identificador sempre em crase.
 - **Linha de código longa estoura a caixa no PDF.** O `fvextra` com `breaklines` no `include-in-header` resolve a maioria, mas linha sem espaço (URL, string longa, cadeia de métodos) ainda vaza. Quebrar o exemplo à mão em até ~78 colunas.
+- **Caractere de desenho de caixa some no PDF, sem erro.** Árvore de diretórios com `├── │ └──` e saída de terminal com `╰─>` renderizam no HTML e **desaparecem** no PDF: o `xelatex` só emite `Missing character: There is no ├ (U+251C) in font [lmmono10-regular]` no log, que o Quarto não mostra, e o build fica verde com a árvore mutilada. Verificado com `pypdf`: zero ocorrências no texto extraído. Usar indentação ASCII pura em árvore de diretórios. (`×`, `→`, `•` e aspas curvas **existem** na fonte e podem ficar.)
 - **Bloco de código dentro de callout precisa de cerca maior.** Um `:::` com ```` ``` ```` dentro fecha errado; usar ````` ```` ````` de quatro crases na cerca externa quando o conteúdo tiver crases.
 
 ## TikZ
