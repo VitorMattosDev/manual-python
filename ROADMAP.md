@@ -36,7 +36,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 018** - Definindo funções: parâmetros, argumentos e retorno - `vol03/cap018-definindo-funcoes-parametros-argumentos-e.qmd`
 - [x] **cap 019** - Argumentos nomeados, valores padrão, `*args` e `**kwargs` - `vol03/cap019-argumentos-nomeados-valores-padrao-args-e.qmd`
 - [x] **cap 020** - Escopo, closures e a regra LEGB - `vol03/cap020-escopo-closures-e-a-regra-legb.qmd`
-- [ ] **cap 021** - Funções como objetos: lambda, map, filter e ordem superior - `vol03/cap021-funcoes-como-objetos-lambda-map-filter-e.qmd`
+- [x] **cap 021** - Funções como objetos: lambda, map, filter e ordem superior - `vol03/cap021-funcoes-como-objetos-lambda-map-filter-e.qmd`
 
 ### Volume 4 — Estruturas de Dados Nativas
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (20 concluidos).
+**Total:** 104 capitulos em 16 volumes (21 concluidos).
 

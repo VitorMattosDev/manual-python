@@ -1,3 +1,893 @@
 # Funções como objetos: lambda, map, filter e ordem superior {#sec-cap021}
 
-*(em elaboracao)*
+O console de operação precisa despachar comandos para funções. A ideia é a certa — uma tabela em vez de uma escada de `elif`, como no @sec-cap015 —, e a execução tem um caractere a mais:
+
+```python
+def reiniciar(onu):
+    return f"{onu}: reiniciada"
+
+
+def desligar(onu):
+    return f"{onu}: desligada"
+
+
+ACOES = {
+    "reiniciar": reiniciar("onu-01"),
+    "desligar": desligar("onu-01"),
+}
+
+print("tabela montada:", ACOES)
+print(ACOES["reiniciar"]("onu-07"))
+```
+
+```text
+tabela montada: {'reiniciar': 'onu-01: reiniciada', 'desligar': 'onu-01: desligada'}
+Traceback (most recent call last):
+  File "/home/vitor/lab21/despacho_ruim.py", line 15, in <module>
+    print(ACOES["reiniciar"]("onu-07"))
+          ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+TypeError: 'str' object is not callable
+```
+
+A tabela não guardou funções: guardou **resultados**. Os parênteses em `reiniciar("onu-01")` chamaram a função ali mesmo, na linha do dicionário, e o que ficou na tabela foi a string devolvida. Pior: se `reiniciar` fizesse o que o nome diz, as duas ONUs teriam sido reiniciadas na hora do `import` — antes de qualquer comando.
+
+A correção é tirar os parênteses:
+
+```python
+ACOES = {
+    "reiniciar": reiniciar,
+    "desligar": desligar,
+    "diagnosticar": diagnosticar,
+}
+
+print("tabela montada:", {k: v.__name__ for k, v in ACOES.items()})
+for comando in ("reiniciar", "diagnosticar", "voar"):
+    acao = ACOES.get(comando)
+    if acao is None:
+        print(f"{comando}: comando desconhecido")
+        continue
+    print(acao("onu-07"))
+```
+
+```text
+tabela montada: {'reiniciar': 'reiniciar', 'desligar': 'desligar', 'diagnosticar': 'diagnosticar'}
+onu-07: reiniciada
+onu-07: diagnostico em andamento
+voar: comando desconhecido
+```
+
+Este capítulo fecha o Volume 3 com o que essa diferença de dois caracteres destrava: função guardada em estrutura de dados, passada como argumento, devolvida por outra função — e as ferramentas que a biblioteca padrão oferece para trabalhar assim.
+
+## O nome refere, os parênteses chamam
+
+```python
+def classificar(nivel):
+    return "critico" if nivel < -28 else "normal"
+
+
+print(classificar)
+print(classificar(-31.0))
+print(callable(classificar), callable(classificar(-31.0)))
+apelido = classificar
+print(apelido(-31.0), apelido is classificar, apelido.__name__)
+```
+
+```text
+<function classificar at 0x730205c2fd80>
+critico
+True False
+critico True classificar
+```
+
+O endereço muda a cada execução; o resto não. `classificar` é um objeto — chamável, atribuível, com atributos —, e `classificar(-31.0)` é o resultado de chamá-lo, que aqui é uma string comum.
+
+::: {#fig-referencia-chamada}
+```{.tikz}
+%%| filename: referencia-chamada
+%%| alt: A diferenca entre referenciar uma funcao e chama-la: sem parenteses o nome aponta para o objeto funcao, com parenteses o que fica e o valor devolvido
+\begin{tikzpicture}[
+  nm/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!12,
+             minimum width=3.4cm, minimum height=0.62cm,
+             font=\ttfamily\small},
+  fo/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+             text width=3.2cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  vl/.style={draw=manualred, very thick, rounded corners, fill=manualred!12,
+             text width=3.2cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, very thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.4, 2.6) rectangle (14.4,-4.6);
+
+  \node[lb, font=\small\bfseries, text=manualgreen] at (2.6, 2.1) {sem parênteses};
+  \node[lb, font=\small\bfseries, text=manualred]   at (10.4, 2.1) {com parênteses};
+
+  \node[nm] (n1) at (2.6, 1.2) {classificar};
+  \node[nm] (n2) at (10.4, 1.2) {classificar(-31.0)};
+
+  \node[fo] (o1) at (2.6,-0.4) {objeto\\ \textbf{function}\\ (chamável)};
+  \node[vl] (o2) at (10.4,-0.4) {'critico'\\ \textbf{str}\\ (não chamável)};
+
+  \draw[fl] (n1) -- (o1) node[lb, midway, right=3pt] {refere};
+  \draw[fl] (n2) -- (o2) node[lb, midway, right=3pt] {avalia e guarda};
+
+  \node[lb, text width=4.4cm] at (2.6,-2.3)
+    {é isto que vai para a tabela de despacho, para o \texttt{key=} e para o
+     argumento de \texttt{map}};
+  \node[lb, text width=4.4cm, text=manualred] at (10.4,-2.3)
+    {chamar cedo demais: o efeito acontece no \texttt{import} e a tabela guarda
+     lixo};
+
+  \node[lb, text width=13.8cm] at (6.4,-3.9)
+    {\texttt{callable(obj)} responde qual dos dois você tem em mãos. E o erro
+     que aparece quando se confunde --- \texttt{'str' object is not callable}
+     --- fala do \textbf{resultado}, nunca da função, que é o que torna esse bug
+     demorado de achar.};
+\end{tikzpicture}
+```
+Sem parênteses o nome refere o objeto; com parênteses, o que sobra é o valor devolvido.
+:::
+
+## Funções de ordem superior
+
+Uma função de ordem superior é uma que **recebe** ou **devolve** função. As mais usadas estão embutidas, e o parâmetro se chama `key`:
+
+```python
+LEITURAS = [("onu-03", -31.2), ("onu-01", -19.5), ("onu-05", -8.0), ("onu-02", -26.4)]
+
+print(sorted(LEITURAS))
+print(sorted(LEITURAS, key=lambda par: par[1]))
+print(sorted(LEITURAS, key=lambda par: par[1], reverse=True))
+print(min(LEITURAS, key=lambda par: par[1]))
+print(max(LEITURAS, key=lambda par: par[1]))
+```
+
+```text
+[('onu-01', -19.5), ('onu-02', -26.4), ('onu-03', -31.2), ('onu-05', -8.0)]
+[('onu-03', -31.2), ('onu-02', -26.4), ('onu-01', -19.5), ('onu-05', -8.0)]
+[('onu-05', -8.0), ('onu-01', -19.5), ('onu-02', -26.4), ('onu-03', -31.2)]
+('onu-03', -31.2)
+('onu-05', -8.0)
+```
+
+Sem `key`, a tupla é comparada elemento a elemento e a ordem é alfabética pelo nome. Com `key`, cada item é passado pela função e o **resultado** é que ordena. O item original é que volta na lista — `key` decide a ordem, não o conteúdo.
+
+Chave composta é uma tupla, e resolve ordenação em vários critérios de uma vez:
+
+```python
+LEITURAS = [
+    ("onu-03", -31.2, "norte"),
+    ("onu-01", -19.5, "sul"),
+    ("onu-05", -8.0, "norte"),
+    ("onu-02", -26.4, "sul"),
+]
+print(sorted(LEITURAS, key=lambda r: (r[2], r[1])))
+```
+
+```text
+[('onu-03', -31.2, 'norte'), ('onu-05', -8.0, 'norte'), ('onu-02', -26.4, 'sul'), ('onu-01', -19.5, 'sul')]
+```
+
+Por OLT e, dentro da OLT, por nível. E o `sorted` é **estável**: itens com a mesma chave mantêm a ordem original, o que permite ordenar em duas passagens quando os critérios têm direções diferentes.
+
+## `lambda`
+
+`lambda` cria uma função sem nome, a partir de **uma única expressão**:
+
+```python
+key=lambda par: par[1]
+```
+
+Não há `return` (o valor da expressão é o retorno), não cabe instrução, não cabe `if` de bloco — só a expressão condicional do @sec-cap015. Essa limitação é deliberada: `lambda` existe para o caso em que a função é tão pequena que dar um nome a ela atrapalharia mais do que ajudaria.
+
+O que **não** se faz é dar nome a um `lambda`:
+
+```python
+# antipadrao: lambda com nome
+classificar = lambda n: "critico" if n < -28 else "normal"
+
+
+def classificar_def(n):
+    return "critico" if n < -28 else "normal"
+
+
+print(classificar(-31.0), classificar_def(-31.0))
+print("nome do lambda:", classificar.__name__)
+print("nome do def:   ", classificar_def.__name__)
+classificar("texto")
+```
+
+```text
+critico critico
+nome do lambda: <lambda>
+nome do def:    classificar_def
+TypeError: '<' not supported between instances of 'str' and 'int'
+```
+
+Os dois fazem a mesma coisa, e o `def` é melhor em tudo: aceita docstring, aparece pelo nome no traceback e no *profiler*, e não custa uma linha a mais. A PEP 8 é explícita nesse ponto, e o `ruff` sinaliza com `E731`.
+
+Regra prática: `lambda` só como **argumento** de outra função, e só quando couber confortavelmente na mesma linha.
+
+## `map` e `filter`
+
+`map` aplica uma função a cada item; `filter` mantém os itens para os quais a função é verdadeira. Os dois devolvem **iteradores** preguiçosos, com tudo que o @sec-cap016 disse sobre isso:
+
+```python
+niveis = [-19.5, -31.2, -8.0, -26.4]
+dobrados = map(lambda n: n * 2, niveis)
+print(dobrados)
+print(list(dobrados))
+print(list(dobrados))
+print(list(filter(lambda n: n < -20, niveis)))
+```
+
+```text
+<map object at 0x782d3463bcd0>
+[-39.0, -62.4, -16.0, -52.8]
+[]
+[-31.2, -26.4]
+```
+
+O segundo `list(dobrados)` veio vazio: o iterador já tinha sido consumido.
+
+E aqui vem a parte que separa Python de linguagens funcionais: **a resposta idiomática para os dois casos acima é uma compreensão**.
+
+```python
+print([n * 2 for n in niveis])
+print([n for n in niveis if n < -20])
+```
+
+```text
+[-39.0, -62.4, -16.0, -52.8]
+[-31.2, -26.4]
+```
+
+A compreensão lê melhor, não exige `list()` em volta e, com `lambda`, ainda é mais rápida:
+
+```python
+import timeit
+
+setup = "niveis = [-19.5, -31.2, -8.0, -26.4] * 250"
+a = timeit.timeit("[n * 2 for n in niveis]", setup=setup, number=2000)
+b = timeit.timeit("list(map(lambda n: n * 2, niveis))", setup=setup, number=2000)
+c = timeit.timeit("list(map(float.__neg__, niveis))", setup=setup, number=2000)
+print(f"compreensao      {a:.3f}s")
+print(f"map com lambda   {b:.3f}s")
+print(f"map com builtin  {c:.3f}s")
+```
+
+```text
+compreensao      0.043s
+map com lambda   0.084s
+map com builtin  0.051s
+```
+
+Os números variam de máquina para máquina, e a ordem não: `map` com `lambda` é o mais lento dos três, porque cada item paga uma chamada de função Python. `map` só ganha da compreensão quando a função já existe e é implementada em C — `map(str.strip, linhas)`, `map(int, campos)`. Essa é a regra: **`map` quando a função já tem nome; compreensão quando você criaria um `lambda` para isso**.
+
+## `operator`: as funções que você ia escrever
+
+O módulo `operator` traz prontas as chaves mais comuns, em C:
+
+```python
+from operator import itemgetter
+
+LEITURAS = [("onu-03", -31.2), ("onu-01", -19.5), ("onu-05", -8.0)]
+print(sorted(LEITURAS, key=itemgetter(1)))
+print(list(map(itemgetter(0), LEITURAS)))
+
+REGISTROS = [
+    {"onu": "onu-03", "nivel": -31.2, "olt": "norte"},
+    {"onu": "onu-01", "nivel": -19.5, "olt": "sul"},
+    {"onu": "onu-05", "nivel": -8.0, "olt": "norte"},
+]
+print(sorted(REGISTROS, key=itemgetter("olt", "nivel")))
+```
+
+```text
+[('onu-03', -31.2), ('onu-01', -19.5), ('onu-05', -8.0)]
+['onu-03', 'onu-01', 'onu-05']
+[{'onu': 'onu-03', 'nivel': -31.2, 'olt': 'norte'}, {'onu': 'onu-05', 'nivel': -8.0, 'olt': 'norte'}, {'onu': 'onu-01', 'nivel': -19.5, 'olt': 'sul'}]
+```
+
+`itemgetter("olt", "nivel")` é a chave composta sem escrever tupla. Os irmãos dele são `attrgetter` (para atributos) e `methodcaller` (para chamar um método), e os três aparecem muito em código que usa `sorted`, `max`, `groupby` e `sort`.
+
+## `functools.partial`
+
+`partial` fixa argumentos e devolve uma função nova:
+
+```python
+from functools import partial
+
+
+def escalar(fator, valor):
+    return valor * fator
+
+
+mw = partial(escalar, 0.001)
+print(mw(1500), mw.func.__name__, mw.args)
+
+
+def conectar(host, porta=22, timeout=5):
+    return f"{host}:{porta} (t={timeout})"
+
+
+netconf = partial(conectar, porta=830)
+print(netconf("olt-norte"))
+print(netconf("olt-sul", timeout=30))
+```
+
+```text
+1.5 escalar (0.001,)
+olt-norte:830 (t=5)
+olt-sul:830 (t=30)
+```
+
+É o `lambda v: escalar(0.001, v)` escrito de forma que preserva a função original (`mw.func`), os argumentos fixados (`mw.args`) e a possibilidade de sobrescrever o que ficou. Foi ele que resolveu a captura tardia do @sec-cap020.
+
+## `functools.reduce`, e por que quase nunca
+
+```python
+from functools import reduce
+import operator
+
+niveis = [-19.5, -31.2, -8.0]
+print(reduce(operator.add, niveis))
+print(sum(niveis))
+print(reduce(lambda a, b: a if a < b else b, niveis), min(niveis))
+```
+
+```text
+-58.7
+-58.7
+-31.2 -31.2
+```
+
+As duas linhas de cada par fazem a mesma coisa, e a segunda de cada par é legível. `reduce` saiu dos embutidos no Python 3 justamente por isso: quase toda redução real já tem nome (`sum`, `min`, `max`, `any`, `all`, `math.prod`, `"".join`), e as que não têm costumam ficar mais claras num laço de três linhas.
+
+## Um pipeline montado com funções
+
+Com tudo junto, dá para montar um encadeamento em que as etapas são dados:
+
+```python
+from functools import partial
+from operator import itemgetter
+
+LEITURAS = [
+    {"onu": "onu-01", "nivel": -19.5, "olt": "norte"},
+    {"onu": "onu-02", "nivel": -31.2, "olt": "norte"},
+    {"onu": "onu-03", "nivel": None, "olt": "sul"},
+    {"onu": "onu-04", "nivel": -26.4, "olt": "sul"},
+    {"onu": "onu-05", "nivel": -8.0, "olt": "norte"},
+]
+
+
+def tem_leitura(registro):
+    return registro["nivel"] is not None
+
+
+def abaixo_de(limite, registro):
+    return registro["nivel"] < limite
+
+
+def em_mw(registro):
+    """Acrescenta a potencia em miliwatts a partir do nivel em dBm."""
+    return registro | {"mw": round(10 ** (registro["nivel"] / 10), 5)}
+
+
+def aplicar(dados, *etapas):
+    """Passa os dados por cada etapa, na ordem."""
+    for etapa in etapas:
+        dados = etapa(dados)
+    return list(dados)
+
+
+criticas = aplicar(
+    LEITURAS,
+    partial(filter, tem_leitura),
+    partial(filter, partial(abaixo_de, -25.0)),
+    partial(map, em_mw),
+    partial(sorted, key=itemgetter("nivel")),
+)
+
+for r in criticas:
+    print(f"{r['onu']}  {r['olt']:<6} {r['nivel']:>7.1f} dBm  {r['mw']:.5f} mW")
+```
+
+```text
+onu-02  norte    -31.2 dBm  0.00076 mW
+onu-04  sul      -26.4 dBm  0.00229 mW
+```
+
+::: {#fig-pipeline-funcoes}
+```{.tikz}
+%%| filename: pipeline-funcoes
+%%| alt: Pipeline de dados em que cada etapa e uma funcao de ordem superior recebendo outra funcao: filter descarta, map transforma, sorted reordena
+\begin{tikzpicture}[
+  et/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=2.7cm, align=center, minimum height=1.25cm,
+             font=\ttfamily\scriptsize},
+  dado/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!7,
+               text width=2.1cm, align=center, minimum height=1.25cm,
+               font=\scriptsize},
+  fx/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+             text width=2.7cm, align=center, minimum height=0.55cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  fv/.style={->,>=stealth, thick, manualgreen}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.4, 3.4) rectangle (15.2,-3.4);
+
+  \node[dado] (d0) at (0.0, 0.0) {5 registros};
+  \node[et]   (e1) at (3.1, 0.0) {filter};
+  \node[et]   (e2) at (6.4, 0.0) {filter};
+  \node[et]   (e3) at (9.7, 0.0) {map};
+  \node[et]   (e4) at (13.0, 0.0) {sorted};
+
+  \draw[fl] (d0) -- (e1);
+  \draw[fl] (e1) -- (e2) node[lb, midway, below=2pt] {4};
+  \draw[fl] (e2) -- (e3) node[lb, midway, below=2pt] {2};
+  \draw[fl] (e3) -- (e4) node[lb, midway, below=2pt] {2};
+
+  \node[fx] (f1) at (3.1, 1.85) {tem\_leitura};
+  \node[fx] (f2) at (6.4, 1.85) {abaixo\_de(-25)};
+  \node[fx] (f3) at (9.7, 1.85) {em\_mw};
+  \node[fx] (f4) at (13.0, 1.85) {itemgetter('nivel')};
+
+  \draw[fv] (f1) -- (e1);
+  \draw[fv] (f2) -- (e2);
+  \draw[fv] (f3) -- (e3);
+  \draw[fv] (f4) -- (e4);
+
+  \node[lb, text=manualgreen, anchor=east] at (1.6, 1.85) {a função};
+  \node[lb, anchor=east] at (1.6,-1.0) {os dados};
+
+  \node[lb, text width=2.6cm] at (3.1,-1.9) {descarta o que não passa};
+  \node[lb, text width=2.6cm] at (6.4,-1.9) {descarta de novo, com limite fixado};
+  \node[lb, text width=2.6cm] at (9.7,-1.9) {transforma item a item};
+  \node[lb, text width=2.6cm] at (13.0,-1.9) {reordena pela chave};
+
+  \node[lb, text width=14.4cm] at (6.9,-2.9)
+    {Cada etapa é uma \textbf{função de ordem superior}: recebe outra função e um
+     iterável. \texttt{partial} transforma cada uma numa etapa de um argumento
+     só, e aí a lista de etapas vira dado --- pode ser montada, guardada e
+     reordenada em tempo de execução.};
+\end{tikzpicture}
+```
+Cada etapa recebe uma função e um iterável; com `partial`, a lista de etapas vira dado.
+:::
+
+Vale dizer com todas as letras: em Python, esse pipeline geralmente fica **mais legível como um laço** ou como uma sequência de compreensões. A montagem acima existe quando as etapas precisam ser configuráveis — vindas de um arquivo de configuração, de um plugin, de uma escolha do usuário. Aí o fato de a função ser um objeto passa a ser a única forma razoável de fazer.
+
+## 🐍 Jeito Pythônico
+
+**Sem parênteses para referir, com parênteses para chamar.** Tabela de despacho, `key=`, `callback`, argumento de `map` — todos recebem o nome nu.
+
+**Compreensão no lugar de `map`/`filter` com `lambda`.** Mais legível e mais rápida.
+
+```python
+# antipadrão
+maiusculas = list(map(lambda s: s.upper(), nomes))
+ativos = list(filter(lambda u: u.ativo, usuarios))
+```
+
+```python
+# pythônico
+maiusculas = [s.upper() for s in nomes]
+ativos = [u for u in usuarios if u.ativo]
+```
+
+**`map` quando a função já tem nome e é embutida.** `map(int, campos)`, `map(str.strip, linhas)` — aí não há `lambda` no caminho e o laço roda em C.
+
+**Nunca `nome = lambda ...`.** Use `def`. O `lambda` nomeado perde a docstring, aparece como `<lambda>` no traceback e não ganha nada.
+
+**`operator.itemgetter` e `attrgetter` no lugar de `lambda` em `key=`.** Mais rápido, e diz o que faz.
+
+```python
+# comum
+sorted(registros, key=lambda r: (r["olt"], r["nivel"]))
+```
+
+```python
+# melhor
+from operator import itemgetter
+
+sorted(registros, key=itemgetter("olt", "nivel"))
+```
+
+**`functools.partial` no lugar de `lambda` que só fixa argumento.** Preserva a função de origem e evita a captura tardia.
+
+**`reduce` só quando não houver nome pronto.** `sum`, `min`, `max`, `any`, `all`, `math.prod` e `str.join` cobrem quase tudo.
+
+**Função devolvida por função é normal.** Fábrica de funções, decorador e *callback* com contexto são o uso legítimo dos fechamentos do @sec-cap020 — e é sobre isso que o Volume 8 vai se debruçar.
+
+Sobre versões:
+
+- **Python 3.0** — `map` e `filter` passaram a devolver iteradores, e `reduce` saiu dos embutidos para o `functools`.
+- **Python 3.8** — `functools.cached_property` e `singledispatchmethod`, ambos baseados em função como objeto.
+- **Python 3.9** — `functools.cache`, o `lru_cache` sem argumentos.
+- **Python 3.10** — `itertools.pairwise`, que substitui o `zip(seq, seq[1:])` do @sec-cap016.
+- **Python 3.11** — `StrEnum` e melhorias de desempenho em chamadas de função (a especialização adaptativa reduz o custo de `map` com `lambda`, sem eliminá-lo).
+
+## 🧪 Laboratório
+
+Objetivo: quebrar uma tabela de despacho com parênteses a mais, medir `map` contra compreensão, trocar `lambda` por `itemgetter` e por `partial`, e terminar montando um pipeline em que as etapas são dados.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab21 && cd ~/lab21
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. A tabela que guardou resultados.** Crie `despacho_ruim.py`:
+
+```python
+def reiniciar(onu):
+    return f"{onu}: reiniciada"
+
+
+def desligar(onu):
+    return f"{onu}: desligada"
+
+
+ACOES = {
+    "reiniciar": reiniciar("onu-01"),
+    "desligar": desligar("onu-01"),
+}
+
+print("tabela montada:", ACOES)
+print(ACOES["reiniciar"]("onu-07"))
+```
+
+```bash
+python despacho_ruim.py
+```
+
+```text
+tabela montada: {'reiniciar': 'onu-01: reiniciada', 'desligar': 'onu-01: desligada'}
+Traceback (most recent call last):
+  File "/home/vitor/lab21/despacho_ruim.py", line 15, in <module>
+    print(ACOES["reiniciar"]("onu-07"))
+          ~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+TypeError: 'str' object is not callable
+```
+
+A primeira linha já denuncia: a tabela tem strings, não funções — e a `onu-01` foi "reiniciada" no `import`.
+
+**3. A tabela certa.** Crie `despacho.py`:
+
+```python
+def reiniciar(onu):
+    return f"{onu}: reiniciada"
+
+
+def desligar(onu):
+    return f"{onu}: desligada"
+
+
+def diagnosticar(onu):
+    return f"{onu}: diagnostico em andamento"
+
+
+ACOES = {
+    "reiniciar": reiniciar,
+    "desligar": desligar,
+    "diagnosticar": diagnosticar,
+}
+
+print("tabela montada:", {k: v.__name__ for k, v in ACOES.items()})
+for comando in ("reiniciar", "diagnosticar", "voar"):
+    acao = ACOES.get(comando)
+    if acao is None:
+        print(f"{comando}: comando desconhecido")
+        continue
+    print(acao("onu-07"))
+```
+
+```bash
+python despacho.py
+```
+
+```text
+tabela montada: {'reiniciar': 'reiniciar', 'desligar': 'desligar', 'diagnosticar': 'diagnosticar'}
+onu-07: reiniciada
+onu-07: diagnostico em andamento
+voar: comando desconhecido
+```
+
+**4. Referência e chamada.**
+
+```bash
+python -c "
+def classificar(nivel):
+    return 'critico' if nivel < -28 else 'normal'
+print(classificar)
+print(classificar(-31.0))
+print(callable(classificar), callable(classificar(-31.0)))
+apelido = classificar
+print(apelido(-31.0), apelido is classificar, apelido.__name__)
+"
+```
+
+```text
+<function classificar at 0x730205c2fd80>
+critico
+True False
+critico True classificar
+```
+
+**5. `key=` em `sorted`, `min` e `max`.**
+
+```bash
+python -c "
+LEITURAS = [('onu-03', -31.2), ('onu-01', -19.5), ('onu-05', -8.0), ('onu-02', -26.4)]
+print(sorted(LEITURAS))
+print(sorted(LEITURAS, key=lambda par: par[1]))
+print(sorted(LEITURAS, key=lambda par: par[1], reverse=True))
+print(min(LEITURAS, key=lambda par: par[1]))
+print(max(LEITURAS, key=lambda par: par[1]))
+"
+```
+
+```text
+[('onu-01', -19.5), ('onu-02', -26.4), ('onu-03', -31.2), ('onu-05', -8.0)]
+[('onu-03', -31.2), ('onu-02', -26.4), ('onu-01', -19.5), ('onu-05', -8.0)]
+[('onu-05', -8.0), ('onu-01', -19.5), ('onu-02', -26.4), ('onu-03', -31.2)]
+('onu-03', -31.2)
+('onu-05', -8.0)
+```
+
+A primeira linha ordena por **nome**; as outras, por nível. A diferença é uma função.
+
+**6. `itemgetter`.**
+
+```bash
+python -c "
+from operator import itemgetter
+LEITURAS = [('onu-03', -31.2), ('onu-01', -19.5), ('onu-05', -8.0)]
+print(sorted(LEITURAS, key=itemgetter(1)))
+print(list(map(itemgetter(0), LEITURAS)))
+REGISTROS = [
+    {'onu': 'onu-03', 'nivel': -31.2, 'olt': 'norte'},
+    {'onu': 'onu-01', 'nivel': -19.5, 'olt': 'sul'},
+    {'onu': 'onu-05', 'nivel': -8.0, 'olt': 'norte'},
+]
+print(sorted(REGISTROS, key=itemgetter('olt', 'nivel')))
+"
+```
+
+```text
+[('onu-03', -31.2), ('onu-01', -19.5), ('onu-05', -8.0)]
+['onu-03', 'onu-01', 'onu-05']
+[{'onu': 'onu-03', 'nivel': -31.2, 'olt': 'norte'}, {'onu': 'onu-05', 'nivel': -8.0, 'olt': 'norte'}, {'onu': 'onu-01', 'nivel': -19.5, 'olt': 'sul'}]
+```
+
+**7. `map`, `filter` e a compreensão equivalente.**
+
+```bash
+python -c "
+niveis = [-19.5, -31.2, -8.0, -26.4]
+dobrados = map(lambda n: n * 2, niveis)
+print(dobrados)
+print(list(dobrados))
+print(list(dobrados))
+print(list(filter(lambda n: n < -20, niveis)))
+print([n * 2 for n in niveis])
+print([n for n in niveis if n < -20])
+"
+```
+
+```text
+<map object at 0x782d3463bcd0>
+[-39.0, -62.4, -16.0, -52.8]
+[]
+[-31.2, -26.4]
+[-39.0, -62.4, -16.0, -52.8]
+[-31.2, -26.4]
+```
+
+**8. Meça.**
+
+```bash
+python -c "
+import timeit
+setup = 'niveis = [-19.5, -31.2, -8.0, -26.4] * 250'
+a = timeit.timeit('[n * 2 for n in niveis]', setup=setup, number=2000)
+b = timeit.timeit('list(map(lambda n: n * 2, niveis))', setup=setup, number=2000)
+c = timeit.timeit('list(map(float.__neg__, niveis))', setup=setup, number=2000)
+print(f'compreensao      {a:.3f}s')
+print(f'map com lambda   {b:.3f}s')
+print(f'map com builtin  {c:.3f}s')
+"
+```
+
+```text
+compreensao      0.043s
+map com lambda   0.084s
+map com builtin  0.051s
+```
+
+Os tempos absolutos dependem da máquina. A ordem — compreensão, depois `map` com função em C, depois `map` com `lambda` — é a mesma em qualquer lugar.
+
+**9. `reduce` contra o nome pronto.**
+
+```bash
+python -c "
+from functools import reduce
+import operator
+niveis = [-19.5, -31.2, -8.0]
+print(reduce(operator.add, niveis))
+print(sum(niveis))
+print(reduce(lambda a, b: a if a < b else b, niveis), min(niveis))
+"
+```
+
+```text
+-58.7
+-58.7
+-31.2 -31.2
+```
+
+**10. `partial`.**
+
+```bash
+python -c "
+from functools import partial
+def escalar(fator, valor):
+    return valor * fator
+mw = partial(escalar, 0.001)
+print(mw(1500), mw.func.__name__, mw.args)
+def conectar(host, porta=22, timeout=5):
+    return f'{host}:{porta} (t={timeout})'
+netconf = partial(conectar, porta=830)
+print(netconf('olt-norte'))
+print(netconf('olt-sul', timeout=30))
+"
+```
+
+```text
+1.5 escalar (0.001,)
+olt-norte:830 (t=5)
+olt-sul:830 (t=30)
+```
+
+**11. `lambda` com nome, e por que não.** Crie `lambda_ruim.py`:
+
+```python
+# antipadrao: lambda com nome
+classificar = lambda n: "critico" if n < -28 else "normal"
+
+
+def classificar_def(n):
+    return "critico" if n < -28 else "normal"
+
+
+print(classificar(-31.0), classificar_def(-31.0))
+print("nome do lambda:", classificar.__name__)
+print("nome do def:   ", classificar_def.__name__)
+try:
+    classificar("texto")
+except TypeError as e:
+    print("TypeError:", e)
+```
+
+```bash
+python lambda_ruim.py
+```
+
+```text
+critico critico
+nome do lambda: <lambda>
+nome do def:    classificar_def
+TypeError: '<' not supported between instances of 'str' and 'int'
+```
+
+`<lambda>` é o que apareceria no traceback de produção, em vez do nome da função.
+
+**12. Chave composta e os agregadores.**
+
+```bash
+python -c "
+LEITURAS = [('onu-03', -31.2, 'norte'), ('onu-01', -19.5, 'sul'), ('onu-05', -8.0, 'norte'), ('onu-02', -26.4, 'sul')]
+print(sorted(LEITURAS, key=lambda r: (r[2], r[1])))
+print([r[0] for r in sorted(LEITURAS, key=lambda r: -r[1])])
+print(any(n < -30 for _, n, _ in LEITURAS), all(n < 0 for _, n, _ in LEITURAS))
+"
+```
+
+```text
+[('onu-03', -31.2, 'norte'), ('onu-05', -8.0, 'norte'), ('onu-02', -26.4, 'sul'), ('onu-01', -19.5, 'sul')]
+['onu-05', 'onu-01', 'onu-02', 'onu-03']
+True True
+```
+
+**13. O pipeline configurável.** Crie `pipeline.py`:
+
+```python
+"""Pipeline de leituras usando funcoes como valores."""
+
+from functools import partial
+from operator import itemgetter
+
+LEITURAS = [
+    {"onu": "onu-01", "nivel": -19.5, "olt": "norte"},
+    {"onu": "onu-02", "nivel": -31.2, "olt": "norte"},
+    {"onu": "onu-03", "nivel": None, "olt": "sul"},
+    {"onu": "onu-04", "nivel": -26.4, "olt": "sul"},
+    {"onu": "onu-05", "nivel": -8.0, "olt": "norte"},
+]
+
+
+def tem_leitura(registro):
+    return registro["nivel"] is not None
+
+
+def abaixo_de(limite, registro):
+    return registro["nivel"] < limite
+
+
+def em_mw(registro):
+    """Acrescenta a potencia em miliwatts a partir do nivel em dBm."""
+    return registro | {"mw": round(10 ** (registro["nivel"] / 10), 5)}
+
+
+def aplicar(dados, *etapas):
+    """Passa os dados por cada etapa, na ordem."""
+    for etapa in etapas:
+        dados = etapa(dados)
+    return list(dados)
+
+
+criticas = aplicar(
+    LEITURAS,
+    partial(filter, tem_leitura),
+    partial(filter, partial(abaixo_de, -25.0)),
+    partial(map, em_mw),
+    partial(sorted, key=itemgetter("nivel")),
+)
+
+for r in criticas:
+    print(f"{r['onu']}  {r['olt']:<6} {r['nivel']:>7.1f} dBm  {r['mw']:.5f} mW")
+
+print("total:", len(criticas))
+print("pior:", min(criticas, key=itemgetter("nivel"))["onu"])
+```
+
+```bash
+python pipeline.py
+```
+
+```text
+onu-02  norte    -31.2 dBm  0.00076 mW
+onu-04  sul      -26.4 dBm  0.00229 mW
+total: 2
+pior: onu-02
+```
+
+Repare no `aplicar`: ele não sabe nada sobre leituras ópticas. Recebe dados e uma lista de funções, e passa um pelo outro. Trocar a ordem das etapas, tirar uma ou ler a lista de um arquivo de configuração não exige mudar uma linha dele — e é isso que "função é objeto" compra.
+
+E repare também no `partial(filter, partial(abaixo_de, -25.0))`: um `partial` dentro do outro, o de dentro fixando o limite e o de fora fixando o predicado. Quando o encadeamento chega a esse nível, um laço explícito costuma ser mais honesto — o exercício aqui é entender o mecanismo, não recomendar o estilo.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- Função é objeto de primeira classe: pode ser atribuída, guardada em lista ou dicionário, passada como argumento e devolvida. O nome refere; os parênteses chamam.
+- A tabela de despacho guarda o nome nu. Com parênteses, ela guarda resultados — e os efeitos acontecem no `import`.
+- Função de ordem superior recebe ou devolve função. `sorted`, `min` e `max` aceitam `key=`, que decide a ordem sem mudar os itens; chave composta é uma tupla, e `sorted` é estável.
+- `lambda` é uma expressão só, sem nome; use apenas como argumento, e nunca atribua a um nome (`E731`).
+- `map` e `filter` devolvem iteradores de uma passada. Com `lambda`, a compreensão é mais legível e mais rápida; `map` vale quando a função já tem nome e roda em C.
+- `operator.itemgetter`/`attrgetter`/`methodcaller` substituem `lambda` em `key=` com mais clareza e menos custo.
+- `functools.partial` fixa argumentos preservando a função original; `functools.reduce` só quando não existir um agregador com nome.
+- Com funções como dados, um pipeline de etapas vira configuração — mas, quando as etapas são fixas, um laço ou uma compreensão continuam sendo a resposta pythônica.
