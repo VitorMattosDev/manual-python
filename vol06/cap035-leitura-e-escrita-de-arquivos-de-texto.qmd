@@ -1,3 +1,959 @@
 # Leitura e escrita de arquivos de texto {#sec-cap035}
 
-*(em elaboracao)*
+O script de importação rodava havia meses. Todo dia às três da manhã ele lia o CSV que a equipe de campo exportava da planilha e alimentava a base de leituras. Numa terça-feira, ele parou:
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    print(open('latin1.txt', encoding='utf-8').read())
+          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "<frozen codecs>", line 325, in decode
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe7 in position 4: invalid continuation byte
+```
+
+Ninguém mudou o script. O que mudou foi quem exportou o arquivo: a estação nova se chama "Estação Norte", e a planilha da máquina daquele técnico grava acentos em Latin-1. O byte `0xe7` é o "ç" nessa codificação — e não é "ç" nenhum em UTF-8.
+
+Este capítulo abre o Volume 6 pelo lugar onde o programa encosta no mundo: o arquivo. A função `open` cabe numa linha e tem sete parâmetros, e três deles — `mode`, `encoding` e `newline` — respondem pela maioria dos defeitos que só aparecem na máquina do cliente.
+
+## `open` e o objeto que ele devolve
+
+```python
+f = open("leituras.csv", encoding="utf-8")
+print(f)
+print(type(f))
+print("mode     =", f.mode)
+print("name     =", f.name)
+print("encoding =", f.encoding)
+print("closed   =", f.closed)
+f.close()
+print("closed   =", f.closed)
+```
+
+```text
+<_io.TextIOWrapper name='leituras.csv' mode='r' encoding='utf-8'>
+<class '_io.TextIOWrapper'>
+mode     = r
+name     = leituras.csv
+encoding = utf-8
+closed   = False
+closed   = True
+```
+
+O objeto devolvido é um `TextIOWrapper`: um envelope que embrulha o arquivo do sistema operacional e faz duas coisas que o disco não sabe fazer. Ele **acumula** bytes num buffer, para não pedir ao núcleo uma escrita de dois bytes por vez, e **traduz** esses bytes em `str` usando uma tabela de codificação. Tudo o que este capítulo discute são consequências desses dois serviços. A pilha completa por baixo do `TextIOWrapper` é o assunto do @sec-cap036.
+
+Na prática, quase ninguém escreve `open` e `close` soltos. A forma que se usa é:
+
+```python
+with open("leituras.csv", encoding="utf-8") as f:
+    conteudo = f.read()
+```
+
+O `with` fecha o arquivo ao sair do bloco, inclusive quando o bloco termina por exceção. É a instrução que fecha este volume (@sec-cap040); por ora, basta saber que ela é obrigatória por higiene, e a seção sobre buffers mostra o que se perde sem ela.
+
+## Os modos
+
+O segundo parâmetro decide se o arquivo é lido, escrito ou acrescentado, se pode ser criado, se é truncado ao abrir e onde fica a posição inicial.
+
+::: {#fig-modos-arquivo}
+```{.tikz}
+%%| filename: modos-arquivo
+%%| alt: Tabela dos modos de abertura de arquivo - r, w, a, x e a variante mais - mostrando o que cada um faz quando o arquivo existe, quando nao existe, e onde comeca a posicao de leitura e escrita
+\begin{tikzpicture}[
+  md/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             minimum width=1.5cm, minimum height=0.8cm,
+             font=\ttfamily\normalsize},
+  bx/.style={text width=3.0cm, align=center, font=\scriptsize,
+             text=manualgray},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.2, 2.3) rectangle (14.6,-6.6);
+
+  \node[hd] at (0.0, 1.7) {modo};
+  \node[hd] at (2.9, 1.7) {se já existe};
+  \node[hd] at (6.4, 1.7) {se não existe};
+  \node[hd] at (9.9, 1.7) {posição inicial};
+  \node[hd] at (13.0, 1.7) {faz o quê};
+
+  \draw[manualgray!40, thick] (-1.0, 1.35) -- (14.4, 1.35);
+
+  \node[md] at (0.0, 0.7) {"r"};
+  \node[bx] at (2.9, 0.7) {abre para leitura};
+  \node[bx] at (6.4, 0.7) {\textcolor{manualred}{FileNotFoundError}};
+  \node[bx] at (9.9, 0.7) {início};
+  \node[bx] at (13.0, 0.7) {só lê};
+
+  \node[md] at (0.0,-0.7) {"w"};
+  \node[bx] at (2.9,-0.7) {\textcolor{manualred}{trunca para zero byte}};
+  \node[bx] at (6.4,-0.7) {cria};
+  \node[bx] at (9.9,-0.7) {início (vazio)};
+  \node[bx] at (13.0,-0.7) {só escreve};
+
+  \node[md] at (0.0,-2.1) {"a"};
+  \node[bx] at (2.9,-2.1) {abre e preserva};
+  \node[bx] at (6.4,-2.1) {cria};
+  \node[bx] at (9.9,-2.1) {fim --- e toda escrita volta para o fim};
+  \node[bx] at (13.0,-2.1) {só acrescenta};
+
+  \node[md] at (0.0,-3.7) {"x"};
+  \node[bx] at (2.9,-3.7) {\textcolor{manualred}{FileExistsError}};
+  \node[bx] at (6.4,-3.7) {cria};
+  \node[bx] at (9.9,-3.7) {início (vazio)};
+  \node[bx] at (13.0,-3.7) {só escreve};
+
+  \node[md, draw=manualgreen, fill=manualgreen!13] at (0.0,-5.0) {"+"};
+  \node[bx] at (2.9,-5.0) {sufixo dos anteriores};
+  \node[bx] at (6.4,-5.0) {herda o modo base};
+  \node[bx] at (9.9,-5.0) {herda o modo base};
+  \node[bx] at (13.0,-5.0) {lê \textbf{e} escreve};
+
+  \node[nt, text width=15.2cm] at (-1.0,-5.6)
+    {Acrescente \texttt{"b"} para o modo binário: \texttt{"rb"}, \texttt{"wb"},
+     \texttt{"ab"}. Sem \texttt{"b"}, o modo é texto e o parâmetro
+     \texttt{encoding} passa a valer. O padrão de \texttt{open} é \texttt{"r"},
+     em texto.};
+\end{tikzpicture}
+```
+Os cinco modos de abertura e o que cada um faz com um arquivo que já existe.
+:::
+
+O modo `"w"` é o mais perigoso da tabela, porque ele destrói antes de você escrever qualquer coisa:
+
+```python
+open("m.txt", "w", encoding="utf-8").write("original\n")
+open("m.txt", "w", encoding="utf-8").write("sobrescrito\n")
+print(open("m.txt", encoding="utf-8").read(), end="")
+```
+
+```text
+sobrescrito
+```
+
+Não houve aviso, não houve pergunta: o conteúdo anterior deixou de existir no instante da abertura. Para acrescentar, o modo é `"a"`:
+
+```python
+with open("m.txt", "a", encoding="utf-8") as f:
+    f.write("acrescentado\n")
+print(open("m.txt", encoding="utf-8").read(), end="")
+```
+
+```text
+sobrescrito
+acrescentado
+```
+
+E quando o programa **não** deve sobrescrever nada — o caso do arquivo de saída que não pode ser gerado duas vezes —, o modo `"x"` recusa em vez de destruir:
+
+```python
+with open("novo.txt", "x", encoding="utf-8") as f:
+    f.write("so cria se nao existir\n")
+```
+
+Na segunda vez:
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 2, in <module>
+    with open('novo.txt', 'x', encoding='utf-8') as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileExistsError: [Errno 17] File exists: 'novo.txt'
+```
+
+Os erros do modo errado são todos específicos e todos legíveis:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'nao-existe.csv'
+io.UnsupportedOperation: not writable
+io.UnsupportedOperation: not readable
+```
+
+O primeiro é `open("nao-existe.csv")`; o segundo é `f.write` num arquivo aberto em `"r"`; o terceiro é `f.read` num arquivo aberto em `"a"`. Os três são subclasses previsíveis, e o @sec-cap038 mostra como tratá-las sem engolir o que não deve ser engolido.
+
+## Lendo
+
+Há quatro maneiras de tirar texto de um arquivo, e a diferença entre elas é quanta memória você aceita gastar.
+
+```python
+with open("leituras.csv", encoding="utf-8") as f:
+    conteudo = f.read()
+print(repr(conteudo))
+print(len(conteudo), "caracteres")
+```
+
+```text
+'onu,nivel,estacao\nonu-00042,-21.4,Estação Norte\nonu-00043,-29.8,Estação Central\nonu-00101,-25.9,Praça da Sé\n'
+108 caracteres
+```
+
+`read()` traz o arquivo inteiro numa `str`. Repare no `\n` explícito no `repr`: a quebra de linha **faz parte** do texto lido, e é a fonte do bug mais comum de quem processa arquivo linha a linha.
+
+`readline()` traz uma linha por chamada e move a posição:
+
+```python
+with open("leituras.csv", encoding="utf-8") as f:
+    print(repr(f.readline()))
+    print(repr(f.readline()))
+    print("tell() =", f.tell())
+```
+
+```text
+'onu,nivel,estacao\n'
+'onu-00042,-21.4,Estação Norte\n'
+tell() = 50
+```
+
+`readlines()` traz todas as linhas numa lista, cada uma ainda com o seu `\n`:
+
+```text
+['onu,nivel,estacao\n', 'onu-00042,-21.4,Estação Norte\n', 'onu-00043,-29.8,Estação Central\n', 'onu-00101,-25.9,Praça da Sé\n']
+```
+
+E a quarta forma, que é a que você deve escrever por padrão: **o arquivo é iterável**.
+
+```python
+with open("leituras.csv", encoding="utf-8") as f:
+    next(f)                                  # descarta o cabeçalho
+    for numero, linha in enumerate(f, start=2):
+        onu, nivel, estacao = linha.rstrip("\n").split(",")
+        print(f"{numero}: {onu} {float(nivel):6.1f} dBm  {estacao}")
+```
+
+```text
+2: onu-00042  -21.4 dBm  Estação Norte
+3: onu-00043  -29.8 dBm  Estação Central
+4: onu-00101  -25.9 dBm  Praça da Sé
+```
+
+Iterar sobre o arquivo entrega uma linha por vez e mantém no máximo um pedaço do arquivo na memória. A diferença não é estética. Com um CSV de 400 mil linhas e 12 MiB:
+
+```python
+import tracemalloc
+
+tracemalloc.start()
+with open("grande.csv", encoding="utf-8") as f:
+    linhas = f.read().splitlines()
+print("read()   :", len(linhas), "linhas, pico",
+      round(tracemalloc.get_traced_memory()[1] / 1024 / 1024, 1), "MiB")
+```
+
+```text
+read()   : 400000 linhas, pico 42.1 MiB
+iteracao : 400000 linhas, pico 0.0 MiB
+```
+
+Doze mebibytes em disco viraram quarenta e dois na memória — cada linha é um objeto `str` com o seu cabeçalho, e a lista guarda os ponteiros. A iteração, para o mesmo trabalho, tem pico indistinguível de zero. Num arquivo de log de produção, com gibibytes, é a diferença entre rodar e ser morto pelo núcleo.
+
+Duas observações sobre o `\n` que sobra:
+
+```python
+linha = "  onu-00042,-21.4  \n"
+print("strip()      :", repr(linha.strip()))
+print("rstrip('\\n'):", repr(linha.rstrip("\n")))
+```
+
+```text
+strip()      : 'onu-00042,-21.4'
+rstrip('\n'): '  onu-00042,-21.4  '
+```
+
+`strip()` sem argumento come todo espaço em branco das duas pontas — conveniente, e errado quando o formato tem campo com espaço significativo. `rstrip("\n")` remove só a quebra. E a última linha pode não ter quebra nenhuma:
+
+```python
+with open("semquebra.txt", "w", encoding="utf-8") as f:
+    f.write("linha 1\nlinha 2")
+print(open("semquebra.txt", encoding="utf-8").readlines())
+print(open("semquebra.txt", encoding="utf-8").read().splitlines())
+```
+
+```text
+['linha 1\n', 'linha 2']
+['linha 1', 'linha 2']
+```
+
+`splitlines()` normaliza; `readlines()` mostra a verdade do arquivo. Um `for linha in f` que confia cegamente em `linha[:-1]` come o último caractere da última linha quando o arquivo não termina em quebra — e arquivo gerado por programa raramente termina.
+
+## Escrevendo
+
+```python
+with open("saida.txt", "w", encoding="utf-8") as f:
+    n = f.write("primeira linha\n")
+    print("write devolveu", n)
+    print("write devolveu", f.write("acentuação\n"))
+    f.writelines(["a", "b", "c"])
+```
+
+```text
+write devolveu 15
+write devolveu 11
+```
+
+Três coisas nesse bloco:
+
+**`write` não põe quebra de linha.** Ao contrário do `print`, ele grava exatamente o que recebeu. O `\n` é seu.
+
+**`write` devolve o número de caracteres, não de bytes.** `"acentuação\n"` tem 11 caracteres e ocupa 13 bytes no disco, porque "ç" e "ã" gastam dois bytes cada em UTF-8. Vendo o arquivo com `cat -A`, que marca o fim de linha com `$` e escapa o que não é ASCII:
+
+```text
+primeira linha$
+acentuaM-CM-'M-CM-#o$
+abc
+```
+
+**`writelines` é um nome traiçoeiro.** Ele não escreve linhas: escreve os itens da sequência, um atrás do outro, sem separador nenhum. Daí o `abc` grudado. Para gravar linhas de verdade, ou você põe o `\n` em cada item, ou usa `"\n".join(...)`, ou escreve num laço.
+
+O `print` também sabe escrever em arquivo, e é a forma mais confortável quando há formatação envolvida:
+
+```python
+with open("relatorio.txt", "w", encoding="utf-8") as f:
+    print("=== relatorio ===", file=f)
+    print("onu-00042", -21.4, sep="  ", file=f)
+```
+
+```text
+=== relatorio ===
+onu-00042  -21.4
+```
+
+Ele traz `sep`, `end` e a conversão automática de qualquer objeto para texto. E isso não é coincidência: a saída padrão é um objeto de arquivo como qualquer outro.
+
+```python
+import sys
+print("stdout e um arquivo?", sys.stdout)
+print("encoding do stdout  :", sys.stdout.encoding)
+```
+
+```text
+stdout e um arquivo? <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>
+encoding do stdout  : utf-8
+```
+
+O mesmo `TextIOWrapper` do começo do capítulo. Uma função que recebe um parâmetro `saida` e escreve nele funciona igual com um arquivo, com `sys.stdout` e com o `io.StringIO` do @sec-cap036 — e é isso que a torna testável.
+
+## Codificação: o parâmetro que você não pode omitir
+
+Aqui está a causa do traceback da abertura do capítulo. Em texto, o que existe no disco são bytes; o que existe no seu programa são caracteres. Entre os dois há uma tabela.
+
+::: {#fig-texto-bytes}
+```{.tikz}
+%%| filename: texto-bytes
+%%| alt: O caminho entre os bytes no disco e a str na memoria, passando pelo decodificador; a mesma sequencia de bytes lida com dois encodings diferentes produz textos diferentes ou erro
+\begin{tikzpicture}[
+  dk/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+             text width=4.6cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  cd/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!22, text width=2.6cm, align=center,
+             minimum height=1.0cm, font=\scriptsize\bfseries},
+  ok/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.4cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  ng/.style={draw=manualred, very thick, rounded corners, fill=manualred!11,
+             text width=4.4cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.9, 2.6) rectangle (14.8,-5.2);
+
+  \node[dk] at (2.2, 1.4) {b'Esta\textbackslash xe7\textbackslash xe3o'};
+  \node[lb, text width=5.0cm] at (2.2, 0.2) {os bytes que estão no disco ---
+    gravados por uma planilha em Latin-1};
+
+  \node[cd] at (7.2, 1.4) {decodificador};
+  \node[lb, text width=3.2cm] at (7.2, 0.2) {escolhido pelo parâmetro
+    \texttt{encoding}};
+
+  \node[ng] at (12.2, 2.0) {encoding="utf-8"\\UnicodeDecodeError};
+  \node[ok] at (12.2, 0.4) {encoding="latin-1"\\'Estação'};
+
+  \draw[fl] (4.6, 1.4) -- (5.8, 1.4);
+  \draw[fl] (8.7, 1.6) -- (9.9, 2.0);
+  \draw[fl] (8.7, 1.2) -- (9.9, 0.4);
+
+  \draw[manualgray!40, thick, dashed] (-0.7,-0.9) -- (14.6,-0.9);
+
+  \node[ok] at (2.2,-2.1) {'Estação'};
+  \node[lb, text width=5.0cm] at (2.2,-3.3) {a \texttt{str} na memória ---
+    caracteres, não bytes};
+
+  \node[cd] at (7.2,-2.1) {codificador};
+  \node[lb, text width=3.2cm] at (7.2,-3.3) {o mesmo parâmetro, no caminho
+    de volta};
+
+  \node[dk] at (12.2,-1.5) {b'Esta\textbackslash xc3\textbackslash xa7\textbackslash xc3\textbackslash xa3o'};
+  \node[lb, text width=4.4cm] at (12.2,-2.5) {utf-8: 2 bytes por acento};
+  \node[dk] at (12.2,-3.6) {b'Esta\textbackslash xe7\textbackslash xe3o'};
+  \node[lb, text width=4.4cm] at (12.2,-4.6) {latin-1: 1 byte, e nada fora
+    da tabela cabe};
+
+  \draw[fl] (4.6,-2.1) -- (5.8,-2.1);
+  \draw[fl] (8.7,-1.9) -- (9.9,-1.5);
+  \draw[fl] (8.7,-2.3) -- (9.9,-3.6);
+\end{tikzpicture}
+```
+Ler é decodificar bytes em caracteres; escrever é o inverso. O `encoding` é a tabela usada nos dois sentidos.
+:::
+
+O ponto que custa caro: **quando você omite `encoding`, o Python não usa UTF-8 — ele pergunta ao sistema operacional.**
+
+```python
+import locale, sys
+print("locale.getencoding()       =", locale.getencoding())
+print("sys.getdefaultencoding()   =", sys.getdefaultencoding())
+print("sys.getfilesystemencoding()=", sys.getfilesystemencoding())
+```
+
+```text
+locale.getencoding()       = UTF-8
+sys.getdefaultencoding()   = utf-8
+sys.getfilesystemencoding()= utf-8
+```
+
+Nesta máquina Linux, com `LANG=en_US.UTF-8`, o padrão é UTF-8 e tudo parece bem. Numa instalação de Windows em português, `locale.getencoding()` costuma devolver `cp1252`; num contêiner mínimo sem locale configurado, pode ser `ANSI_X3.4-1968`, que é ASCII puro e não aceita nem "ã". O mesmo código, a mesma versão do Python, três resultados.
+
+Note também que `sys.getdefaultencoding()` é sempre `utf-8` e **não** tem nada a ver com arquivos: ele é o encoding interno de `str.encode()` sem argumento. Quem manda em `open` é `locale.getencoding()`.
+
+O Python ajuda a encontrar essas chamadas. Com `-X warn_default_encoding`, toda abertura de texto sem `encoding` explícito vira aviso:
+
+```python
+with open("leituras.csv") as f:
+    f.readline()
+```
+
+```bash
+python3 -X warn_default_encoding semencoding.py
+```
+
+```text
+/home/vitor/lab35/semencoding.py:1: EncodingWarning: 'encoding' argument not specified
+  with open("leituras.csv") as f:
+```
+
+O `EncodingWarning` veio na PEP 597 (Python 3.10) exatamente para dar um caminho de migração. A PEP 686 propõe tornar o modo UTF-8 o padrão numa versão futura, o que resolveria o problema na raiz; enquanto isso não acontece, a regra é curta: **`encoding="utf-8"` em toda abertura de texto**, sempre, mesmo quando o padrão da sua máquina já é esse. Custa treze caracteres e elimina uma classe inteira de defeito que só se manifesta na máquina dos outros.
+
+Vendo os dois lados no disco:
+
+```python
+texto = "Estação Norte: -21.4 dBm\n"
+open("utf8.txt", "w", encoding="utf-8").write(texto)
+open("latin1.txt", "w", encoding="latin-1").write(texto)
+
+print("utf-8   :", open("utf8.txt", "rb").read())
+print("latin-1 :", open("latin1.txt", "rb").read())
+```
+
+```text
+utf-8   : b'Esta\xc3\xa7\xc3\xa3o Norte: -21.4 dBm\n'
+latin-1 : b'Esta\xe7\xe3o Norte: -21.4 dBm\n'
+```
+
+Vinte e sete bytes contra vinte e cinco: os dois acentos custam um byte a mais cada em UTF-8. E o erro silencioso, que é pior que o traceback — ler UTF-8 como se fosse Latin-1:
+
+```python
+print(open("utf8.txt", encoding="latin-1").read(), end="")
+```
+
+```text
+EstaÃ§Ã£o Norte: -21.4 dBm
+```
+
+Nenhuma exceção. O programa continua, grava no banco, manda o e-mail. O `Ã§` é o nome que essa falha ganhou no mundo — e ela é assimétrica: Latin-1 lido como UTF-8 estoura (a maioria das sequências de bytes é inválida em UTF-8), mas UTF-8 lido como Latin-1 nunca estoura, porque em Latin-1 **todo** byte é um caractere válido.
+
+### `errors=`: o que fazer com o byte que não decodifica
+
+Quando você não controla a origem do arquivo, o parâmetro `errors` define a política:
+
+```python
+for modo in ("strict", "replace", "ignore", "surrogateescape", "backslashreplace"):
+    try:
+        with open("latin1.txt", encoding="utf-8", errors=modo) as f:
+            print(f"{modo:18}", repr(f.read()))
+    except UnicodeDecodeError as e:
+        print(f"{modo:18} {type(e).__name__}: {e}")
+```
+
+```text
+strict             UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe7 in position 4: invalid continuation byte
+replace            'Esta��o Norte: -21.4 dBm\n'
+ignore             'Estao Norte: -21.4 dBm\n'
+surrogateescape    'Esta\udce7\udce3o Norte: -21.4 dBm\n'
+backslashreplace   'Esta\\xe7\\xe3o Norte: -21.4 dBm\n'
+```
+
+`strict` é o padrão, e é o certo na maioria dos casos: falhar alto é melhor do que gravar lixo. `ignore` apaga a informação sem deixar rastro e é quase sempre a pior escolha. `replace` ao menos marca a perda com o caractere de substituição.
+
+`surrogateescape` merece atenção porque é o único que **não perde nada**: cada byte inválido vira um ponto de código reservado, e a operação inversa o traz de volta:
+
+```python
+with open("latin1.txt", encoding="utf-8", errors="surrogateescape") as f:
+    t = f.read()
+with open("volta.txt", "w", encoding="utf-8", errors="surrogateescape") as f:
+    f.write(t)
+```
+
+```bash
+cmp latin1.txt volta.txt && echo 'latin1.txt e volta.txt sao identicos'
+```
+
+```text
+latin1.txt e volta.txt sao identicos
+```
+
+É o mecanismo da PEP 383, e é o que o próprio Python usa para lidar com nomes de arquivo que não decodificam. Serve para pipeline que precisa repassar dados intactos sem entender o conteúdo. Não serve para "consertar" o arquivo: se você imprimir esse texto num terminal, o caractere substituto estoura na hora da codificação de saída.
+
+Detectar a codificação de um arquivo desconhecido é adivinhação, não ciência — não há marca no arquivo. Bibliotecas como `chardet` e `charset-normalizer` chutam por estatística e acertam bastante, mas a solução de verdade é combinar a codificação com quem gera o arquivo.
+
+## Nova linha
+
+O terceiro parâmetro problemático. Unix termina linha com `\n`; Windows, com `\r\n`. Por padrão, o Python esconde a diferença: na leitura, qualquer um dos dois vira `\n` (é o *universal newlines* da PEP 278); na escrita, `\n` vira o separador nativo da plataforma.
+
+```python
+with open("crlf.txt", "w", encoding="utf-8", newline="\r\n") as f:
+    f.write("linha 1\nlinha 2\n")
+```
+
+```bash
+cat -A crlf.txt
+```
+
+```text
+linha 1^M$
+linha 2^M$
+```
+
+O `^M` é o `\r`. Lendo esse arquivo dos dois jeitos:
+
+```python
+print("padrao       :", repr(open("crlf.txt", encoding="utf-8").read()))
+print("newline=''   :", repr(open("crlf.txt", encoding="utf-8", newline="").read()))
+```
+
+```text
+padrao       : 'linha 1\nlinha 2\n'
+newline=''   : 'linha 1\r\nlinha 2\r\n'
+```
+
+A tradução automática é conveniente e atrapalha em dois casos concretos. Um: quando você **precisa** ver os bytes como estão, para diagnosticar um arquivo mal formado. Dois — e este é o que aparece na vida real — quando o módulo `csv` está envolvido. A documentação dele manda abrir o arquivo com `newline=""` justamente porque o próprio `csv` cuida das quebras, e um campo entre aspas pode conter `\r\n` de propósito. Sem isso, uma linha vira duas no Windows. O assunto é do Volume 10; a regra vale desde já.
+
+## Buffer, `flush` e o arquivo que ninguém fechou
+
+O `TextIOWrapper` acumula. Escrever não é gravar:
+
+```python
+import os
+
+f = open("acompanhe.txt", "w", encoding="utf-8")
+f.write("primeira linha\n")
+print("depois do write, tamanho no disco:", os.path.getsize("acompanhe.txt"))
+f.flush()
+print("depois do flush, tamanho no disco:", os.path.getsize("acompanhe.txt"))
+f.close()
+```
+
+```text
+depois do write, tamanho no disco: 0
+depois do flush, tamanho no disco: 15
+```
+
+O tamanho do buffer é `io.DEFAULT_BUFFER_SIZE`, hoje 8192 bytes. O parâmetro `buffering=1` liga o modo de linha, em que cada `\n` provoca uma descarga — útil em arquivo de log que alguém acompanha com `tail -f`:
+
+```python
+f = open("linha.txt", "w", encoding="utf-8", buffering=1)
+f.write("linha 1\n")
+print("com buffering=1, apos a quebra:", os.path.getsize("linha.txt"), "bytes")
+f.write("parcial sem quebra")
+print("apos texto sem quebra        :", os.path.getsize("linha.txt"), "bytes")
+```
+
+```text
+com buffering=1, apos a quebra: 8 bytes
+apos texto sem quebra        : 8 bytes
+```
+
+Quem descarrega o buffer no fim é o `close`. Se o programa termina de maneira abrupta, o conteúdo simplesmente não existe:
+
+```python
+import os
+
+
+def gravar():
+    f = open("perdido.txt", "w", encoding="utf-8")
+    f.write("linha que ficou no buffer")
+    os._exit(0)
+
+
+gravar()
+```
+
+```bash
+ls -l perdido.txt
+```
+
+```text
+-rw-r--r-- 1 vitor vitor 0 Aug 11 20:27 perdido.txt
+```
+
+Zero byte. O `os._exit` mata o processo sem executar nada de limpeza — o que é exatamente o que acontece num `SIGKILL`, numa queda de energia ou num contêiner derrubado. Em execução normal, o coletor de lixo do CPython fecha o arquivo quando o objeto morre, e o modo de desenvolvimento avisa:
+
+```bash
+python3 -X dev -c "f = open('leituras.csv', encoding='utf-8'); f.read(); del f"
+```
+
+```text
+<string>:4: ResourceWarning: unclosed file <_io.TextIOWrapper name='leituras.csv' mode='r' encoding='utf-8'>
+```
+
+Contar com o coletor é frágil: é comportamento do CPython, não da linguagem (no PyPy o arquivo pode ficar aberto por muito tempo), e um programa de longa duração que abre arquivos e não fecha esgota os descritores do processo. Daí o `with`.
+
+## Escrita atômica
+
+Um problema que o `with` **não** resolve: gravar um arquivo é uma operação que pode ser interrompida no meio, e o arquivo interrompido é um arquivo válido do ponto de vista do sistema.
+
+```python
+with open("config.txt", "w", encoding="utf-8") as f:
+    f.write("limite_critico = ")
+    raise RuntimeError("a conexao caiu no meio da escrita")
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab35/sem_atomico.py", line 3, in <module>
+    raise RuntimeError("a conexao caiu no meio da escrita")
+RuntimeError: a conexao caiu no meio da escrita
+```
+
+```bash
+cat config.txt
+```
+
+```text
+limite_critico =
+```
+
+O `with` fechou o arquivo direitinho — inclusive descarregou o pedaço já escrito. O arquivo de configuração agora está pela metade, e o programa que o ler amanhã vai falhar num lugar que não tem nada a ver com a causa. Pior: o conteúdo bom foi destruído no instante da abertura em `"w"`, antes de a escrita começar.
+
+A solução é a mesma há décadas: escrever ao lado e trocar de nome no fim.
+
+```python
+import os
+
+
+def gravar_atomico(caminho, texto):
+    tmp = f"{caminho}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(texto)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, caminho)
+```
+
+```text
+limite_critico = -28.0
+```
+
+`os.replace` renomeia de forma atômica dentro do mesmo sistema de arquivos: em qualquer instante, o nome `config.txt` aponta para o conteúdo velho **ou** para o novo, nunca para meio arquivo. E ele sobrescreve o destino sem reclamar em todas as plataformas, o que `os.rename` não garante no Windows.
+
+O `flush` mais `fsync` antes da troca é o que garante que os bytes chegaram ao disco, e não apenas ao cache do sistema. Sem ele, uma queda de energia logo após o `replace` pode deixar o nome novo apontando para conteúdo vazio. É caro — `fsync` espera o disco — então vale para arquivo que importa, não para log.
+
+## `r+` e a armadilha da posição
+
+O sufixo `+` abre para leitura e escrita ao mesmo tempo. Em modo texto, ele quase sempre faz o contrário do que se espera:
+
+```python
+with open("rmais.txt", "w", encoding="utf-8") as f:
+    f.write("abcdefghij\n")
+
+with open("rmais.txt", "r+", encoding="utf-8") as f:
+    print("lido      :", repr(f.read(3)))
+    f.write("XYZ")
+    f.seek(0)
+    print("depois    :", repr(f.read()))
+```
+
+```text
+lido      : 'abc'
+depois    : 'abcdefghij\nXYZ'
+```
+
+Foram lidos três caracteres, e o `XYZ` foi parar no **fim** do arquivo. O motivo é o buffer: para devolver três caracteres, a camada de baixo leu um bloco inteiro, e a posição real do arquivo já está lá adiante. Com `seek` explícito o comportamento é o esperado:
+
+```python
+with open("rmais.txt", "r+", encoding="utf-8") as f:
+    print("lido   :", repr(f.read(3)))
+    f.seek(3)
+    f.write("XYZ")
+    f.seek(0)
+    print("depois :", repr(f.read()))
+```
+
+```text
+lido   : 'abc'
+depois : 'abcXYZghij\n'
+```
+
+Em texto, o argumento de `seek` só é confiável quando vem de um `tell` anterior ou é zero — caractere não tem tamanho fixo em bytes, então "pular 3" não significa "pular 3 bytes". Edição posicional é caso de modo binário (@sec-cap036). Para editar um arquivo de texto, a forma sensata é ler, transformar em memória e regravar por inteiro, de preferência com a troca atômica da seção anterior.
+
+E no modo `"a"` a posição é ainda mais categórica:
+
+```python
+with open("telemetria.log", "a", encoding="utf-8") as f:
+    print("tell() logo apos abrir:", f.tell())
+    f.seek(0)
+    print("depois de seek(0)     :", f.tell())
+    f.write("2026-08-11 03:20:00 INFO  segunda coleta\n")
+```
+
+```text
+tell() logo apos abrir: 215
+depois de seek(0)     : 0
+```
+
+```bash
+tail -2 telemetria.log
+```
+
+```text
+2026-08-11 03:12:11 INFO  coleta concluida 2 leituras
+2026-08-11 03:20:00 INFO  segunda coleta
+```
+
+O `seek(0)` funcionou, o `tell` confirmou — e a escrita foi para o fim assim mesmo. Em modo de acréscimo, o sistema operacional reposiciona no fim a cada escrita, e é isso que torna `"a"` seguro para dois processos gravando no mesmo log.
+
+## `Path.read_text` e o caminho curto
+
+Para arquivo pequeno, ler ou escrever inteiro cabe numa linha:
+
+```python
+from pathlib import Path
+
+Path("curto.txt").write_text("uma linha só\n", encoding="utf-8")
+print(repr(Path("curto.txt").read_text(encoding="utf-8")))
+print("linhas:", Path("leituras.csv").read_text(encoding="utf-8").splitlines()[:2])
+```
+
+```text
+'uma linha só\n'
+linhas: ['onu,nivel,estacao', 'onu-00042,-21.4,Estação Norte']
+```
+
+Abrem, leem ou escrevem e fecham, sem `with`. Usam a memória do arquivo inteiro, então valem para configuração e não para o log de 3 GiB. O `encoding` continua sendo seu — os métodos de `Path` têm o mesmo padrão dependente de sistema que `open`. O resto do que `Path` faz é o @sec-cap037.
+
+## 🐍 Jeito Pythônico
+
+**`with open(...)` sempre.** Arquivo aberto fora de `with` é vazamento esperando um `return` no meio ou uma exceção.
+
+```python
+# antipadrão
+f = open("leituras.csv")
+dados = f.read()
+f.close()          # não roda se o read levantar
+```
+
+```python
+# pythônico
+with open("leituras.csv", encoding="utf-8") as f:
+    dados = f.read()
+```
+
+**`encoding="utf-8"` em toda abertura de texto.** Sem ele, o comportamento depende do locale da máquina. Rode a suíte com `-X warn_default_encoding` para achar as chamadas que faltam.
+
+**Itere sobre o arquivo em vez de `readlines()`.** Uma linha por vez, memória constante:
+
+```python
+# antipadrão
+for linha in f.readlines():   # carrega tudo para jogar quase tudo fora
+    ...
+```
+
+```python
+# pythônico
+for linha in f:
+    ...
+```
+
+**`rstrip("\n")`, não `strip()` nem `linha[:-1]`.** O primeiro remove o que você quer; o segundo come espaço significativo; o terceiro corrompe a última linha quando ela não tem quebra.
+
+**Modo `"x"` quando não pode sobrescrever, `"a"` quando é acréscimo.** `"w"` só quando destruir o que havia é a intenção declarada.
+
+**Escrita atômica para arquivo que importa:** grave no `.tmp`, `flush` mais `os.fsync`, e `os.replace` no fim.
+
+**`Path.read_text` / `Path.write_text` para arquivo pequeno**; `open` com laço para arquivo grande.
+
+**Não adivinhe codificação.** Combine com quem gera o arquivo; `errors="surrogateescape"` só quando o objetivo é repassar bytes intactos.
+
+Sobre versões:
+
+- **Python 3.3** — `FileExistsError`, `FileNotFoundError` e as outras subclasses de `OSError` substituem o `IOError` genérico com verificação de `errno`.
+- **Python 3.4** — `pathlib` entra na biblioteca padrão, com `read_text` e `write_text`.
+- **Python 3.7** — modo UTF-8 (`-X utf8` / `PYTHONUTF8=1`), da PEP 540, permite ignorar o locale sem tocar no código.
+- **Python 3.10** — `EncodingWarning` e `-X warn_default_encoding`, da PEP 597.
+- **Python 3.11** — `locale.getencoding()` substitui `locale.getpreferredencoding(False)`, que passou a ter comportamento dependente do modo UTF-8.
+- **Python 3.15** — pela PEP 686, o modo UTF-8 passa a ser o padrão; até lá, `encoding="utf-8"` explícito é a única forma portátil.
+
+## 🧪 Laboratório
+
+Objetivo: escrever e ler um CSV de leituras, medir o custo de `read()` contra a iteração, provocar e diagnosticar erro de codificação, ver o buffer atrasar a gravação e implementar a escrita atômica.
+
+**1. O diretório e o arquivo.**
+
+```bash
+mkdir -p ~/lab35 && cd ~/lab35
+```
+
+`gerar.py`:
+
+```python
+linhas = [
+    "onu,nivel,estacao",
+    "onu-00042,-21.4,Estação Norte",
+    "onu-00043,-29.8,Estação Central",
+    "onu-00101,-25.9,Praça da Sé",
+]
+with open("leituras.csv", "w", encoding="utf-8") as f:
+    for linha in linhas:
+        f.write(linha + "\n")
+```
+
+```bash
+python3 gerar.py && ls -l leituras.csv && cat leituras.csv
+```
+
+```text
+-rw-r--r-- 1 vitor vitor 114 Aug 11 20:27 leituras.csv
+onu,nivel,estacao
+onu-00042,-21.4,Estação Norte
+onu-00043,-29.8,Estação Central
+onu-00101,-25.9,Praça da Sé
+```
+
+Cento e catorze bytes para 108 caracteres: os seis acentos.
+
+**2. As quatro leituras.** Rode `read()`, `readline()`, `readlines()` e o `for` com `enumerate` do capítulo. Compare os `repr` — em todos eles o `\n` está presente.
+
+**3. O custo da memória.**
+
+```bash
+python3 -c "
+with open('grande.csv', 'w', encoding='utf-8') as f:
+    for i in range(400000):
+        f.write(f'onu-{i:06d},-21.4,Estacao Norte\n')
+"
+ls -lh grande.csv
+```
+
+Rode as duas medições com `tracemalloc` do capítulo:
+
+```text
+-rw-r--r-- 1 vitor vitor 12M Aug 11 20:27 grande.csv
+read()   : 400000 linhas, pico 42.1 MiB
+iteracao : 400000 linhas, pico 0.0 MiB
+```
+
+**4. Os modos.**
+
+```bash
+python3 -c "
+open('m.txt', 'w', encoding='utf-8').write('original\n')
+open('m.txt', 'w', encoding='utf-8').write('sobrescrito\n')
+print(open('m.txt', encoding='utf-8').read(), end='')
+"
+python3 -c "
+with open('m.txt', 'a', encoding='utf-8') as f:
+    f.write('acrescentado\n')
+print(open('m.txt', encoding='utf-8').read(), end='')
+"
+```
+
+```text
+sobrescrito
+sobrescrito
+acrescentado
+```
+
+Depois provoque os quatro erros: `"x"` num arquivo existente, `"r"` num inexistente, `write` em `"r"`, `read` em `"a"`.
+
+**5. As duas codificações.**
+
+```bash
+python3 -c "
+texto = 'Estação Norte: -21.4 dBm\n'
+open('utf8.txt', 'w', encoding='utf-8').write(texto)
+open('latin1.txt', 'w', encoding='latin-1').write(texto)
+print('utf-8   :', open('utf8.txt','rb').read())
+print('latin-1 :', open('latin1.txt','rb').read())
+"
+```
+
+```text
+utf-8   : b'Esta\xc3\xa7\xc3\xa3o Norte: -21.4 dBm\n'
+latin-1 : b'Esta\xe7\xe3o Norte: -21.4 dBm\n'
+```
+
+**6. Os dois erros.** O que estoura e o que não estoura:
+
+```bash
+python3 -c "print(open('latin1.txt', encoding='utf-8').read())"
+python3 -c "print(open('utf8.txt', encoding='latin-1').read(), end='')"
+```
+
+```text
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe7 in position 4: invalid continuation byte
+EstaÃ§Ã£o Norte: -21.4 dBm
+```
+
+O segundo é o perigoso: rodou até o fim.
+
+**7. As políticas de erro.** Rode o laço com os cinco valores de `errors` e confirme o vaivém do `surrogateescape` com `cmp`.
+
+**8. O aviso.** Crie `semencoding.py` com um `open` sem `encoding` e rode com `-X warn_default_encoding`:
+
+```text
+/home/vitor/lab35/semencoding.py:1: EncodingWarning: 'encoding' argument not specified
+```
+
+**9. O buffer.** Rode `buffer.py` do capítulo e veja o tamanho no disco antes e depois do `flush`:
+
+```text
+depois do write, tamanho no disco: 0
+depois do flush, tamanho no disco: 15
+```
+
+Depois `vazamento.py`, com `os._exit(0)`, e confirme com `ls -l perdido.txt` que o arquivo tem zero byte.
+
+**10. A escrita interrompida.** Rode `sem_atomico.py`, veja o `config.txt` pela metade, e então implemente `gravar_atomico` e repita. Confirme com `os.path.exists("config.txt.tmp")` que o temporário não sobrou.
+
+**11. `r+` com e sem `seek`.** Reproduza os dois blocos e compare `'abcdefghij\nXYZ'` com `'abcXYZghij\n'`.
+
+**12. O log.** Escreva quatro linhas em `telemetria.log` e conte os níveis por iteração:
+
+```python
+niveis = {"INFO": 0, "WARN": 0, "ERROR": 0}
+with open("telemetria.log", encoding="utf-8") as f:
+    for linha in f:
+        niveis[linha.split()[2]] += 1
+```
+
+```text
+INFO  2
+WARN  1
+ERROR 1
+```
+
+Depois acrescente uma linha em modo `"a"` com `seek(0)` no meio e confirme com `tail -2` que ela foi para o fim mesmo assim.
+
+## Resumo
+
+- `open` devolve um `TextIOWrapper`, que faz duas coisas: acumula bytes num buffer e traduz bytes em caracteres. Todo o comportamento surpreendente de arquivo de texto sai de uma dessas duas.
+- Os modos: `"r"` lê, `"w"` **trunca antes de escrever**, `"a"` acrescenta sempre no fim, `"x"` recusa se já existir. O sufixo `+` acrescenta a outra operação; `"b"` desliga a camada de texto.
+- Iterar sobre o arquivo lê uma linha por vez com memória constante; `read()` e `readlines()` carregam tudo — 12 MiB em disco viraram 42 MiB na memória.
+- `write` não põe quebra de linha e devolve caracteres, não bytes; `writelines` não põe separador nenhum.
+- Sem `encoding` explícito, `open` usa o padrão do locale — `cp1252` no Windows, ASCII num contêiner mínimo. `encoding="utf-8"` em toda abertura de texto, e `-X warn_default_encoding` para achar o que falta.
+- Ler com a codificação errada estoura num sentido (Latin-1 como UTF-8) e **não** estoura no outro (UTF-8 como Latin-1, que produz `Ã§` em silêncio). O silencioso é o caro.
+- `newline=""` quando o módulo `csv` estiver envolvido ou quando for preciso ver `\r\n` como está.
+- Escrever não é gravar: o buffer só vai ao disco no `flush` ou no `close`. `os._exit`, `SIGKILL` e queda de energia perdem o que estava no buffer.
+- Para arquivo que importa, escreva no `.tmp`, faça `flush` mais `os.fsync` e feche com `os.replace` — o nome aponta para o conteúdo velho ou para o novo, nunca para metade.
+- `r+` em texto escreve onde o buffer estiver, não onde o `tell` diz; edição posicional é assunto de modo binário, que é o próximo capítulo.
