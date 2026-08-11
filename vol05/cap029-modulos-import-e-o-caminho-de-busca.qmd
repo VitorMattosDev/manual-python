@@ -1,3 +1,897 @@
 # Módulos, import e o caminho de busca {#sec-cap029}
 
-*(em elaboracao)*
+O script tinha seis linhas e funcionava desde março:
+
+```python
+"""Media dos niveis de sinal da noite."""
+
+import statistics
+
+NIVEIS = [-22.5, -19.8, -31.2, -27.0, -18.4]
+print("media:", statistics.mean(NIVEIS))
+```
+
+Na terça, alguém do time criou no mesmo diretório um arquivo com os ajudantes do projeto — média móvel, desvio por OLT, aquelas coisas — e deu a ele o nome mais natural do mundo: `statistics.py`. Ninguém tocou em `medias.py`. Mesmo assim:
+
+```bash
+python3 medias.py
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab29/medias.py", line 6, in <module>
+    print("media:", statistics.mean(NIVEIS))
+                    ^^^^^^^^^^^^^^^
+AttributeError: module 'statistics' has no attribute 'mean' (consider renaming '/home/vitor/lab29/statistics.py' since it has the same name as the standard library module named 'statistics' and prevents importing that standard library module)
+```
+
+O Python 3.13 é gentil e diz exatamente o que aconteceu — versões mais antigas davam só a primeira linha e deixavam o resto por sua conta. Mas a lição é maior do que o conselho: **`import` não é uma palavra mágica que traz "a biblioteca"**. É uma busca por nome, numa lista de diretórios, em ordem, e o primeiro que responder ganha. Se você souber qual é a lista e em que ordem ela é percorrida, esse erro e mais uns dez parentes dele deixam de ser mistério.
+
+Este capítulo abre o Volume 5 pela unidade mais básica de organização de código em Python: o módulo.
+
+## Um módulo é um arquivo
+
+Qualquer arquivo `.py` é um módulo. O nome do módulo é o nome do arquivo sem a extensão. Não há declaração, não há registro, não há cabeçalho: existir já basta.
+
+```python
+"""Modulo que fala ao ser importado."""
+
+print("  [coletor] corpo do modulo executado")
+
+OLT_PADRAO = "olt-borda-01"
+
+
+def coletar(onu):
+    return {"onu": onu, "olt": OLT_PADRAO, "nivel": -21.4}
+```
+
+Salvo como `coletor.py`, esse arquivo vira o módulo `coletor`. O `print` no meio dele não está lá por estilo — está lá para tornar visível uma coisa que normalmente é invisível: **importar um módulo executa o corpo dele do começo ao fim**.
+
+```python
+print("antes do primeiro import")
+import coletor
+
+print("antes do segundo import")
+import coletor as c2
+
+print("antes do terceiro")
+from coletor import coletar
+
+print("mesmo objeto?", coletor is c2)
+print(coletar("onu-00042"))
+```
+
+```text
+antes do primeiro import
+  [coletor] corpo do modulo executado
+antes do segundo import
+antes do terceiro
+mesmo objeto? True
+{'onu': 'onu-00042', 'olt': 'olt-borda-01', 'nivel': -21.4}
+```
+
+Três `import`, uma execução. O segundo e o terceiro não reexecutaram nada — pegaram o módulo pronto de um cache. E `coletor is c2` é `True` porque não existem duas cópias: existe **um** objeto módulo, com dois nomes apontando para ele. É o modelo de referências do @sec-cap009 valendo também aqui.
+
+Isso tem uma consequência prática que vale gravar: **código solto no nível do módulo roda no `import`**. Se `coletor.py` abrisse uma conexão, lesse um arquivo de dez megabytes ou disparasse uma consulta, tudo isso aconteceria no instante em que alguém escrevesse `import coletor` — inclusive dentro de uma ferramenta de documentação, de um autocompletar de editor ou de um coletor de testes. Módulo bem-comportado **define**; quem **faz** é a função.
+
+## O que o `import` faz, em quatro passos
+
+::: {#fig-pipeline-import}
+```{.tikz}
+%%| filename: pipeline-import
+%%| alt: Os quatro passos do import - consulta ao cache sys.modules, busca no sys.path, execucao do corpo do modulo e vinculacao do nome no escopo atual
+\begin{tikzpicture}[
+  et/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=6.0cm, align=left, minimum height=0.95cm,
+             font=\scriptsize, inner xsep=7pt},
+  ok/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.6cm, align=left, minimum height=0.8cm,
+             font=\scriptsize, inner xsep=7pt},
+  cd/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualgray!8,
+             font=\ttfamily\scriptsize, minimum height=0.6cm, inner xsep=7pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  sm/.style={font=\scriptsize\itshape, text=manualgray},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.9, 1.4) rectangle (14.6,-6.6);
+
+  \node[cd] at (2.2, 0.9) {import coletor};
+
+  \node[et] at (2.2, -0.4) {\textbf{1.} o nome já está em \texttt{sys.modules}?};
+  \node[et] at (2.2, -2.0) {\textbf{2.} os \emph{finders} percorrem \texttt{sys.path}
+                            na ordem e param no primeiro acerto};
+  \node[et] at (2.2, -3.6) {\textbf{3.} o \emph{loader} cria o objeto módulo,
+                            grava em \texttt{sys.modules} e executa o corpo};
+  \node[et] at (2.2, -5.2) {\textbf{4.} vincula o nome no escopo de quem importou};
+
+  \node[ok] at (9.4, -0.4) {devolve o objeto que já existe --- nada é
+                            reexecutado};
+
+  \node[lb, text width=4.6cm] at (6.5, -2.0) {\texttt{ModuleNotFoundError} se
+                                              nenhum diretório responder};
+  \node[lb, text width=4.6cm] at (6.5, -3.6) {a gravação vem \textbf{antes} da
+                                              execução --- é o que permite ciclos};
+  \node[lb, text width=4.6cm] at (6.5, -5.2) {\texttt{import x as y} e
+                                              \texttt{from x import y} mudam
+                                              só este passo};
+
+  \draw[fl] (2.2, 0.6) -- (2.2, 0.1);
+  \draw[fl] (2.2,-0.9) -- (2.2,-1.5) node[sm, midway, right=2pt] {não};
+  \draw[fl] (2.2,-2.5) -- (2.2,-3.1);
+  \draw[fl] (2.2,-4.1) -- (2.2,-4.7);
+
+  \draw[fl] (5.3,-0.4) -- (6.9,-0.4) node[sm, midway, above] {sim};
+  \draw[fl] (11.7,-0.4) -- (12.6,-0.4) -- (12.6,-5.2) -- (5.3,-5.2);
+\end{tikzpicture}
+```
+O caminho de um `import`, do nome escrito ao nome vinculado.
+:::
+
+O passo 1 é o cache. `sys.modules` é um dicionário comum, de nome para objeto módulo, e ele começa cheio: um Python 3.13 recém-aberto já carregou 46 módulos antes de rodar a sua primeira linha.
+
+```python
+import sys
+
+print(len(sys.modules))
+print(sorted(sys.modules)[:12])
+```
+
+```text
+46
+['__main__', '_abc', '_codecs', '_collections_abc', '_distutils_hack', '_frozen_importlib', '_frozen_importlib_external', '_imp', '_io', '_signal', '_sitebuiltins', '_stat']
+```
+
+`_frozen_importlib` é o próprio mecanismo de import, escrito em Python e congelado no binário — o `import` de Python é implementado em Python. Isso não é curiosidade: é o que permite trocar peças dele em tempo de execução, que é como funcionam ferramentas de import de arquivos `.zip`, de recarregamento automático e de instrumentação.
+
+## O caminho de busca
+
+`sys.path` é uma lista de strings. O passo 2 do import percorre essa lista **na ordem** e para no primeiro diretório que tiver um módulo com o nome procurado.
+
+```python
+import sys
+
+for i, p in enumerate(sys.path):
+    print(f"{i}: {p!r}")
+```
+
+Rodando esse arquivo como `python3 ondeestou.py` a partir de `~/lab29`:
+
+```text
+0: '/home/vitor/lab29'
+1: '/usr/lib/python313.zip'
+2: '/usr/lib/python3.13'
+3: '/usr/lib/python3.13/lib-dynload'
+4: '/usr/local/lib/python3.13/dist-packages'
+5: '/usr/lib/python3/dist-packages'
+```
+
+Da esquerda para a direita, quem colocou cada entrada ali:
+
+- **`0`** — o interpretador, ao iniciar. É a entrada que muda conforme o modo de execução, e é a origem de quase todo problema de import.
+- **`1`** — um `.zip` que nem precisa existir: é o suporte a biblioteca padrão empacotada, herdado da época em que isso economizava disco.
+- **`2` e `3`** — a biblioteca padrão: os módulos escritos em Python e os escritos em C (`lib-dynload`).
+- **`4` e `5`** — onde vão parar os pacotes de terceiros. Em Debian e derivados, `dist-packages`; em outros sistemas, `site-packages`. O `4` é do que você instala; o `5` é do que o `apt` instala. Distinção que volta com força no @sec-cap031.
+
+`sysconfig` responde isso sem depender de leitura visual:
+
+```python
+import sys
+import sysconfig
+
+print("stdlib     :", sysconfig.get_path("stdlib"))
+print("purelib    :", sysconfig.get_path("purelib"))
+print("executavel :", sys.executable)
+```
+
+```text
+stdlib     : /usr/lib/python3.13
+purelib    : /usr/local/lib/python3.13/dist-packages
+executavel : /usr/bin/python3
+```
+
+### A entrada zero muda com o modo de execução
+
+Este é o detalhe que separa quem depura import em minutos de quem depura em tardes. A entrada `0` é:
+
+- **o diretório do script**, quando você roda `python3 arquivo.py` — e note: o diretório *do arquivo*, não aquele de onde você chamou;
+- **a string vazia** (que significa "o diretório atual"), quando você usa `python3 -c` ou abre o REPL;
+- **o diretório atual**, quando você usa `python3 -m modulo`.
+
+Dá para ver os três. Com o mesmo `ondeestou.py` copiado para `sub/`, chamado de `~/lab29`:
+
+```bash
+python3 -m sub.ondeestou
+```
+
+```text
+0: '/home/vitor/lab29'
+```
+
+```bash
+python3 sub/ondeestou.py
+```
+
+```text
+0: '/home/vitor/lab29/sub'
+```
+
+Mesmo código, mesmo diretório de chamada, `sys.path[0]` diferente. Com `-m`, a raiz do projeto está no caminho e os imports entre os módulos do projeto funcionam; chamando o arquivo direto, quem está no caminho é a pasta interna, e `import outro_modulo_do_projeto` falha com `ModuleNotFoundError`. Guarde a frase: **quando o import quebra ao rodar um arquivo de dentro de uma subpasta, a resposta quase sempre é `-m`**. O @sec-cap034 fecha esse assunto.
+
+A variável de ambiente `PYTHONPATH` acrescenta entradas logo depois da zero:
+
+```bash
+PYTHONPATH=/opt/ferramentas python3 -c "import sys; print(sys.path[:3])"
+```
+
+```text
+['', '/opt/ferramentas', '/usr/lib/python313.zip']
+```
+
+É útil para um teste rápido e péssimo como solução permanente: ela vale para *todos* os Pythons daquele shell, inclusive os de dentro de ambientes virtuais, e some quando você fecha o terminal ou muda de máquina. Um projeto instalado corretamente (@sec-cap032) não precisa de `PYTHONPATH`.
+
+::: {#fig-caminho-busca}
+```{.tikz}
+%%| filename: caminho-busca
+%%| alt: A ordem do sys.path com a origem de cada entrada e o ponto em que um arquivo local sombreia um modulo da biblioteca padrao
+\begin{tikzpicture}[
+  ent/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualgray!7,
+              text width=6.2cm, align=left, minimum height=0.62cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=7pt},
+  pri/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!11,
+              text width=6.2cm, align=left, minimum height=0.62cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=7pt},
+  std/.style={draw=manualblue, thick, rounded corners=1pt, fill=manualblue!10,
+              text width=6.2cm, align=left, minimum height=0.62cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=7pt},
+  ter/.style={draw=manualgreen, thick, rounded corners=1pt, fill=manualgreen!11,
+              text width=6.2cm, align=left, minimum height=0.62cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=7pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  fl/.style={->,>=stealth, thick, manualred}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.9, 1.5) rectangle (14.7,-5.6);
+
+  \node[hd] at (0.0, 1.0) {\texttt{sys.path}, na ordem em que é percorrido};
+  \node[hd] at (7.0, 1.0) {quem pôs a entrada ali};
+
+  \node[pri] at (0.0, 0.2) {0: /home/vitor/lab29};
+  \node[lb, text width=7.0cm] at (7.0, 0.2) {o interpretador: diretório do
+    script (ou o atual, com \texttt{-m} e \texttt{-c})};
+
+  \node[ent] at (0.0,-0.6) {1: /usr/lib/python313.zip};
+  \node[lb, text width=7.0cm] at (7.0,-0.6) {suporte a biblioteca padrão em
+    \texttt{.zip}; nem sempre existe};
+
+  \node[std] at (0.0,-1.4) {2: /usr/lib/python3.13};
+  \node[lb, text width=7.0cm] at (7.0,-1.4) {biblioteca padrão em Python ---
+    aqui mora o \texttt{statistics} de verdade};
+
+  \node[std] at (0.0,-2.2) {3: /usr/lib/python3.13/lib-dynload};
+  \node[lb, text width=7.0cm] at (7.0,-2.2) {biblioteca padrão escrita em C};
+
+  \node[ter] at (0.0,-3.0) {4: /usr/local/lib/python3.13/dist-packages};
+  \node[lb, text width=7.0cm] at (7.0,-3.0) {o que \textbf{você} instala com
+    \texttt{pip}};
+
+  \node[ter] at (0.0,-3.8) {5: /usr/lib/python3/dist-packages};
+  \node[lb, text width=7.0cm] at (7.0,-3.8) {o que a \textbf{distribuição}
+    instala com \texttt{apt}};
+
+  \draw[fl] (-0.55, 0.2) -- (-0.55,-1.4);
+  \node[lb, text=manualred, text width=6.0cm, anchor=north west] at (0.0,-4.4)
+    {Um \texttt{statistics.py} na entrada 0 responde antes da entrada 2, e a
+     busca para no primeiro acerto: a biblioteca padrão nunca chega a ser
+     consultada.};
+\end{tikzpicture}
+```
+A ordem manda: a busca para no primeiro diretório que responder.
+:::
+
+## De volta ao erro da abertura
+
+Agora o `AttributeError` do começo se lê inteiro. `medias.py` está em `/home/vitor/lab29`, então essa é a entrada zero. `import statistics` encontra `/home/vitor/lab29/statistics.py` **antes** de `/usr/lib/python3.13/statistics.py`, importa o arquivo do projeto e para por aí. O módulo importado é real, existe, foi carregado com sucesso — só não tem `mean`.
+
+A pergunta que resolve qualquer suspeita de sombreamento é sempre a mesma:
+
+```python
+import statistics
+
+print(statistics.__file__)
+print(statistics.__doc__)
+```
+
+```text
+/home/vitor/lab29/statistics.py
+Ajudantes de estatistica do projeto.
+```
+
+`__file__` diz **qual arquivo** foi carregado. Quando ele aponta para o seu projeto e você esperava a biblioteca padrão, o diagnóstico está fechado. A correção é renomear o seu arquivo — `estat.py`, `estatisticas_onu.py`, qualquer coisa que não colida — e apagar o `__pycache__`, que discutimos a seguir:
+
+```bash
+mv statistics.py estat.py && rm -rf __pycache__ && python3 medias.py
+```
+
+```text
+media: -23.78
+```
+
+Nomes de módulo da biblioteca padrão que mais aparecem por engano em projetos: `statistics`, `csv`, `json`, `email`, `logging`, `types`, `queue`, `select`, `time`, `random`, `secrets`, `token`, `parser`, `test`, `copy`, `code`, `platform`, `signal` e `socket`. Nenhum deles é um bom nome de arquivo seu.
+
+## `__pycache__` e os arquivos `.pyc`
+
+Depois do primeiro import, aparece um diretório:
+
+```bash
+ls -1 __pycache__
+```
+
+```text
+coletor.cpython-313.pyc
+statistics.cpython-313.pyc
+```
+
+É o bytecode do @sec-cap002 gravado em disco, para o próximo import não ter que compilar de novo. O nome carrega a implementação e a versão (`cpython-313`) justamente para que Pythons diferentes convivam no mesmo diretório sem se atropelar.
+
+Três coisas que valem saber:
+
+- **O cache se invalida sozinho** pelo par tamanho/data de modificação do `.py`. Não é preciso limpar nada em uso normal.
+- **Ele não é gerado para o script principal** — só para os módulos importados. Rodar `python3 medias.py` mil vezes nunca cria `medias.cpython-313.pyc`.
+- **`__pycache__` vai para o `.gitignore`**, sempre. Bytecode é derivado; versionar derivado é dor de merge de graça.
+
+Para desligar a escrita (num contêiner de imagem imutável, por exemplo): `python3 -B` ou `PYTHONDONTWRITEBYTECODE=1`.
+
+## As formas de importar
+
+```python
+import coletor                      # 1
+import coletor as col               # 2
+from coletor import coletar         # 3
+from coletor import coletar as ler  # 4
+from coletor import *               # 5 - evite
+```
+
+As cinco fazem exatamente o mesmo trabalho de carga: executam o módulo (se ainda não estiver em `sys.modules`) e o registram lá. **A diferença está só no passo 4 do diagrama** — que nome fica vinculado no seu escopo.
+
+A forma 1 vincula o módulo; você escreve `coletor.coletar(...)` e o leitor sabe de onde veio a função. A forma 3 vincula a função direto; é mais curta, e o custo é que `coletar(...)` no meio do arquivo não diz de onde saiu. As duas são idiomáticas: `import json` e `from pathlib import Path` são igualmente comuns, e a comunidade escolhe pela leitura. Nomes muito genéricos (`get`, `load`, `run`, `Config`) pedem o módulo na frente; nomes específicos (`Path`, `dataclass`, `defaultdict`) ficam bem soltos.
+
+A forma 5 é diferente em espécie:
+
+```python
+from coletor import *
+
+print("coletar veio?", "coletar" in dir())
+print("OLT_PADRAO veio?", "OLT_PADRAO" in dir())
+```
+
+```text
+coletar veio? True
+OLT_PADRAO veio? True
+```
+
+Ela despeja no seu escopo **todo nome público do módulo**, e a lista pode mudar quando o módulo mudar. Consequências: você não sabe, lendo o arquivo, de onde veio cada nome; dois `import *` podem sobrescrever um ao outro em silêncio; e nenhum verificador estático consegue distinguir erro de digitação de nome importado. Vale no REPL, para explorar. Em arquivo, não.
+
+## Importações circulares
+
+Dois módulos que se importam parecem um paradoxo, mas o passo 3 do diagrama já resolveu isso: o módulo é gravado em `sys.modules` **antes** de o corpo dele ser executado. O que existe lá durante o ciclo é um módulo pela metade — e é aí que a coisa ou funciona ou explode, dependendo de *o que* você importou.
+
+Explode assim:
+
+```python
+# cadastro.py
+from alarmes import contar
+
+ONUS = {"onu-00042": {"olt": "olt-borda-01"}}
+
+
+def descrever(onu):
+    return f"{onu} ({contar(onu)} alarmes)"
+```
+
+```python
+# alarmes.py
+from cadastro import ONUS
+
+FILA = {"onu-00042": 3}
+
+
+def contar(onu):
+    return FILA.get(onu, 0) if onu in ONUS else 0
+```
+
+```bash
+python3 -c "import cadastro; print(cadastro.descrever('onu-00042'))"
+```
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import cadastro; print(cadastro.descrever('onu-00042'))
+    ^^^^^^^^^^^^^^^
+  File "/home/vitor/lab29/cadastro.py", line 3, in <module>
+    from alarmes import contar
+  File "/home/vitor/lab29/alarmes.py", line 3, in <module>
+    from cadastro import ONUS
+ImportError: cannot import name 'ONUS' from 'cadastro' (consider renaming '/home/vitor/lab29/cadastro.py' if it has the same name as a library you intended to import)
+```
+
+(A sugestão final é um palpite genérico do 3.13 e não se aplica aqui — o problema não é nome repetido, é ordem.) O traceback conta a história em ordem: `cadastro` começou, na linha 3 pediu `alarmes`, `alarmes` começou, na linha 3 pediu `ONUS` de volta de `cadastro` — que já está em `sys.modules`, mas só executou até a linha 3 e ainda não chegou na linha que define `ONUS`. O nome não existe *ainda*.
+
+Agora o mesmo ciclo, trocando `from x import nome` por `import x`:
+
+```python
+# cadastro2.py
+import alarmes2
+
+ONUS = {"onu-00042": {"olt": "olt-borda-01"}}
+
+
+def descrever(onu):
+    return f"{onu} ({alarmes2.contar(onu)} alarmes)"
+```
+
+```python
+# alarmes2.py
+import cadastro2
+
+FILA = {"onu-00042": 3}
+
+
+def contar(onu):
+    return FILA.get(onu, 0) if onu in cadastro2.ONUS else 0
+```
+
+```text
+onu-00042 (3 alarmes)
+```
+
+Funciona. `import cadastro2` só precisa que o **objeto módulo** exista — e ele existe desde antes da execução do corpo. O acesso a `cadastro2.ONUS` acontece lá na frente, dentro de `contar`, quando já não falta nada.
+
+Daí as duas saídas para um ciclo, em ordem de preferência:
+
+1. **Quebre o ciclo.** Ele quase sempre denuncia um problema de desenho: dois módulos que precisam um do outro provavelmente têm uma terceira coisa em comum que merece morar sozinha. Um `modelos.py` com as estruturas de dados, importado pelos dois, resolve e melhora o projeto.
+2. **Adie o import** para dentro da função, quando quebrar não vale a pena. Custa uma consulta a `sys.modules` por chamada — barato — e é padrão reconhecido para dependência opcional e para import pesado que só um caminho raro usa.
+3. **Se for só para anotação de tipo**, o `if TYPE_CHECKING:` do Volume 10 resolve sem importar nada em tempo de execução.
+
+Trocar `from x import nome` por `import x` também funciona, como acabamos de ver — mas é sorte, não desenho: continua sendo um ciclo, e ele volta a morder na próxima vez que alguém precisar de um valor do outro módulo no nível do arquivo.
+
+## Import dinâmico com `importlib`
+
+`import` precisa de um nome literal, escrito no código. Quando o nome só existe em tempo de execução — plugins, sondas configuráveis, drivers escolhidos por arquivo de configuração — a porta é `importlib.import_module`, que faz exatamente o mesmo trabalho recebendo uma string:
+
+```python
+"""Carrega sondas pelo nome, sem saber quais existem em tempo de escrita."""
+
+import importlib
+import sys
+
+ATIVAS = ["potencia", "latencia"]
+
+sys.path.insert(0, "sondas")
+for nome in ATIVAS:
+    mod = importlib.import_module(nome)
+    print(f"{mod.NOME:>16}: {mod.medir('onu-00042')}")
+```
+
+```text
+ potencia optica: {'metrica': 'rx_dbm', 'valor': -21.4}
+        latencia: {'metrica': 'rtt_ms', 'valor': 8.2}
+```
+
+Cada sonda é um arquivo com `NOME` e `medir`; a lista `ATIVAS` poderia vir de um `.toml`. Acrescentar uma sonda nova não toca em nenhuma linha deste arquivo — é o mesmo princípio de "vire dado o que seria código" que apareceu no despacho por dicionário do @sec-cap020.
+
+Um aviso de segurança que vale desde já: `import_module` **executa** o módulo. Se o nome vier de entrada de usuário sem uma lista branca no meio, você acabou de escrever um executor de código arbitrário. A regra é: nome de plugin se valida contra um conjunto conhecido antes de virar import.
+
+O parente próximo é `importlib.reload`, que reexecuta o corpo de um módulo já carregado:
+
+```python
+import importlib
+
+import coletor
+
+print("importar de novo nao reexecuta:")
+import coletor  # noqa: F811
+
+print("reload reexecuta:")
+importlib.reload(coletor)
+```
+
+```text
+  [coletor] corpo do modulo executado
+importar de novo nao reexecuta:
+reload reexecuta:
+  [coletor] corpo do modulo executado
+```
+
+É ferramenta de sessão interativa e de servidor em modo de desenvolvimento. Em produção, não: objetos criados antes do `reload` continuam apontando para as classes antigas, e o resultado é um `isinstance` que devolve `False` para o que claramente é uma instância. Depurar isso é pior do que reiniciar o processo.
+
+## O import custa tempo
+
+Cada import lê arquivo, compila (ou lê o `.pyc`) e executa. Com `-X importtime` dá para ver a conta, em microssegundos:
+
+```bash
+python3 -X importtime -c "import json" 2>&1 | tail -6
+```
+
+```text
+import time:       576 |       5794 |     re
+import time:        70 |         70 |       _json
+import time:       868 |        938 |     json.scanner
+import time:       919 |       7650 |   json.decoder
+import time:       907 |        907 |   json.encoder
+import time:      1569 |      10125 | json
+```
+
+A primeira coluna é o tempo do próprio módulo; a segunda é o acumulado com tudo que ele importa. `import json` custa 10 ms, e mais da metade disso é o `re`, que vem junto. Dez milissegundos não importam num serviço que sobe uma vez — importam muito numa ferramenta de linha de comando chamada num laço de shell, e é por isso que utilitários cuidadosos adiam imports pesados para dentro das funções que realmente precisam deles. Medir antes, como sempre: `-X importtime` é o `timeit` do tempo de partida.
+
+## 🐍 Jeito Pythônico
+
+**Imports no topo do arquivo, em três blocos separados por linha em branco**, na ordem da PEP 8: biblioteca padrão, terceiros, projeto. Um `import` por linha.
+
+```python
+# antipadrão
+import sys, os, json
+from coletor import *
+```
+
+```python
+# pythônico
+import json
+import sys
+from pathlib import Path
+
+import httpx
+
+from telemetria.coletor import coletar
+```
+
+Ferramentas fazem isso por você e não vale mais discutir ordenação à mão: `ruff check --select I --fix` (ou `isort`) resolve o arquivo inteiro.
+
+**Nunca dê a um arquivo seu o nome de um módulo da biblioteca padrão.** Quando o erro aparecer, `modulo.__file__` é a primeira coisa a olhar.
+
+**`if __name__ == "__main__":` para o que não deve rodar no import.** O nível do módulo define; a execução fica atrás do guarda. Assunto do @sec-cap034.
+
+**Prefira `-m` a caminho de arquivo** para rodar código que faz parte de um projeto: `python3 -m pacote.modulo` põe a raiz do projeto no `sys.path`, `python3 pacote/modulo.py` põe a subpasta.
+
+**Não mexa em `sys.path` dentro do código de produção.** `sys.path.insert(0, "..")` é a gambiarra que sempre volta: quebra quando o programa é chamado de outro diretório, quebra quando vira pacote instalado, e esconde o problema real, que é o projeto não estar instalado. Em desenvolvimento, `pip install -e .` (@sec-cap032) faz certo o que o `sys.path.insert` faz errado.
+
+**`from x import *` só no REPL.** Em arquivo, importe o que usa.
+
+**Adie import pesado** que só um caminho raro usa, e meça com `-X importtime` antes de decidir que vale a pena.
+
+Sobre versões:
+
+- **Python 3.3** — pacotes de namespace implícitos (PEP 420) tornaram o `__init__.py` opcional, com consequências que o @sec-cap030 detalha.
+- **Python 3.7** — `-X importtime` passou a ser embutido; `__getattr__` no nível do módulo (PEP 562) permitiu import preguiçoso de atributo.
+- **Python 3.11** — `importlib.resources.files()` virou a forma correta de ler arquivos de dados que viajam junto com um pacote, aposentando `pkg_resources`.
+- **Python 3.12** — `distutils` saiu da biblioteca padrão; código antigo que fazia `import distutils` precisa de `setuptools` explícito.
+- **Python 3.13** — as mensagens de erro de import passaram a sugerir o arquivo culpado pelo sombreamento, exatamente como no traceback da abertura deste capítulo.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o sombreamento da abertura, ver `sys.path` mudar conforme o modo de execução, observar o cache do import, quebrar um ciclo e terminar com um carregador de sondas que aceita módulo novo sem alterar uma linha.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab29 && cd ~/lab29
+python3 --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O sombreamento.** Crie `medias.py`:
+
+```python
+"""Media dos niveis de sinal da noite."""
+
+import statistics
+
+NIVEIS = [-22.5, -19.8, -31.2, -27.0, -18.4]
+print("media:", statistics.mean(NIVEIS))
+```
+
+```bash
+python3 medias.py
+```
+
+```text
+media: -23.78
+```
+
+Agora crie o culpado, `statistics.py`:
+
+```python
+"""Ajudantes de estatistica do projeto."""
+
+
+def media_movel(valores, janela):
+    return [
+        sum(valores[i : i + janela]) / janela
+        for i in range(len(valores) - janela + 1)
+    ]
+```
+
+```bash
+python3 medias.py
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab29/medias.py", line 6, in <module>
+    print("media:", statistics.mean(NIVEIS))
+                    ^^^^^^^^^^^^^^^
+AttributeError: module 'statistics' has no attribute 'mean' (consider renaming '/home/vitor/lab29/statistics.py' since it has the same name as the standard library module named 'statistics' and prevents importing that standard library module)
+```
+
+**3. Diagnostique e corrija.**
+
+```bash
+python3 -c "import statistics; print(statistics.__file__)"
+mv statistics.py estat.py && rm -rf __pycache__
+python3 medias.py
+```
+
+```text
+/home/vitor/lab29/statistics.py
+media: -23.78
+```
+
+**4. Veja o caminho de busca.** Crie `ondeestou.py`:
+
+```python
+import sys
+
+for i, p in enumerate(sys.path):
+    print(f"{i}: {p!r}")
+```
+
+```bash
+python3 ondeestou.py
+```
+
+```text
+0: '/home/vitor/lab29'
+1: '/usr/lib/python313.zip'
+2: '/usr/lib/python3.13'
+3: '/usr/lib/python3.13/lib-dynload'
+4: '/usr/local/lib/python3.13/dist-packages'
+5: '/usr/lib/python3/dist-packages'
+```
+
+**5. A entrada zero muda.**
+
+```bash
+mkdir -p sub && cp ondeestou.py sub/
+python3 -m sub.ondeestou | head -1
+python3 sub/ondeestou.py | head -1
+python3 -c "import sys; print(f'0: {sys.path[0]!r}')"
+```
+
+```text
+0: '/home/vitor/lab29'
+0: '/home/vitor/lab29/sub'
+0: ''
+```
+
+Três modos, três entradas zero. Guarde qual é qual.
+
+**6. O módulo roda uma vez.** Crie `coletor.py`:
+
+```python
+"""Modulo que fala ao ser importado."""
+
+print("  [coletor] corpo do modulo executado")
+
+OLT_PADRAO = "olt-borda-01"
+
+
+def coletar(onu):
+    return {"onu": onu, "olt": OLT_PADRAO, "nivel": -21.4}
+```
+
+E `usa.py`:
+
+```python
+import sys
+
+print("antes do primeiro import")
+import coletor
+
+print("antes do segundo import")
+import coletor as c2
+
+print("antes do terceiro")
+from coletor import coletar
+
+print("mesmo objeto?", coletor is c2)
+print("em sys.modules?", "coletor" in sys.modules)
+print(coletar("onu-00042"))
+```
+
+```bash
+python3 usa.py
+```
+
+```text
+antes do primeiro import
+  [coletor] corpo do modulo executado
+antes do segundo import
+antes do terceiro
+mesmo objeto? True
+em sys.modules? True
+{'onu': 'onu-00042', 'olt': 'olt-borda-01', 'nivel': -21.4}
+```
+
+**7. O bytecode em disco.**
+
+```bash
+ls -1 __pycache__
+```
+
+```text
+coletor.cpython-313.pyc
+```
+
+Note que não há `usa.cpython-313.pyc`: o script principal não é cacheado.
+
+**8. O ciclo que quebra.** Crie `cadastro.py` e `alarmes.py`:
+
+```python
+# cadastro.py
+from alarmes import contar
+
+ONUS = {"onu-00042": {"olt": "olt-borda-01"}}
+
+
+def descrever(onu):
+    return f"{onu} ({contar(onu)} alarmes)"
+```
+
+```python
+# alarmes.py
+from cadastro import ONUS
+
+FILA = {"onu-00042": 3}
+
+
+def contar(onu):
+    return FILA.get(onu, 0) if onu in ONUS else 0
+```
+
+```bash
+python3 -c "import cadastro; print(cadastro.descrever('onu-00042'))"
+```
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import cadastro; print(cadastro.descrever('onu-00042'))
+    ^^^^^^^^^^^^^^^
+  File "/home/vitor/lab29/cadastro.py", line 1, in <module>
+    from alarmes import contar
+  File "/home/vitor/lab29/alarmes.py", line 1, in <module>
+    from cadastro import ONUS
+ImportError: cannot import name 'ONUS' from 'cadastro' (consider renaming '/home/vitor/lab29/cadastro.py' if it has the same name as a library you intended to import)
+```
+
+Leia o traceback de cima para baixo: é a ordem exata em que os módulos entraram.
+
+**9. Quebre o ciclo de verdade.** Crie `modelos.py` com o que os dois compartilham:
+
+```python
+"""Estruturas comuns ao cadastro e aos alarmes."""
+
+ONUS = {"onu-00042": {"olt": "olt-borda-01"}}
+FILA_ALARMES = {"onu-00042": 3}
+```
+
+E reescreva os dois para dependerem só dele:
+
+```python
+# alarmes3.py
+from modelos import FILA_ALARMES, ONUS
+
+
+def contar(onu):
+    return FILA_ALARMES.get(onu, 0) if onu in ONUS else 0
+```
+
+```python
+# cadastro3.py
+from alarmes3 import contar
+
+
+def descrever(onu):
+    return f"{onu} ({contar(onu)} alarmes)"
+```
+
+```bash
+python3 -c "import cadastro3; print(cadastro3.descrever('onu-00042'))"
+```
+
+```text
+onu-00042 (3 alarmes)
+```
+
+Sem ciclo, sem import adiado, sem truque: só a dependência apontando para um lado só.
+
+**10. Sondas dinâmicas.** Crie `sondas/potencia.py` e `sondas/latencia.py`:
+
+```python
+# sondas/potencia.py
+NOME = "potencia optica"
+
+
+def medir(onu):
+    return {"metrica": "rx_dbm", "valor": -21.4}
+```
+
+```python
+# sondas/latencia.py
+NOME = "latencia"
+
+
+def medir(onu):
+    return {"metrica": "rtt_ms", "valor": 8.2}
+```
+
+E `roda_sondas.py`:
+
+```python
+"""Carrega sondas pelo nome, sem saber quais existem em tempo de escrita."""
+
+import importlib
+import sys
+
+ATIVAS = ["potencia", "latencia"]
+
+sys.path.insert(0, "sondas")
+for nome in ATIVAS:
+    mod = importlib.import_module(nome)
+    print(f"{mod.NOME:>16}: {mod.medir('onu-00042')}")
+```
+
+```bash
+python3 roda_sondas.py
+```
+
+```text
+ potencia optica: {'metrica': 'rx_dbm', 'valor': -21.4}
+        latencia: {'metrica': 'rtt_ms', 'valor': 8.2}
+```
+
+Acrescente `sondas/temperatura.py` no mesmo formato, ponha `"temperatura"` em `ATIVAS` e rode de novo: nenhuma outra linha muda. (E note o `sys.path.insert` — ele está aqui porque `sondas/` ainda não é um pacote instalado. O @sec-cap030 tira essa linha.)
+
+**11. O custo do import.**
+
+```bash
+python3 -X importtime -c "import json" 2>&1 | tail -3
+```
+
+```text
+import time:      1089 |       7570 |   json.decoder
+import time:       778 |        778 |   json.encoder
+import time:      1559 |       9905 | json
+```
+
+Os números variam a cada execução — o que não varia é a ordem de grandeza e quem puxa quem.
+
+**12. Limpe.** `rm -rf ~/lab29` quando terminar — ou guarde, porque o @sec-cap030 transforma essa pasta num pacote de verdade.
+
+## Resumo
+
+- Um módulo é um arquivo `.py`; importá-lo **executa o corpo dele inteiro**, uma única vez por processo. Módulo define, função faz.
+- O `import` tem quatro passos: consulta `sys.modules`, procura no `sys.path`, executa e grava o módulo, vincula o nome. Só o último passo muda entre `import x`, `import x as y` e `from x import y`.
+- `sys.path` é percorrido **na ordem** e a busca para no primeiro acerto — é por isso que um `statistics.py` seu esconde o da biblioteca padrão. `modulo.__file__` é o diagnóstico.
+- A entrada `sys.path[0]` é o diretório do script com `python3 arquivo.py`, o diretório atual com `-m`, e a string vazia com `-c` e no REPL. Quase todo import quebrado mora nessa diferença.
+- `__pycache__` guarda o bytecode, se invalida sozinho, não é criado para o script principal e vai para o `.gitignore`.
+- Ciclos de import falham com `from x import nome` e sobrevivem com `import x`, porque o objeto módulo entra em `sys.modules` antes de ser executado. A boa correção é extrair o que os dois compartilham para um terceiro módulo.
+- `importlib.import_module` importa por string, para plugins e sondas configuráveis — sempre com lista branca, porque importar é executar.
+- `-X importtime` mede o custo de partida; adiar import pesado só se justifica com medição.
