@@ -1,3 +1,922 @@
 # Empacotamento moderno: pyproject.toml, build e publicação {#sec-cap032}
 
-*(em elaboracao)*
+O projeto do @sec-cap030 está pronto: layout `src`, pacote com subpacotes, dado interno, `__main__.py`. Aí chega a hora de outra pessoa usar, e vem a pergunta:
+
+> "Clonei o repositório e `python -m telemetria` diz que o módulo não existe. O que eu faço?"
+
+Se a resposta for "exporta `PYTHONPATH=src`", o projeto não está pronto: está funcionando por acidente na sua máquina. E se for "roda sempre da raiz do repositório", pior — porque aí o `python3 -m pytest` de dentro de `tests/` também vai depender de onde a pessoa estava quando digitou.
+
+A resposta certa é uma linha:
+
+```bash
+pip install -e .
+```
+
+Para que ela funcione, o projeto precisa de um arquivo. Este capítulo é sobre esse arquivo, sobre o que "instalar" significa de verdade, e sobre como transformar o mesmo diretório em algo que qualquer pessoa instala com `pip install telemetria`.
+
+## Sem `pyproject.toml`, não há projeto
+
+```bash
+pip install -e .
+```
+
+```text
+ERROR: file:///home/vitor/lab32/projeto does not appear to be a Python project:
+neither 'setup.py' nor 'pyproject.toml' found.
+```
+
+O `pip` não adivinha. Ele procura instruções, e desde a PEP 518 (2016) e a PEP 621 (2020) elas moram num arquivo só, em TOML, com três seções de donos diferentes.
+
+::: {#fig-pyproject-tres}
+```{.tikz}
+%%| filename: pyproject-tres
+%%| alt: As tres secoes do pyproject.toml e quem le cada uma - build-system lido pelo pip, project lido pelo backend de construcao, e tool lido pelas ferramentas de desenvolvimento
+\begin{tikzpicture}[
+  sec/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=5.2cm, align=left, minimum height=1.5cm,
+              font=\ttfamily\scriptsize, anchor=north west, inner sep=7pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  qm/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!12,
+             text width=3.4cm, align=center, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.7, 1.6) rectangle (14.7,-6.6);
+
+  \node[hd] at (0.0, 1.1) {as três seções do \texttt{pyproject.toml}};
+  \node[hd] at (6.6, 1.1) {quem lê};
+  \node[hd] at (10.6, 1.1) {para quê};
+
+  \node[sec] at (0.0, 0.6) {[build-system]\\requires = ["hatchling"]\\
+                            build-backend = "hatchling.build"};
+  \node[qm]  at (8.3,-0.15) {pip / build};
+  \node[lb, text width=4.0cm] at (10.6,-0.05) {descobrir \textbf{como} construir
+    o pacote, antes de qualquer outra coisa};
+
+  \node[sec] at (0.0,-1.6) {[project]\\name = "telemetria"\\version = "0.1.0"\\
+                            dependencies = [...]};
+  \node[qm]  at (8.3,-2.6) {o backend};
+  \node[lb, text width=4.0cm] at (10.6,-2.5) {gerar os metadados que o
+    \texttt{pip} e o PyPI vão ler --- padrão da PEP 621, igual em toda
+    ferramenta};
+
+  \node[sec] at (0.0,-4.2) {[tool.ruff]\\[tool.pytest.ini\_options]\\
+                            [tool.hatch.version]};
+  \node[qm]  at (8.3,-5.0) {cada ferramenta};
+  \node[lb, text width=4.0cm] at (10.6,-4.9) {configuração livre --- é aqui que
+    morre a era do \texttt{setup.cfg}, \texttt{.flake8} e companhia};
+
+  \draw[fl] (5.4,-0.15) -- (6.6,-0.15);
+  \draw[fl] (5.4,-2.6) -- (6.6,-2.6);
+  \draw[fl] (5.4,-5.0) -- (6.6,-5.0);
+\end{tikzpicture}
+```
+Um arquivo, três públicos: o instalador, o construtor e as ferramentas.
+:::
+
+O arquivo completo do nosso projeto:
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telemetria"
+version = "0.1.0"
+description = "Coleta e classificacao de leituras de potencia optica"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Vitor Mattos", email = "vitor@example.com" }]
+keywords = ["ftth", "gpon", "telemetria"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking :: Monitoring",
+]
+dependencies = ["rich>=13,<15"]
+
+[project.optional-dependencies]
+grafico = ["matplotlib>=3.8"]
+
+[project.scripts]
+telemetria = "telemetria.__main__:main"
+
+[project.urls]
+Repositorio = "https://github.com/exemplo/telemetria"
+```
+
+Vinte e poucas linhas que substituem o `setup.py`, o `setup.cfg`, o `MANIFEST.in` e o `requirements.txt` de produção do modelo antigo. Vale caminhar por elas.
+
+**`[build-system]`** é a única seção que o `pip` lê antes de tudo. Ela diz de que ferramenta ele precisa para construir este projeto — e o `pip` instala essa ferramenta num ambiente isolado, temporário, só para construir. É a PEP 517: nenhum `setup.py` é executado, nenhuma ferramenta precisa estar na sua máquina de antemão.
+
+Backends comuns: `hatchling` (o padrão deste manual — rápido, sem configuração para o caso normal), `setuptools` (o mais antigo e o mais presente em projeto legado), `flit-core` (mínimo, para pacote de um arquivo só), `pdm-backend` e `maturin` (para extensões em Rust). A escolha muda a seção `[tool.*]` e nada mais: `[project]` é a mesma em todos.
+
+**`[project]`** é o padrão PEP 621, e o que estiver ali vale igual em qualquer backend.
+
+- `name` é o nome no PyPI — pode diferir do nome do pacote importável, e é fonte comum de confusão (`pip install scikit-learn`, `import sklearn`).
+- `requires-python` é levado a sério: quem estiver num 3.10 recebe a última versão compatível em vez de um erro no meio do import.
+- `license = "MIT"` na forma de identificador SPDX é o formato moderno (PEP 639); a forma antiga com tabela e arquivo ainda funciona, mas os backends já avisam que é obsoleta.
+- `dependencies` são as de produção — as mesmas do `requirements.txt` do @sec-cap031, agora no lugar certo, porque viajam com o pacote.
+- `[project.optional-dependencies]` são os "extras": `pip install "telemetria[grafico]"` traz o `matplotlib` também.
+- `[project.scripts]` cria comando de terminal, e é o assunto do @sec-cap034.
+
+## O que "instalar" faz
+
+```bash
+pip install -e .
+```
+
+```text
+Obtaining file:///home/vitor/lab32/projeto
+  Checking if build backend supports build_editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Collecting rich<15,>=13 (from telemetria==0.1.0)
+Building wheels for collected packages: telemetria
+  Building editable for telemetria (pyproject.toml): finished with status 'done'
+Successfully installed markdown-it-py-4.2.0 mdurl-0.1.2 pygments-2.20.0 rich-14.3.4 telemetria-0.1.0
+```
+
+Três coisas aconteceram, e nenhuma é "copiar arquivos para uma pasta":
+
+1. O `pip` leu `[build-system]`, criou um ambiente isolado e instalou o `hatchling` nele.
+2. Pediu ao `hatchling` uma **roda editável**, e a instalou.
+3. Leu `dependencies` e instalou o `rich` — com suas transitivas.
+
+O resultado no `site-packages` do venv são dois itens, e nenhum deles é o seu código:
+
+```bash
+ls -1 .venv/lib/python3.13/site-packages | grep telemetria
+cat .venv/lib/python3.13/site-packages/_editable_impl_telemetria.pth
+```
+
+```text
+_editable_impl_telemetria.pth
+telemetria-0.1.0.dist-info
+/home/vitor/lab32/projeto/src
+```
+
+O `.pth` é um arquivo que o Python lê na inicialização e cujo conteúdo é acrescentado ao `sys.path` — ou seja, a instalação editável é o `sys.path.insert` do @sec-cap029, feito da forma correta: pelo instalador, dentro do venv certo, registrado nos metadados, e removível com `pip uninstall`. O `pip list` marca a diferença:
+
+```text
+Package        Version Editable project location
+-------------- ------- -------------------------
+rich           14.3.4
+telemetria     0.1.0   /home/vitor/lab32/projeto
+```
+
+Agora o projeto importa de qualquer diretório do sistema:
+
+```bash
+cd /tmp && python -c "
+import telemetria
+print(telemetria.__file__)
+print(telemetria.__version__)
+from telemetria.coletor import classificar
+print(classificar(-31.0), classificar(-26.0), classificar(-19.0))
+"
+```
+
+```text
+/home/vitor/lab32/projeto/src/telemetria/__init__.py
+0.1.0
+critico atencao normal
+```
+
+E "editável" é literal — o arquivo continua sendo lido de `src/`, então editar o código tem efeito imediato, sem reinstalar:
+
+```bash
+sed -i 's/olt-borda-01/olt-borda-02/' src/telemetria/coletor.py
+python -c "from telemetria.coletor import coletar; print(coletar('onu-00042'))"
+```
+
+```text
+{'onu': 'onu-00042', 'olt': 'olt-borda-02', 'nivel': -21.4}
+```
+
+A regra que decorre disso: **`pip install -e .` em desenvolvimento; `pip install .` (sem o `-e`) em produção e em imagem de contêiner**, onde você quer uma cópia congelada dentro do `site-packages` e não um ponteiro para um diretório que pode nem existir.
+
+O `-e` também tem um limite que morde: quando você acrescenta um subpacote, um arquivo de dados ou um novo `[project.scripts]`, a instalação editável não repercute sozinha — o `.pth` aponta para o diretório, mas os metadados e os comandos ficaram congelados no momento da instalação. Rode `pip install -e .` de novo.
+
+## Metadados: o que o instalador registrou
+
+O diretório `.dist-info` é o registro civil do pacote instalado:
+
+```bash
+ls -1 .venv/lib/python3.13/site-packages/telemetria-0.1.0.dist-info
+```
+
+```text
+direct_url.json
+entry_points.txt
+INSTALLER
+METADATA
+RECORD
+REQUESTED
+WHEEL
+```
+
+`METADATA` tem nome, versão e dependências; `RECORD` lista todos os arquivos instalados com hash e tamanho (é o que permite desinstalar direito); `entry_points.txt` registra os comandos; `INSTALLER` diz quem instalou (`pip`, `uv`, `apt`...).
+
+Isso tudo é legível de dentro do Python, sem depender de `pip`:
+
+```python
+from importlib.metadata import entry_points, metadata, requires, version
+
+print("version :", version("telemetria"))
+print("summary :", metadata("telemetria")["Summary"])
+print("requires:", requires("telemetria"))
+eps = entry_points(group="console_scripts")
+print("scripts :", [(e.name, e.value) for e in eps if e.name == "telemetria"])
+```
+
+```text
+version : 0.1.0
+summary : Coleta e classificacao de leituras de potencia optica
+requires: ['rich<15,>=13', "matplotlib>=3.8; extra == 'grafico'"]
+scripts : [('telemetria', 'telemetria.__main__:main')]
+```
+
+`importlib.metadata.version("telemetria")` é a forma correta de um programa descobrir a própria versão — melhor do que uma constante duplicada, porque lê a mesma fonte que o `pip` mostra.
+
+## Construir: sdist e wheel
+
+Instalar é local. Distribuir exige empacotar, e o padrão são dois artefatos:
+
+```bash
+pip install build
+python -m build
+```
+
+```text
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - hatchling
+* Getting build dependencies for sdist...
+* Building sdist...
+* Building wheel from sdist
+* Getting build dependencies for wheel...
+* Building wheel...
+Successfully built telemetria-0.1.0.tar.gz and telemetria-0.1.0-py3-none-any.whl
+```
+
+```bash
+ls -l dist
+```
+
+```text
+-rw-r--r-- 1 vitor vitor 2653 Aug 11 19:29 telemetria-0.1.0-py3-none-any.whl
+-rw-r--r-- 1 vitor vitor 1363 Aug 11 19:29 telemetria-0.1.0.tar.gz
+```
+
+Repare no terceiro passo do log: *"Building wheel from sdist"*. O `build` constrói o `sdist`, extrai, e constrói a roda **a partir dele** — assim, um arquivo esquecido no `sdist` estoura na hora, e não na máquina de quem baixar.
+
+::: {#fig-fluxo-build}
+```{.tikz}
+%%| filename: fluxo-build
+%%| alt: Fluxo do empacotamento - do diretorio de fonte ao sdist e a roda, do PyPI a instalacao no site-packages do usuario
+\begin{tikzpicture}[
+  fon/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.0cm, align=center, minimum height=0.95cm,
+              font=\scriptsize},
+  art/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+              text width=3.4cm, align=center, minimum height=0.95cm,
+              font=\ttfamily\scriptsize},
+  ind/.style={draw=manualyellow!70!black, very thick, rounded corners,
+              fill=manualyellow!22, text width=2.6cm, align=center,
+              minimum height=0.95cm, font=\scriptsize},
+  des/.style={draw=manualgray, thick, rounded corners, fill=manualgray!8,
+              text width=3.0cm, align=center, minimum height=0.95cm,
+              font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  cm/.style={font=\ttfamily\scriptsize, text=manualblue!70!black},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.7, 2.4) rectangle (14.7,-4.4);
+
+  \node[fon] at (1.4, 1.4) {\texttt{src/}, \texttt{pyproject.toml},\\
+                            \texttt{README.md}};
+  \node[lb]  at (1.4, 0.3) {o repositório};
+
+  \node[art] at (6.4, 2.0) {telemetria-0.1.0.tar.gz};
+  \node[lb, text width=3.6cm]  at (6.4, 0.95) {o \emph{sdist}: o fonte, para
+    quem precisa construir};
+
+  \node[art] at (6.4,-0.5) {telemetria-0.1.0\\-py3-none-any.whl};
+  \node[lb, text width=3.6cm]  at (6.4,-1.6) {a \emph{roda}: pronta, só copiar
+    --- é o que o \texttt{pip} prefere};
+
+  \node[ind] at (11.0, 1.4) {PyPI};
+  \node[des] at (11.0,-0.5) {site-packages\\do usuário};
+
+  \draw[fl] (2.9, 1.4) -- (4.6, 1.9) node[cm, midway, above, sloped]
+       {python -m build};
+  \draw[fl] (2.9, 1.4) -- (4.6,-0.4);
+  \draw[fl] (8.1, 2.0) -- (9.7, 1.6) node[cm, midway, above, sloped]
+       {twine upload};
+  \draw[fl] (8.1,-0.5) -- (9.7,-0.5) node[cm, midway, above] {pip install};
+  \draw[fl] (11.0, 0.9) -- (11.0, 0.0) node[cm, midway, right=2pt]
+       {pip install telemetria};
+
+  \node[lb, text width=13.6cm, align=left] at (7.0,-3.2)
+    {\texttt{telemetria-0.1.0-py3-none-any.whl}: nome, versão, e as três
+     etiquetas de compatibilidade --- \texttt{py3} (qualquer Python 3),
+     \texttt{none} (nenhuma ABI de C), \texttt{any} (qualquer sistema). Pacote
+     com extensão em C troca isso por algo como
+     \texttt{cp313-cp313-manylinux\_2\_17\_x86\_64}, e é por isso que existe uma
+     roda por combinação de versão e plataforma.};
+\end{tikzpicture}
+```
+Do repositório aos dois artefatos, e deles à máquina de quem instala.
+:::
+
+Dentro da roda — que é um `.zip` com outro nome:
+
+```bash
+unzip -l dist/telemetria-0.1.0-py3-none-any.whl
+```
+
+```text
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      118  2020-02-02 00:00   telemetria/__init__.py
+      319  2020-02-02 00:00   telemetria/__main__.py
+      523  2020-02-02 00:00   telemetria/coletor.py
+       43  2020-02-02 00:00   telemetria/limiares.toml
+      671  2020-02-02 00:00   telemetria-0.1.0.dist-info/METADATA
+       87  2020-02-02 00:00   telemetria-0.1.0.dist-info/WHEEL
+       56  2020-02-02 00:00   telemetria-0.1.0.dist-info/entry_points.txt
+      624  2020-02-02 00:00   telemetria-0.1.0.dist-info/RECORD
+---------                     -------
+     2441                     8 files
+```
+
+Note que o `src/` sumiu: dentro da roda, `telemetria/` está na raiz, exatamente como vai ficar no `site-packages`. Instalar uma roda é essencialmente descompactar. A data fixa em 2020 não é bug — é *reprodutibilidade*: o `hatchling` zera os carimbos de tempo para que a mesma entrada gere byte a byte a mesma roda.
+
+O `METADATA` é o que o PyPI mostra na página do projeto:
+
+```text
+Metadata-Version: 2.5
+Name: telemetria
+Version: 0.1.0
+Summary: Coleta e classificacao de leituras de potencia optica
+Project-URL: Repositorio, https://github.com/exemplo/telemetria
+Author-email: Vitor Mattos <vitor@example.com>
+License-Expression: MIT
+Keywords: ftth,gpon,telemetria
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: System :: Networking :: Monitoring
+Requires-Python: >=3.11
+Requires-Dist: rich<15,>=13
+Provides-Extra: grafico
+Requires-Dist: matplotlib>=3.8; extra == 'grafico'
+Description-Content-Type: text/markdown
+
+# telemetria
+
+Coleta e classificacao de leituras de potencia optica.
+```
+
+Tudo o que você escreveu no `[project]`, traduzido para o formato que o índice entende — inclusive o `README.md` inteiro, embutido no fim.
+
+E o `sdist`, que é um `.tar.gz` com o fonte:
+
+```bash
+tar tzf dist/telemetria-0.1.0.tar.gz
+```
+
+```text
+telemetria-0.1.0/src/telemetria/__init__.py
+telemetria-0.1.0/src/telemetria/__main__.py
+telemetria-0.1.0/src/telemetria/coletor.py
+telemetria-0.1.0/src/telemetria/limiares.toml
+telemetria-0.1.0/README.md
+telemetria-0.1.0/pyproject.toml
+telemetria-0.1.0/PKG-INFO
+```
+
+Aqui o `src/` continua, porque o `sdist` é o projeto, não o resultado. Publique sempre os dois: a roda é o que quase todo mundo baixa (instala em milissegundos, sem executar nada), e o `sdist` é o que salva quem está numa plataforma sem roda pronta, quem audita o código e quem empacota para uma distribuição.
+
+## O erro que o layout `src` existe para pegar
+
+Suponha um descuido de configuração que deixe o `limiares.toml` de fora da roda. Localmente, tudo continua verde — a instalação editável lê de `src/`, onde o arquivo está. O teste passa. O `import` funciona. Aí alguém instala a roda:
+
+```bash
+pip install dist/telemetria-0.1.0-py3-none-any.whl
+telemetria
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab32/.venv-quebrado/bin/telemetria", line 6, in <module>
+    sys.exit(main())
+  File ".../site-packages/telemetria/__main__.py", line 9, in main
+    print(f"{d['onu']}  {d['nivel']:6.1f} dBm  {classificar(d['nivel'])}")
+  File ".../site-packages/telemetria/coletor.py", line 19, in classificar
+    lim = limiares()["potencia"]
+  File ".../site-packages/telemetria/coletor.py", line 10, in limiares
+    bruto = files("telemetria").joinpath("limiares.toml").read_text(encoding="utf-8")
+FileNotFoundError: [Errno 2] No such file or directory:
+'.../site-packages/telemetria/limiares.toml'
+```
+
+É a classe inteira de bug que o @sec-cap030 prometeu: **funciona no repositório, falha instalado**. A verificação leva dois segundos e deveria ser hábito antes de publicar:
+
+```bash
+unzip -l dist/*.whl
+```
+
+Se um arquivo que o código lê em tempo de execução não estiver nessa lista, ele não existe para quem instalar. Com `hatchling` e layout `src`, tudo que está dentro do diretório do pacote entra por padrão — o erro acima só acontece com exclusão explícita. Com `setuptools`, ao contrário, dados não-Python exigem configuração (`[tool.setuptools.package-data]` ou `include-package-data = true` com `MANIFEST.in`), e essa é uma das razões práticas para preferir `hatchling` em projeto novo.
+
+## Versão em um lugar só
+
+Duplicar a versão entre `pyproject.toml` e `__init__.py` é garantia de esquecer uma das duas. Os backends resolvem isso com versão dinâmica:
+
+```toml
+[project]
+name = "telemetria"
+dynamic = ["version"]
+
+[tool.hatch.version]
+path = "src/telemetria/__init__.py"
+```
+
+Agora `__version__ = "0.2.0"` no `__init__.py` é a única fonte:
+
+```bash
+sed -i 's/__version__ = "0.1.0"/__version__ = "0.2.0"/' src/telemetria/__init__.py
+python -m build --wheel
+ls dist
+```
+
+```text
+Successfully built telemetria-0.2.0-py3-none-any.whl
+telemetria-0.2.0-py3-none-any.whl
+```
+
+A alternativa inversa — deixar a versão no `pyproject.toml` e ler com `importlib.metadata.version(__name__)` dentro do código — também é comum e igualmente correta. O que não vale é escrever o número duas vezes.
+
+Sobre o número em si, a PEP 440 define o formato e o `pip` o interpreta: `1.2.3`, `1.2.3a1` (alfa), `1.2.3rc1` (candidata), `1.2.3.post1` (correção de empacotamento), `1.2.3.dev4` (desenvolvimento). Pré-lançamentos são ignorados pelo resolvedor a menos que você peça `--pre` — o que permite publicar um `rc` sem afetar quem instala normalmente.
+
+## Publicar
+
+Antes de qualquer coisa, valide os artefatos:
+
+```bash
+pip install twine
+twine check dist/*
+```
+
+```text
+Checking dist/telemetria-0.1.0-py3-none-any.whl: PASSED
+Checking dist/telemetria-0.1.0.tar.gz: PASSED
+```
+
+O `twine check` confere se os metadados estão bem formados e se o `README` renderiza no PyPI — a falha mais comum é `Description-Content-Type` faltando, que faz a página do projeto sair com o Markdown cru.
+
+O envio propriamente dito vai primeiro para o **TestPyPI**, que é um índice separado, feito exatamente para isso:
+
+```bash
+twine upload --repository testpypi dist/*
+```
+
+Duas coisas a saber antes de digitar isso:
+
+- **Senha não serve mais.** O PyPI exige token de API (uma string começando em `pypi-`), usado com o nome de usuário `__token__`. Guarde-o em `~/.pypirc` com permissão `600`, ou na variável `TWINE_PASSWORD`.
+- **Nome é único e versão é imutável.** Publicou `telemetria 0.1.0`, aquele arquivo é para sempre — corrigir exige publicar `0.1.1`. É a razão de o TestPyPI existir.
+
+Em CI, nada disso: o caminho moderno é o *trusted publishing*, em que o GitHub Actions troca sua identidade de repositório por um token temporário via OIDC, sem segredo nenhum guardado. O próprio `twine` avisa quando não está nesse contexto:
+
+```text
+Uploading distributions to https://test.pypi.org/legacy/
+WARNING  This environment is not supported for trusted publishing
+```
+
+O fluxo completo de uma publicação, então:
+
+```bash
+rm -rf dist/                    # nunca publique dist/ velho junto
+python -m build                 # sdist + wheel, do zero
+twine check dist/*              # metadados e README
+twine upload --repository testpypi dist/*
+pip install --index-url https://test.pypi.org/simple/ telemetria   # confira
+twine upload dist/*             # só então, o PyPI de verdade
+```
+
+O quinto passo é o que separa quem publica com cuidado de quem descobre o problema pelos issues: instalar a partir do índice, num venv limpo, e rodar o programa.
+
+## O que ficou para trás
+
+Se você abrir um projeto de 2015, vai encontrar `setup.py`, `setup.cfg`, `MANIFEST.in`, `requirements.txt` e talvez um `versioneer.py`. O que mudou:
+
+| antes | hoje | por quê |
+|---|---|---|
+| `setup.py` executado pelo `pip` | `pyproject.toml` declarativo | instalar não deve executar código arbitrário |
+| `python setup.py install` | `pip install .` | o comando antigo não instala metadados corretos |
+| `python setup.py sdist bdist_wheel` | `python -m build` | ambiente isolado, e a roda vem do `sdist` |
+| `MANIFEST.in` | o backend, por padrão | menos lugar para esquecer arquivo |
+| `setup.cfg` para `flake8`, `mypy`... | `[tool.*]` no `pyproject.toml` | um arquivo de configuração, não cinco |
+| `pkg_resources` | `importlib.metadata` | biblioteca padrão, sem custo de import |
+
+`setup.py` não está proibido: ele continua válido como *script de configuração* de um projeto `setuptools`, e é necessário quando há extensão em C para compilar. O que morreu é **executá-lo diretamente** (`python setup.py qualquer_coisa`), e o `distutils`, que saiu da biblioteca padrão no Python 3.12.
+
+## 🐍 Jeito Pythônico
+
+**Todo projeto tem `pyproject.toml`** — inclusive script de uso interno com duas dependências. O custo é de dez linhas e o retorno é instalável, testável e versionável.
+
+**`hatchling` em projeto novo**, `setuptools` quando houver extensão em C ou herança a manter.
+
+**`pip install -e .` para desenvolver, `pip install .` para empacotar.** Nunca `PYTHONPATH`, nunca `sys.path.insert`.
+
+```bash
+# antipadrão
+export PYTHONPATH=src
+python -m pytest
+```
+
+```bash
+# pythônico
+pip install -e .
+python -m pytest
+```
+
+**Dependências no `pyproject.toml`, não no `requirements.txt`.** O `requirements.lock` continua existindo para travar a aplicação; a biblioteca declara faixas em `[project.dependencies]`.
+
+**Faixa em biblioteca, trava em aplicação.** `rich>=13,<15` numa biblioteca; `rich==14.3.4` no arquivo de trava de um serviço.
+
+**Versão em um lugar só**, por `dynamic` ou por `importlib.metadata`.
+
+**Confira a roda antes de publicar**: `unzip -l dist/*.whl` e `twine check dist/*`. O arquivo de dados que ficou de fora não dá erro nenhum na sua máquina.
+
+**TestPyPI antes do PyPI**, e token de API — nunca senha, nunca segredo em CI quando dá para usar *trusted publishing*.
+
+Sobre versões:
+
+- **PEP 518 (2016)** — nasce o `pyproject.toml`, com `[build-system]`.
+- **PEP 517 (2017)** — o `pip` passa a falar com backends por uma interface, em ambiente isolado; `setuptools` deixa de ser obrigatório.
+- **PEP 621 (2020)** — `[project]` padroniza os metadados; a mesma seção serve `hatchling`, `setuptools`, `flit` e `pdm`.
+- **PEP 660 (2021)** — instalação editável ganha padrão, e `pip install -e .` deixa de depender de `setup.py develop`.
+- **Python 3.11** — `tomllib` na biblioteca padrão: ler `pyproject.toml` deixa de exigir dependência externa.
+- **Python 3.12** — `distutils` removido; venv novo já não traz `setuptools`.
+- **PEP 639 (2024)** — `license = "MIT"` em SPDX, com `license-files`; a forma de tabela é a que os backends hoje marcam como obsoleta.
+
+## 🧪 Laboratório
+
+Objetivo: pegar o pacote do @sec-cap030, torná-lo instalável, construir os dois artefatos, olhar dentro deles, provar que o dado interno viajou junto e instalar tudo num ambiente limpo.
+
+**1. O projeto.**
+
+```bash
+mkdir -p ~/lab32/projeto/src/telemetria && cd ~/lab32/projeto
+python3 -m venv ~/lab32/.venv
+```
+
+`src/telemetria/__init__.py`:
+
+```python
+"""Telemetria de rede optica."""
+
+from telemetria.coletor import coletar
+
+__all__ = ["coletar"]
+__version__ = "0.1.0"
+```
+
+`src/telemetria/coletor.py`:
+
+```python
+"""Coleta bruta de leituras."""
+
+import tomllib
+from importlib.resources import files
+
+OLT_PADRAO = "olt-borda-01"
+
+
+def limiares():
+    bruto = files("telemetria").joinpath("limiares.toml").read_text(encoding="utf-8")
+    return tomllib.loads(bruto)
+
+
+def coletar(onu):
+    return {"onu": onu, "olt": OLT_PADRAO, "nivel": -21.4}
+
+
+def classificar(nivel):
+    lim = limiares()["potencia"]
+    if nivel <= lim["critico"]:
+        return "critico"
+    if nivel <= lim["atencao"]:
+        return "atencao"
+    return "normal"
+```
+
+`src/telemetria/__main__.py`:
+
+```python
+"""Ponto de entrada do pacote."""
+
+from telemetria.coletor import classificar, coletar
+
+
+def main():
+    for onu in ("onu-00042", "onu-00043"):
+        d = coletar(onu)
+        print(f"{d['onu']}  {d['nivel']:6.1f} dBm  {classificar(d['nivel'])}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+`src/telemetria/limiares.toml`:
+
+```toml
+[potencia]
+critico = -28.0
+atencao = -25.0
+```
+
+E um `README.md` de duas linhas.
+
+**2. Sem o arquivo, não há projeto.**
+
+```bash
+~/lab32/.venv/bin/pip install -e .
+```
+
+```text
+ERROR: file:///home/vitor/lab32/projeto does not appear to be a Python project:
+neither 'setup.py' nor 'pyproject.toml' found.
+```
+
+**3. Escreva o `pyproject.toml`** exatamente como o do início do capítulo, e instale:
+
+```bash
+~/lab32/.venv/bin/pip install -e .
+~/lab32/.venv/bin/pip list
+```
+
+```text
+Package        Version Editable project location
+-------------- ------- -------------------------
+markdown-it-py 4.2.0
+mdurl          0.1.2
+pip            26.1.1
+Pygments       2.20.0
+rich           14.3.4
+telemetria     0.1.0   /home/vitor/lab32/projeto
+```
+
+**4. O que apareceu no `site-packages`.**
+
+```bash
+ls -1 ~/lab32/.venv/lib/python3.13/site-packages | grep -i telemetria
+cat ~/lab32/.venv/lib/python3.13/site-packages/_editable_impl_telemetria.pth
+```
+
+```text
+_editable_impl_telemetria.pth
+telemetria-0.1.0.dist-info
+/home/vitor/lab32/projeto/src
+```
+
+**5. Importa de qualquer lugar.**
+
+```bash
+cd /tmp && ~/lab32/.venv/bin/python -c "
+import telemetria
+print(telemetria.__file__)
+from telemetria.coletor import classificar
+print(classificar(-31.0), classificar(-26.0), classificar(-19.0))
+"
+cd ~/lab32/projeto
+```
+
+```text
+/home/vitor/lab32/projeto/src/telemetria/__init__.py
+critico atencao normal
+```
+
+**6. O comando de terminal.**
+
+```bash
+ls -1 ~/lab32/.venv/bin | grep -v "^python\|^pip\|^activate\|^Activate\|^deactivate"
+~/lab32/.venv/bin/telemetria
+```
+
+```text
+markdown-it
+pygmentize
+telemetria
+onu-00042   -21.4 dBm  normal
+onu-00043   -21.4 dBm  normal
+```
+
+Três comandos: dois vieram do `rich` e das suas dependências, um é o seu.
+
+**7. Os metadados.**
+
+```bash
+~/lab32/.venv/bin/python -c "
+from importlib.metadata import entry_points, metadata, requires, version
+print('version :', version('telemetria'))
+print('summary :', metadata('telemetria')['Summary'])
+print('requires:', requires('telemetria'))
+print('scripts :', [(e.name, e.value) for e in entry_points(group='console_scripts') if e.name == 'telemetria'])
+"
+```
+
+```text
+version : 0.1.0
+summary : Coleta e classificacao de leituras de potencia optica
+requires: ['rich<15,>=13', "matplotlib>=3.8; extra == 'grafico'"]
+scripts : [('telemetria', 'telemetria.__main__:main')]
+```
+
+**8. Construa.**
+
+```bash
+~/lab32/.venv/bin/pip install -q build twine
+~/lab32/.venv/bin/python -m build
+ls -l dist
+```
+
+```text
+Successfully built telemetria-0.1.0.tar.gz and telemetria-0.1.0-py3-none-any.whl
+-rw-r--r-- 1 vitor vitor 2653 Aug 11 19:29 telemetria-0.1.0-py3-none-any.whl
+-rw-r--r-- 1 vitor vitor 1363 Aug 11 19:29 telemetria-0.1.0.tar.gz
+```
+
+**9. Olhe dentro dos dois.**
+
+```bash
+unzip -l dist/telemetria-0.1.0-py3-none-any.whl
+tar tzf dist/telemetria-0.1.0.tar.gz
+```
+
+```text
+      118  2020-02-02 00:00   telemetria/__init__.py
+      319  2020-02-02 00:00   telemetria/__main__.py
+      523  2020-02-02 00:00   telemetria/coletor.py
+       43  2020-02-02 00:00   telemetria/limiares.toml
+      671  2020-02-02 00:00   telemetria-0.1.0.dist-info/METADATA
+       87  2020-02-02 00:00   telemetria-0.1.0.dist-info/WHEEL
+       56  2020-02-02 00:00   telemetria-0.1.0.dist-info/entry_points.txt
+      624  2020-02-02 00:00   telemetria-0.1.0.dist-info/RECORD
+telemetria-0.1.0/src/telemetria/__init__.py
+telemetria-0.1.0/src/telemetria/__main__.py
+telemetria-0.1.0/src/telemetria/coletor.py
+telemetria-0.1.0/src/telemetria/limiares.toml
+telemetria-0.1.0/README.md
+telemetria-0.1.0/pyproject.toml
+telemetria-0.1.0/PKG-INFO
+```
+
+Na roda não há `src/` nem `README.md`; no `sdist`, há os dois. Confirme também o `entry_points.txt`:
+
+```bash
+unzip -p dist/telemetria-0.1.0-py3-none-any.whl telemetria-0.1.0.dist-info/entry_points.txt
+```
+
+```text
+[console_scripts]
+telemetria = telemetria.__main__:main
+```
+
+**10. Valide.**
+
+```bash
+~/lab32/.venv/bin/twine check dist/*
+```
+
+```text
+Checking dist/telemetria-0.1.0-py3-none-any.whl: PASSED
+Checking dist/telemetria-0.1.0.tar.gz: PASSED
+```
+
+**11. Instale num ambiente limpo.**
+
+```bash
+python3 -m venv ~/lab32/.venv-limpo
+~/lab32/.venv-limpo/bin/pip install -q dist/telemetria-0.1.0-py3-none-any.whl
+cd /tmp && ~/lab32/.venv-limpo/bin/telemetria
+~/lab32/.venv-limpo/bin/python -c "import telemetria; print(telemetria.__file__)"
+cd ~/lab32/projeto
+```
+
+```text
+onu-00042   -21.4 dBm  normal
+onu-00043   -21.4 dBm  normal
+/home/vitor/lab32/.venv-limpo/lib/python3.13/site-packages/telemetria/__init__.py
+```
+
+Agora o pacote está **dentro** do `site-packages`, não apontado por um `.pth`. E o dado interno veio junto:
+
+```bash
+~/lab32/.venv-limpo/bin/python -c "
+from telemetria.coletor import limiares
+print(limiares())
+"
+```
+
+```text
+{'potencia': {'critico': -28.0, 'atencao': -25.0}}
+```
+
+**12. Quebre de propósito.** Acrescente ao fim do `pyproject.toml`:
+
+```toml
+[tool.hatch.build.targets.wheel]
+exclude = ["*.toml"]
+```
+
+```bash
+rm -rf dist && ~/lab32/.venv/bin/python -m build --wheel
+unzip -l dist/*.whl | grep -c toml
+python3 -m venv ~/lab32/.venv-quebrado
+~/lab32/.venv-quebrado/bin/pip install -q dist/*.whl
+~/lab32/.venv-quebrado/bin/telemetria
+```
+
+```text
+0
+FileNotFoundError: [Errno 2] No such file or directory:
+'/home/vitor/lab32/.venv-quebrado/lib/python3.13/site-packages/telemetria/limiares.toml'
+```
+
+O projeto continua perfeito no seu disco e quebrado para todo mundo. Remova as duas linhas do `pyproject.toml`, reconstrua e confirme que o `.toml` voltou:
+
+```bash
+rm -rf dist && ~/lab32/.venv/bin/python -m build
+unzip -l dist/*.whl | grep toml
+```
+
+```text
+       43  2020-02-02 00:00   telemetria/limiares.toml
+```
+
+**13. Versão dinâmica.** Troque `version = "0.1.0"` por `dynamic = ["version"]` e acrescente:
+
+```toml
+[tool.hatch.version]
+path = "src/telemetria/__init__.py"
+```
+
+```bash
+sed -i 's/__version__ = "0.1.0"/__version__ = "0.2.0"/' src/telemetria/__init__.py
+rm -rf dist && ~/lab32/.venv/bin/python -m build --wheel
+ls dist
+```
+
+```text
+telemetria-0.2.0-py3-none-any.whl
+```
+
+Um número, um lugar.
+
+**14. Instale a partir do `sdist`**, para provar que ele também basta:
+
+```bash
+python3 -m venv ~/lab32/.venv-sdist
+~/lab32/.venv-sdist/bin/pip install -q dist/telemetria-0.1.0.tar.gz
+~/lab32/.venv-sdist/bin/python -c "import telemetria; print('do sdist:', telemetria.__version__)"
+```
+
+```text
+do sdist: 0.1.0
+```
+
+**15. Desinstale e confirme.**
+
+```bash
+~/lab32/.venv-limpo/bin/pip uninstall -y telemetria
+~/lab32/.venv-limpo/bin/python -c "import telemetria"
+```
+
+```text
+Successfully uninstalled telemetria-0.1.0
+ModuleNotFoundError: No module named 'telemetria'
+```
+
+O `RECORD` do `.dist-info` é o que permitiu remover exatamente os arquivos certos.
+
+## Resumo
+
+- `pyproject.toml` tem três seções com públicos diferentes: `[build-system]` (lida pelo `pip` antes de tudo), `[project]` (metadados PEP 621, iguais em qualquer backend) e `[tool.*]` (configuração das ferramentas).
+- Instalar não é copiar arquivo: é construir uma roda num ambiente isolado, resolver dependências e registrar metadados em `.dist-info`.
+- `pip install -e .` grava um `.pth` apontando para `src/` — é o `sys.path.insert` feito do jeito certo. Use `-e` para desenvolver e `pip install .` para empacotar; reinstale ao mexer em `[project.scripts]` ou acrescentar arquivo.
+- `python -m build` gera `sdist` (o fonte) e roda (pronta para copiar), e constrói a roda **a partir do sdist** para pegar arquivo esquecido cedo. Publique os dois.
+- A roda é um `.zip`: `unzip -l dist/*.whl` antes de publicar. Dado que não estiver ali não existe para quem instalar — e o layout `src` é o que faz esse erro aparecer em casa.
+- `importlib.metadata` lê versão, dependências e entry points do pacote instalado, sem `pip` e sem `pkg_resources`.
+- Versão em um lugar só: `dynamic = ["version"]` com o backend lendo do código, ou o inverso via `importlib.metadata`.
+- Publicação: `twine check`, TestPyPI, instalar de lá, e só então o PyPI. Token de API, nunca senha; em CI, *trusted publishing*.
+- `setup.py` executado, `MANIFEST.in`, `setup.cfg` e `pkg_resources` são a era anterior. `distutils` saiu da biblioteca padrão no 3.12.
