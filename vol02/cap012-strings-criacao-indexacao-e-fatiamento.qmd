@@ -1,3 +1,754 @@
 # Strings: criação, indexação e fatiamento {#sec-cap012}
 
-*(em elaboracao)*
+O equipamento antigo não exporta CSV. Ele cospe registros de largura fixa, uma linha por leitura, com os campos em colunas combinadas há quinze anos. O parser tem cinco linhas e roda desde então:
+
+```python
+LINHA = "2026-03-11 06:47:55 CHACARA-DO-ZE   -18.4  OK"
+
+data = LINHA[0:10]
+hora = LINHA[11:18]
+
+print(repr(data), repr(hora))
+```
+
+```text
+'2026-03-11' '06:47:5'
+```
+
+A hora perdeu o último dígito. `06:47:5` — que continua parecendo uma hora, entra no banco sem reclamação, e só aparece quando alguém tenta ordenar os eventos de um minuto e a ordem sai errada.
+
+O erro é de um caractere: `[11:18]` em vez de `[11:19]`. E ele acontece porque quase todo mundo lê `[11:18]` como "do 11 ao 18" — quando a fatia de Python é **meio aberta**: inclui o começo, exclui o fim.
+
+Este capítulo é sobre a `str` como sequência: como se escreve, como se indexa, como se fatia e por que a imutabilidade dela muda a forma de construir texto. Os métodos e a formatação ficam para o @sec-cap013; a codificação de caracteres, para o @sec-cap014.
+
+## Escrevendo uma string
+
+Aspas simples e duplas são **idênticas** para o Python. A escolha é sobre o que está dentro:
+
+```python
+print("ele disse 'oi'")
+print('caminho: "C:\\temp"')
+```
+
+```text
+ele disse 'oi'
+caminho: "C:\temp"
+```
+
+Aspas triplas atravessam linhas e preservam a quebra:
+
+```python
+texto = """Relatorio
+de leituras"""
+print(len(texto))
+```
+
+```text
+21
+```
+
+Vinte e um: nove de `Relatorio`, um do `\n` e onze de `de leituras`.
+
+E dois literais adjacentes são **concatenados na compilação**, sem custo nenhum em execução — o idioma para quebrar uma string longa no fonte:
+
+```python
+consulta = (
+    "SELECT cliente, nivel "
+    "FROM leituras "
+    "WHERE nivel < -25"
+)
+print(consulta)
+```
+
+```text
+SELECT cliente, nivel FROM leituras WHERE nivel < -25
+```
+
+Repare que a vírgula ausente entre os pedaços é justamente o que faz isso funcionar — e é também a causa de um bug clássico: numa lista de strings, esquecer uma vírgula não dá erro, junta os dois itens em um.
+
+```python
+PALAVRAS = [
+    "erro",
+    "aviso"        # vírgula esquecida
+    "critico",
+]
+print(PALAVRAS)
+```
+
+```text
+['erro', 'avisocritico']
+```
+
+Escapes seguem a tradição de C: `\n` para nova linha, `\t` para tabulação, `\\` para a própria barra, `\x41` para um byte em hexadecimal, `\u00e9` e `\N{...}` para caracteres Unicode por código ou por nome.
+
+```python
+print(repr("\x41\u00e9\N{SNAKE}"))
+```
+
+```text
+'Aé🐍'
+```
+
+Quando as barras são conteúdo e não comando — caminhos do Windows, expressões regulares —, use uma string **crua**, com o prefixo `r`:
+
+```python
+print(r"C:\novo\teste")
+print(len(r"\n"), len("\n"))
+```
+
+```text
+C:\novo\teste
+2 1
+```
+
+`r"\n"` são dois caracteres: uma barra e um `n`. É o formato certo para todo padrão do módulo `re` do Volume 10 — e a razão de o Python avisar `SyntaxWarning: invalid escape sequence` quando você escreve `"\d"` sem o `r`.
+
+## Imutável, como todo `str`
+
+Já vimos no @sec-cap008 que `str` é imutável. A consequência prática aparece na primeira tentativa de "corrigir" um caractere:
+
+```python
+nome = "kali"
+nome[0] = "K"
+```
+
+```text
+TypeError: 'str' object does not support item assignment
+```
+
+Toda operação que parece alterar devolve uma string nova:
+
+```python
+nome = "kali"
+print(nome.replace("k", "K"), nome)
+```
+
+```text
+Kali kali
+```
+
+A original continua lá, intocada. Guarde o retorno ou você perde o resultado — é o erro número um de quem está começando.
+
+## Índices e fronteiras
+
+Uma `str` é uma **sequência**, com índices a partir de zero e índices negativos contando do fim:
+
+```python
+p = "python"
+print(p[0], p[5], p[-1], p[-6])
+print(type(p[0]), len(p[0]))
+```
+
+```text
+p n n p
+<class 'str'> 1
+```
+
+Note a segunda linha: **não existe tipo caractere em Python**. `p[0]` é uma `str` de comprimento 1. Isso é diferente de C, Java e Rust, e simplifica a vida — não há conversão entre `char` e `String` para fazer.
+
+Índice fora da faixa levanta erro:
+
+```python
+p[6]
+```
+
+```text
+IndexError: string index out of range
+```
+
+E aqui está o ponto que resolve o bug da abertura: **fatia não usa índices, usa fronteiras**. Pense nos números como posições *entre* os caracteres, não sobre eles.
+
+::: {#fig-fatia-fronteiras}
+```{.tikz}
+%%| filename: fatia-fronteiras
+%%| alt: A palavra python com os indices positivos sob cada letra, os negativos acima e as fronteiras de fatiamento de 0 a 6 nas divisas entre as letras
+\begin{tikzpicture}[
+  ch/.style={draw=manualgray, thick, fill=manualblue!7,
+             minimum width=1.35cm, minimum height=1.15cm,
+             font=\ttfamily\large},
+  ix/.style={font=\ttfamily\scriptsize, text=manualgray},
+  nx/.style={font=\ttfamily\scriptsize, text=manualred},
+  fr/.style={font=\ttfamily\scriptsize, text=manualgreen},
+  tick/.style={manualgreen, thick},
+  lb/.style={font=\scriptsize, align=center, text=manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \foreach \ll/\ii in {p/0, y/1, t/2, h/3, o/4, n/5}
+    { \node[ch] at (1.35*\ii, 0) {\ll};
+      \node[ix] at (1.35*\ii,-0.88) {\ii}; }
+
+  \foreach \nn/\ii in {-6/0, -5/1, -4/2, -3/3, -2/4, -1/5}
+    { \node[nx] at (1.35*\ii, 0.88) {\nn}; }
+
+  \foreach \bb in {0,1,2,3,4,5,6}
+    { \draw[tick] (1.35*\bb - 0.675, -1.35) -- (1.35*\bb - 0.675, -1.75);
+      \node[fr] at (1.35*\bb - 0.675, -2.05) {\bb}; }
+
+  \node[lb, anchor=west, text width=3.0cm] at (8.5, 0.88)
+    {índices \textcolor{manualred}{negativos}};
+  \node[lb, anchor=west, text width=3.0cm] at (8.5,-0.88)
+    {índices positivos};
+  \node[lb, anchor=west, text width=3.4cm] at (8.5,-2.05)
+    {\textcolor{manualgreen}{fronteiras} de fatia};
+
+  \node[lb, text width=12.0cm] at (3.4,-2.95)
+    {\texttt{p[1:4]} pega o que está \textbf{entre} as fronteiras 1 e 4:
+     \texttt{'yth'} --- três letras,\\e não quatro. O começo entra, o fim não.};
+\end{tikzpicture}
+```
+Os números de uma fatia marcam fronteiras entre caracteres, não os caracteres.
+:::
+
+Com a figura na cabeça, tudo o mais decorre:
+
+```python
+p = "python"
+print(p[0:3], p[:3], p[3:], p[:])
+print(p[-3:], p[:-3], p[-4:-1])
+```
+
+```text
+pyt pyt hon python
+hon pyt tho
+```
+
+Omitir o começo significa "do início"; omitir o fim, "até o final". `p[:n]` e `p[n:]` sempre se encaixam de volta na string inteira, porque a fronteira `n` é a mesma dos dois lados. E o comprimento de `p[a:b]` é `b - a`, o que dá a conta da abertura: `[11:19]` tem oito caracteres, que é o tamanho de `06:47:55`.
+
+Fatia, ao contrário de índice, **não levanta erro** fora da faixa:
+
+```python
+print(repr(p[10:20]), repr(p[3:100]), repr(p[-100:2]))
+```
+
+```text
+'' 'hon' 'py'
+```
+
+Isso é conveniente e é uma faca de dois gumes: o parser da abertura teria falhado alto se a fatia levantasse `IndexError`. Como ela não levanta, campo fora da posição vira string vazia e segue viagem.
+
+## O terceiro número: o passo
+
+A forma completa é `[inicio:fim:passo]`:
+
+```python
+print(p[::2], p[1::2])
+print(p[::-1])
+```
+
+```text
+pto yhn
+nohtyp
+```
+
+`[::-1]` é o idioma para inverter uma sequência — e vale para lista e tupla também. Com passo negativo, a fatia caminha para trás, e é aí que a intuição falha:
+
+```python
+print(repr(p[5:1:-1]), repr(p[1:5:-1]))
+```
+
+```text
+'noht' ''
+```
+
+::: {#fig-passo-negativo}
+```{.tikz}
+%%| filename: passo-negativo
+%%| alt: Com passo negativo a fatia caminha da direita para a esquerda, entao o inicio precisa estar a direita do fim; caso contrario o resultado e vazio
+\begin{tikzpicture}[
+  ch/.style={draw=manualgray, thick, fill=manualgray!5,
+             minimum width=0.95cm, minimum height=0.8cm,
+             font=\ttfamily\small},
+  chon/.style={draw=manualgreen, very thick, fill=manualgreen!14,
+               minimum width=0.95cm, minimum height=0.8cm,
+               font=\ttfamily\small},
+  ix/.style={font=\ttfamily\tiny, text=manualgray},
+  fl/.style={->,>=stealth, very thick},
+  lb/.style={font=\scriptsize, align=left, text=manualgray, text width=5.0cm},
+  ti/.style={font=\ttfamily\small\bfseries}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-3.3, 2.45) rectangle (11.6,-2.35);
+
+  \node[ti] at (-1.9, 1.35) {p[5:1:-1]};
+  \foreach \ll/\ii in {p/0, y/1, t/2, h/3, o/4, n/5}
+    { \node[ch] at (0.95*\ii, 1.35) {\ll}; \node[ix] at (0.95*\ii, 0.72) {\ii}; }
+  \foreach \ii in {2,3,4,5}
+    { \node[chon] at (0.95*\ii, 1.35) {}; }
+  \foreach \ll/\ii in {t/2, h/3, o/4, n/5}
+    { \node[font=\ttfamily\small] at (0.95*\ii, 1.35) {\ll}; }
+  \draw[fl, manualgreen] (0.95*5+0.3, 2.05) -- (0.95*2-0.3, 2.05);
+  \node[lb, anchor=west] at (6.2, 1.35) {início 5 está \textbf{à direita} do fim 1: anda para trás e devolve \texttt{'noht'}};
+
+  \node[ti] at (-1.9,-1.15) {p[1:5:-1]};
+  \foreach \ll/\ii in {p/0, y/1, t/2, h/3, o/4, n/5}
+    { \node[ch] at (0.95*\ii,-1.15) {\ll}; \node[ix] at (0.95*\ii,-1.78) {\ii}; }
+  \draw[fl, manualred] (0.95*1+0.3,-0.45) -- (0.95*1-0.3,-0.45);
+  \node[lb, anchor=west] at (6.2,-1.15) {início 1 está \textbf{à esquerda} do fim 5: não há caminho para trás, resultado \texttt{''}};
+\end{tikzpicture}
+```
+Com passo negativo, o início precisa estar à direita do fim.
+:::
+
+Passo zero é erro:
+
+```python
+p[::0]
+```
+
+```text
+ValueError: slice step cannot be zero
+```
+
+E uma sutileza que vale saber: `p[:]` de uma string devolve **o próprio objeto**, não uma cópia, porque `str` é imutável e copiar não teria função:
+
+```python
+print(p[:] is p)
+print([1, 2, 3][:] is [1, 2, 3])
+```
+
+```text
+True
+False
+```
+
+Com lista, o `[:]` copia de verdade — é o idioma do @sec-cap008.
+
+## `slice` é um objeto
+
+Os dois-pontos são açúcar para um objeto `slice`, que pode ser guardado numa constante e reusado. Para largura fixa, isso transforma um parser ilegível num que se lê:
+
+```python
+CAMPOS = {
+    "data": slice(0, 10),
+    "hora": slice(11, 19),
+    "cliente": slice(20, 36),
+    "nivel": slice(36, 42),
+    "estado": slice(43, None),
+}
+
+LINHA = "2026-03-11 06:47:55 CHACARA-DO-ZE   -18.4  OK"
+
+for nome, corte in CAMPOS.items():
+    print(f"{nome:<8} {LINHA[corte]!r}")
+```
+
+```text
+data     '2026-03-11'
+hora     '06:47:55'
+cliente  'CHACARA-DO-ZE   '
+nivel    '-18.4 '
+estado   'OK'
+```
+
+O layout do arquivo virou dado, num lugar só, com nome. Quando o fabricante mudar uma coluna, muda uma linha do dicionário — e não sete fatias espalhadas pelo código. É a diferença entre um parser que dá para revisar e um que não dá.
+
+## Concatenar, repetir, comparar
+
+```python
+print("a" + "b", "ab" * 3, "-" * 20)
+```
+
+```text
+ab ababab --------------------
+```
+
+Somar `str` com número é `TypeError`, como no @sec-cap007 — a linguagem se recusa a adivinhar.
+
+Comparação é **lexicográfica por ponto de código**, o que não é ordem alfabética:
+
+```python
+print("Z" < "a", ord("Z"), ord("a"))
+print(sorted(["Zebra", "abacaxi", "Banana"]))
+print(sorted(["Zebra", "abacaxi", "Banana"], key=str.lower))
+```
+
+```text
+True 90 97
+['Banana', 'Zebra', 'abacaxi']
+['abacaxi', 'Banana', 'Zebra']
+```
+
+Toda maiúscula vem antes de toda minúscula, porque `A` é 65 e `a` é 97. E acentuadas vêm depois de todas as latinas sem acento (`ç` é 231), então `sorted` sozinho **não** ordena nomes em português como um humano espera. Para ordem alfabética de verdade existe `locale.strxfrm` ou a biblioteca `PyICU`; para o caso comum, `key=str.lower` já resolve a maiúscula.
+
+Pertinência e busca:
+
+```python
+p = "python"
+print("th" in p, "z" in p, p.index("th"), p.count("h"))
+```
+
+```text
+True False 2 1
+```
+
+`in` funciona com **subcadeias**, não só com um caractere — diferente de listas, onde `in` testa elementos. É o teste de substring mais legível que existe, e mais rápido que qualquer alternativa manual.
+
+## Construir texto: a armadilha do `+=`
+
+Como `str` é imutável, `s += t` não pode alterar `s`: ele constrói uma string nova com o conteúdo das duas. Todo livro daí conclui que construir texto num laço é quadrático. **Em CPython, isso é só metade da verdade** — e a metade que falta importa.
+
+```python
+def com_mais_igual(n):
+    s = ""
+    for _ in range(n):
+        s += "x"
+    return s
+
+
+def com_alias(n):
+    s = ""
+    guarda = s          # segunda referência ao objeto
+    for _ in range(n):
+        s += "x"
+        guarda = s
+    return s
+
+
+def com_join(n):
+    return "".join("x" for _ in range(n))
+```
+
+```text
+       n         +=   += c/ alias       join
+   20000       1.7ms          8.0ms       1.7ms
+   40000       2.8ms         31.3ms       2.8ms
+   80000       5.3ms        132.1ms       7.5ms
+  160000      13.5ms        515.3ms      12.6ms
+```
+
+A coluna do meio quadruplica a cada vez que o `n` dobra — comportamento quadrático de livro. As outras duas apenas dobram.
+
+A explicação é uma otimização do CPython: quando a string da esquerda tem **exatamente uma referência**, o interpretador sabe que ninguém mais a está olhando e redimensiona o buffer no lugar, em vez de copiar. Basta existir um segundo nome apontando para ela — `guarda = s` — e a otimização não pode agir, porque copiar sobre o buffer estragaria o outro nome.
+
+Duas conclusões práticas:
+
+1. `+=` num laço apertado é frágil. Funciona por um detalhe de implementação que some sem aviso quando o código muda, e que **não existe** em outras implementações do Python.
+2. `"".join(...)` sempre foi linear, sem depender de nada. Escreva assim e não pense mais no assunto.
+
+## 🐍 Jeito Pythônico
+
+**`join` para montar, nunca `+=` em laço.**
+
+```python
+# antipadrão
+linhas = ""
+for l in registros:
+    linhas += formatar(l) + "\n"
+```
+
+```python
+# pythônico
+linhas = "\n".join(formatar(l) for l in registros)
+```
+
+O separador vem primeiro porque `join` é método da string separadora, o que assusta na primeira vez e é consistente: `", ".join(nomes)`, `"\n".join(linhas)`, `"".join(pedacos)`. E o gerador dentro do `join` evita construir a lista intermediária.
+
+**Nomeie as fatias.** Índice mágico é o pior tipo de constante:
+
+```python
+# antipadrão
+hora = linha[11:19]
+```
+
+```python
+# pythônico
+HORA = slice(11, 19)
+hora = linha[HORA]
+```
+
+**Use `[::-1]` para inverter**, não um laço. É uma linha em vez de quatro e, no teste do laboratório, algumas dezenas de vezes mais rápido.
+
+**Aspas: escolha uma e seja consistente.** A PEP 8 não decide por você; o Black e o Ruff, sim — o padrão dos dois é aspas duplas, e trocar só quando a string contém aspas duplas. Se o projeto usa formatador, deixe ele decidir e pare de pensar nisso.
+
+**String crua para expressão regular e caminho do Windows.** Sempre. `r"\d+"` e `r"C:\Users"`.
+
+**Não construa strings com dados de fora sem cuidado.** Concatenar entrada do usuário em SQL, em comando de shell ou em HTML é a origem das três famílias mais comuns de vulnerabilidade. Cada uma tem a ferramenta certa — parâmetros de consulta, lista de argumentos em `subprocess`, escapamento de template — e o Volume 12 e o Volume 14 tratam disso.
+
+Um antipadrão discreto:
+
+```python
+# antipadrão: comparar tamanho para ver se está vazia
+if len(texto) == 0:
+```
+
+```python
+# pythônico (@sec-cap011)
+if not texto:
+```
+
+Sobre versões:
+
+- **Python 3.0** — `str` passou a ser texto Unicode; `bytes` virou tipo separado (assunto do @sec-cap014).
+- **Python 3.6** — f-strings (PEP 498), tema do próximo capítulo.
+- **Python 3.7** — `str.isascii()`.
+- **Python 3.9** — `str.removeprefix()` e `str.removesuffix()` (PEP 616), que substituem o uso errado de `strip` para remover prefixo.
+- **Python 3.12** — f-strings passaram a aceitar qualquer expressão, inclusive com as mesmas aspas por dentro e por fora (PEP 701).
+- **Python 3.13** — o aviso de sequência de escape inválida (`"\d"`) virou `SyntaxWarning` por padrão, a caminho de virar erro.
+
+## 🧪 Laboratório
+
+Objetivo: enxergar as fronteiras da fatia, medir a diferença entre `+=` e `join`, e reescrever o parser de largura fixa de forma que o próximo erro de coluna seja visível.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab12 && cd ~/lab12
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza o bug.**
+
+```bash
+python -c "
+LINHA = '2026-03-11 06:47:55 CHACARA-DO-ZE   -18.4  OK'
+print(repr(LINHA[0:10]), repr(LINHA[11:18]), repr(LINHA[11:19]))
+print(len(LINHA))
+"
+```
+
+```text
+'2026-03-11' '06:47:5' '06:47:55'
+45
+```
+
+Confirme na régua da @fig-fatia-fronteiras que o comprimento de `[a:b]` é `b - a`.
+
+**3. Percorra a régua.**
+
+```bash
+python -c "
+p = 'python'
+for f in ('p[0]', 'p[-1]', 'p[0:3]', 'p[:3]', 'p[3:]', 'p[-3:]', 'p[:-3]', 'p[-4:-1]', 'p[:]'):
+    print(f'{f:<10} {eval(f)!r}')
+"
+```
+
+```text
+p[0]       'p'
+p[-1]      'n'
+p[0:3]     'pyt'
+p[:3]      'pyt'
+p[3:]      'hon'
+p[-3:]     'hon'
+p[:-3]     'pyt'
+p[-4:-1]   'tho'
+p[:]       'python'
+```
+
+Confira que `p[:3] + p[3:]` reconstrói a string — a fronteira 3 é a mesma dos dois lados.
+
+**4. Índice estoura, fatia não.**
+
+```bash
+python -c "
+p = 'python'
+print(repr(p[10:20]), repr(p[3:100]), repr(p[-100:2]))
+print(p[10])
+"
+```
+
+```text
+'' 'hon' 'py'
+Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+    print(p[10])
+          ~^^^^
+IndexError: string index out of range
+```
+
+Pense em quais bugs a tolerância da fatia esconde — o da abertura é um deles.
+
+**5. Passo, inclusive negativo.**
+
+```bash
+python -c "
+p = 'python'
+for f in ('p[::2]', 'p[1::2]', 'p[::-1]', 'p[::-2]', 'p[5:1:-1]', 'p[1:5:-1]', 'p[-1:-4:-1]'):
+    print(f'{f:<14} {eval(f)!r}')
+print(p[::0])
+"
+```
+
+```text
+p[::2]         'pto'
+p[1::2]        'yhn'
+p[::-1]        'nohtyp'
+p[::-2]        'nhy'
+p[5:1:-1]      'noht'
+p[1:5:-1]      ''
+p[-1:-4:-1]    'noh'
+Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+    print(p[::0])
+          ~^^^^^
+ValueError: slice step cannot be zero
+```
+
+Compare `p[5:1:-1]` com `p[1:5:-1]` na @fig-passo-negativo.
+
+**6. Meça a inversão.**
+
+```bash
+python -c "
+import timeit
+def laco(s):
+    saida = ''
+    for c in s:
+        saida = c + saida
+    return saida
+alvo = 'abcdefghij' * 100
+print(laco(alvo) == alvo[::-1])
+tl = timeit.timeit('f(alvo)', globals={'f': laco, 'alvo': alvo}, number=2000)
+tf = timeit.timeit('alvo[::-1]', globals={'alvo': alvo}, number=2000)
+print(f'{tl/2000*1e6:.1f} us contra {tf/2000*1e6:.1f} us  ({tl/tf:.0f}x)')
+"
+```
+
+```text
+True
+129.4 us contra 2.1 us  (62x)
+```
+
+O fator exato varia bastante entre execuções (medi de 33 a 75 no mesmo equipamento); a ordem de grandeza, não.
+
+**7. Descubra quando o `+=` fica quadrático.** Crie `construir.py` com as três funções do capítulo e a medição, e rode:
+
+```bash
+python construir.py
+```
+
+```text
+       n         +=   += c/ alias       join
+   20000       1.7ms          8.0ms       1.7ms
+   40000       2.8ms         31.3ms       2.8ms
+   80000       5.3ms        132.1ms       7.5ms
+  160000      13.5ms        515.3ms      12.6ms
+```
+
+Os seus tempos vão diferir; o **formato** das colunas não deve. Confirme que a do meio quadruplica quando `n` dobra e as outras duas apenas dobram, e explique por que a única diferença entre as duas primeiras funções é a linha `guarda = s`.
+
+**8. Imutabilidade.**
+
+```bash
+python -c "
+nome = 'kali'
+print(nome.replace('k', 'K'), nome)
+nome[0] = 'K'
+"
+```
+
+```text
+Kali kali
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    nome[0] = 'K'
+    ~~~~^^^
+TypeError: 'str' object does not support item assignment
+```
+
+A primeira linha imprimiu antes do erro: `replace` devolveu uma string nova (`Kali`) e a original (`kali`) não mudou.
+
+**9. Ordenação não é alfabética.**
+
+```bash
+python -c "
+nomes = ['Zebra', 'abacaxi', 'Banana', 'ácido', 'agua']
+print(sorted(nomes))
+print(sorted(nomes, key=str.lower))
+print([ord(c) for c in 'ZaáçA'])
+"
+```
+
+```text
+['Banana', 'Zebra', 'abacaxi', 'agua', 'ácido']
+['abacaxi', 'agua', 'Banana', 'Zebra', 'ácido']
+[90, 97, 225, 231, 65]
+```
+
+`key=str.lower` arrumou as maiúsculas, e nem assim `ácido` foi parar entre `abacaxi` e `agua`, que é onde um dicionário de português o colocaria: `á` é 225, maior que qualquer letra sem acento. Ordenação cultural é assunto de `locale`, retomado no @sec-cap014.
+
+**10. Literais adjacentes e a vírgula esquecida.**
+
+```bash
+python -c "
+PALAVRAS = [
+    'erro',
+    'aviso'
+    'critico',
+]
+print(PALAVRAS, len(PALAVRAS))
+"
+```
+
+```text
+['erro', 'avisocritico'] 2
+```
+
+Dois itens onde deveriam ser três, sem erro nenhum. Configure o seu editor para avisar (o Ruff tem a regra `ISC` para isso).
+
+**11. Reescreva o parser.** Crie `parser.py`:
+
+```python
+"""Le registros de largura fixa da OLT antiga."""
+
+CAMPOS = {
+    "data": slice(0, 10),
+    "hora": slice(11, 19),
+    "cliente": slice(20, 36),
+    "nivel": slice(36, 42),
+    "estado": slice(43, None),
+}
+
+LARGURA_MINIMA = 45
+
+
+def analisar(linha):
+    if len(linha) < LARGURA_MINIMA:
+        raise ValueError(f"linha curta ({len(linha)} caracteres): {linha!r}")
+    return {nome: linha[corte].strip() for nome, corte in CAMPOS.items()}
+
+
+if __name__ == "__main__":
+    LINHAS = [
+        "2026-03-11 06:47:55 CHACARA-DO-ZE   -18.4  OK",
+        "2026-03-11 07:01:12 SITIO-MANGUEIRA -21.7  OK",
+        "2026-03-11 07:15:00 CURTA",
+    ]
+    for linha in LINHAS:
+        try:
+            print(analisar(linha))
+        except ValueError as erro:
+            print("ignorada:", erro)
+```
+
+```bash
+python parser.py
+```
+
+```text
+{'data': '2026-03-11', 'hora': '06:47:55', 'cliente': 'CHACARA-DO-ZE', 'nivel': '-18.4', 'estado': 'OK'}
+{'data': '2026-03-11', 'hora': '07:01:12', 'cliente': 'SITIO-MANGUEIRA', 'nivel': '-21.7', 'estado': 'OK'}
+ignorada: linha curta (25 caracteres): '2026-03-11 07:15:00 CURTA'
+```
+
+Três ganhos sobre a versão da abertura: o layout está num lugar só e com nome, a linha curta **falha alto** em vez de virar campo vazio, e trocar uma coluna é editar um número. O `strip` que limpa o preenchimento é assunto do próximo capítulo.
+
+**12. Feche com `deactivate`.**
+
+## Resumo
+
+- Aspas simples e duplas são equivalentes; aspas triplas atravessam linhas; literais adjacentes são concatenados na compilação — e a vírgula esquecida numa lista junta dois itens sem erro.
+- String crua (`r"..."`) desliga os escapes: obrigatória em expressão regular e em caminho do Windows.
+- `str` é imutável: toda "alteração" devolve um objeto novo, e `s[0] = "x"` é `TypeError`. Não existe tipo caractere — `s[0]` é uma `str` de tamanho 1.
+- Os números de uma fatia marcam **fronteiras entre** caracteres: `[a:b]` inclui `a`, exclui `b`, e tem `b - a` caracteres. Índice fora da faixa levanta `IndexError`; fatia fora da faixa devolve o que couber, inclusive `""`.
+- Com passo negativo a fatia anda para trás, então o início precisa estar à direita do fim. `[::-1]` inverte; passo zero é `ValueError`.
+- `slice(a, b)` é um objeto: guarde o layout de um formato de largura fixa em constantes com nome, não em números espalhados.
+- Comparação é por ponto de código, não alfabética: toda maiúscula vem antes de toda minúscula, e acentuadas vêm depois de todas.
+- `"".join(...)` é linear e sempre foi. `+=` num laço só é linear em CPython e só enquanto a string tiver uma única referência — basta um segundo nome para o tempo virar quadrático.
