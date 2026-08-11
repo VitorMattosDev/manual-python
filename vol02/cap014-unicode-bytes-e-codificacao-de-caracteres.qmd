@@ -1,3 +1,815 @@
 # Unicode, bytes e codificação de caracteres {#sec-cap014}
 
-*(em elaboracao)*
+O sistema de cadastro exporta os clientes num CSV. O script de importação abre o arquivo, lê e quebra:
+
+```python
+from pathlib import Path
+
+print(Path("clientes.csv").read_text(encoding="utf-8"))
+```
+
+```text
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc1 in position 16: invalid start byte
+```
+
+Alguém procura o erro na internet, encontra a resposta de sempre e aplica:
+
+```python
+print(repr(Path("clientes.csv").read_text(encoding="utf-8", errors="ignore")))
+```
+
+```text
+'cliente;nivel\nCHCARA DO Z;-18.4\nSTIO MANGUEIRA;-21.7\n'
+```
+
+Agora não quebra mais. E `CHÁCARA DO ZÉ` virou `CHCARA DO Z`, `SÍTIO` virou `STIO`, e trinta mil cadastros entraram no banco sem os acentos — silenciosamente, para sempre, porque o arquivo original foi arquivado e ninguém percebeu por três meses.
+
+O `errors="ignore"` não consertou nada: ele mandou o Python jogar fora todo byte que não entendeu. O arquivo estava em **latin-1**, não em UTF-8, e a única correção certa era dizer isso:
+
+```python
+print(Path("clientes.csv").read_text(encoding="latin-1"))
+```
+
+```text
+cliente;nivel
+CHÁCARA DO ZÉ;-18.4
+SÍTIO MANGUEIRA;-21.7
+```
+
+Este capítulo fecha o Volume 2 com o que separa `str` de `bytes`, por que a fronteira entre os dois é onde os bugs de texto nascem, e o que `len()` realmente conta.
+
+## Duas coisas diferentes: `str` e `bytes`
+
+No Python 3, o modelo é explícito e não há conversão automática entre os dois:
+
+- **`str`** é uma sequência de **pontos de código** Unicode. É texto. Não tem codificação — a codificação é interna e não é assunto seu.
+- **`bytes`** é uma sequência de **números de 0 a 255**. É dado bruto: o que trafega em soquete, o que está gravado em arquivo, o que sai de uma chamada de sistema.
+
+```python
+s = "Zé"
+b = s.encode("utf-8")
+
+print(s, len(s), type(s))
+print(b, len(b), type(b))
+```
+
+```text
+Zé 2 <class 'str'>
+b'Z\xc3\xa9' 3 <class 'bytes'>
+```
+
+Dois caracteres viraram três bytes. `encode` transforma texto em bytes; `decode` faz o caminho de volta. Guardar a direção é metade da batalha, e o macete que funciona: **texto codifica para bytes; bytes decodificam para texto**.
+
+Um detalhe que confunde: indexar `bytes` devolve `int`, não `bytes`.
+
+```python
+print(b[0], type(b[0]))
+print(b[:1], type(b[:1]))
+print(b.hex(" "))
+```
+
+```text
+90 <class 'int'>
+b'Z' <class 'bytes'>
+5a c3 a9
+```
+
+Indexar dá o número; fatiar dá `bytes`. Isso é lembrete permanente de que `bytes` não é "string de bytes" — é uma sequência de inteiros que às vezes se parece com texto.
+
+Literal `bytes` leva o prefixo `b` e só aceita ASCII:
+
+```python
+b"Zé"
+```
+
+```text
+SyntaxError: bytes can only contain ASCII literal characters
+```
+
+E `bytearray` é a versão mutável, útil para montar um buffer:
+
+```python
+ba = bytearray(b"abc")
+ba[0] = 65
+ba.append(33)
+print(ba, bytes(ba))
+```
+
+```text
+bytearray(b'Abc!') b'Abc!'
+```
+
+## O sanduíche Unicode
+
+A disciplina que evita a classe inteira de bugs deste capítulo cabe em três palavras: **decodifique cedo, processe em `str`, codifique tarde**.
+
+::: {#fig-sanduiche-unicode}
+```{.tikz}
+%%| filename: sanduiche-unicode
+%%| alt: O sanduiche Unicode: bytes na entrada sao decodificados para str, todo o processamento acontece em str, e so na saida o texto e codificado de volta para bytes
+\begin{tikzpicture}[
+  fatia/.style={draw=manualgray, very thick, rounded corners, fill=manualyellow!22,
+                text width=11.0cm, align=center, minimum height=1.0cm,
+                font=\ttfamily\small},
+  miolo/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+                text width=11.0cm, align=center, minimum height=1.55cm,
+                font=\small},
+  op/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+             minimum width=3.2cm, minimum height=0.68cm, font=\ttfamily\small},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, text width=4.5cm},
+  fl/.style={->,>=stealth, very thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-6.2, 3.7) rectangle (11.6,-3.9);
+
+  \node[fatia] (e) at (0, 3.05) {bytes que entram};
+  \node[op]    (d) at (0, 1.85) {.decode(enc)};
+  \node[miolo] (m) at (0, 0.45)
+    {\textbf{tudo em \texttt{str}}\\[2pt]
+     \scriptsize fatiar, comparar, normalizar, formatar};
+  \node[op]    (c) at (0,-1.05) {.encode(enc)};
+  \node[fatia] (x) at (0,-2.25) {bytes que saem};
+
+  \draw[fl] (e) -- (d);
+  \draw[fl] (d) -- (m);
+  \draw[fl] (m) -- (c);
+  \draw[fl] (c) -- (x);
+
+  \node[lb, anchor=west] at (6.0, 3.05)
+    {arquivo, soquete, resposta HTTP, saída de \texttt{subprocess}};
+  \node[lb, anchor=west, text=manualgreen] at (6.0, 1.85)
+    {o mais cedo possível, com a codificação \textbf{declarada}};
+  \node[lb, anchor=west] at (6.0, 0.45)
+    {nenhuma linha de lógica de negócio toca em \texttt{bytes}};
+  \node[lb, anchor=west, text=manualgreen] at (6.0,-1.05)
+    {o mais tarde possível, na borda da saída};
+
+  \node[lb, text width=12.0cm, align=center] at (2.0,-3.35)
+    {a codificação aparece em exatamente \textbf{dois} lugares do programa ---
+     e nos dois ela é escrita, nunca herdada do sistema};
+\end{tikzpicture}
+```
+Decodifique na entrada, trabalhe em `str`, codifique na saída.
+:::
+
+O erro da abertura foi de fatia do sanduíche: a codificação da entrada foi **adivinhada** em vez de declarada. E o `errors="ignore"` foi pior — trocou um erro alto por perda silenciosa de dados.
+
+## UTF-8 e as outras
+
+Uma codificação é uma tabela: como transformar ponto de código em bytes e vice-versa.
+
+**UTF-8** representa qualquer ponto de código Unicode usando de um a quatro bytes:
+
+```python
+import unicodedata
+
+for c in "A", "é", "€", "🐍":
+    e = c.encode("utf-8")
+    print(f"{c}  U+{ord(c):04X}  {len(e)} bytes  {e.hex(' ')}  {unicodedata.name(c)}")
+```
+
+```text
+A  U+0041  1 bytes  41  LATIN CAPITAL LETTER A
+é  U+00E9  2 bytes  c3 a9  LATIN SMALL LETTER E WITH ACUTE
+€  U+20AC  3 bytes  e2 82 ac  EURO SIGN
+🐍  U+1F40D  4 bytes  f0 9f 90 8d  SNAKE
+```
+
+::: {#fig-utf8-bytes}
+```{.tikz}
+%%| filename: utf8-bytes
+%%| alt: Estrutura de bits do UTF-8: um byte para ASCII, dois a quatro bytes com prefixos que distinguem byte inicial de byte de continuacao
+\begin{tikzpicture}[
+  ini/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!12,
+              minimum width=2.35cm, minimum height=0.62cm,
+              font=\ttfamily\scriptsize},
+  cont/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualgray!7,
+               minimum width=2.35cm, minimum height=0.62cm,
+               font=\ttfamily\scriptsize},
+  ch/.style={font=\ttfamily\scriptsize, align=center, text width=2.3cm},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-3.0, 1.55) rectangle (13.4,-4.7);
+
+  \node[hd] at (-1.6, 0.95) {ponto de código};
+  \node[hd] at ( 3.6, 0.95) {bytes em UTF-8};
+  \node[hd] at (10.6, 0.95) {faixa};
+
+  \node[ch] at (-1.6, 0.15) {U+0041\\(A)};
+  \node[ini] at (1.3, 0.15) {\textcolor{manualred}{0}1000001};
+  \node[lb, anchor=west] at (8.7, 0.15) {ASCII, 1 byte};
+
+  \node[ch] at (-1.6,-1.05) {U+00E9\\(é)};
+  \node[ini]  at (1.3,-1.05) {\textcolor{manualred}{110}00011};
+  \node[cont] at (3.8,-1.05) {\textcolor{manualred}{10}101001};
+  \node[lb, anchor=west] at (8.7,-1.05) {latinas, 2 bytes};
+
+  \node[ch] at (-1.6,-2.25) {U+20AC\\(euro)};
+  \node[ini]  at (1.3,-2.25) {\textcolor{manualred}{1110}0010};
+  \node[cont] at (3.8,-2.25) {\textcolor{manualred}{10}000010};
+  \node[cont] at (6.3,-2.25) {\textcolor{manualred}{10}101100};
+  \node[lb, anchor=west] at (8.7,-2.25) {CJK, símbolos, 3 bytes};
+
+  \node[ch] at (-1.6,-3.45) {U+1F40D\\(cobra)};
+  \node[ini]  at (1.3,-3.45) {\textcolor{manualred}{11110}000};
+  \node[cont] at (3.8,-3.45) {\textcolor{manualred}{10}011111};
+  \node[cont] at (6.3,-3.45) {\textcolor{manualred}{10}010000};
+  \node[cont] at (8.8,-3.45) {\textcolor{manualred}{10}001101};
+  \node[lb, anchor=west] at (10.2,-3.45) {emoji,\\4 bytes};
+
+  \node[lb, text width=13.5cm] at (5.0,-4.35)
+    {o \textcolor{manualred}{prefixo} diz tudo: \texttt{0} é ASCII puro,
+     \texttt{110}, \texttt{1110} e \texttt{11110} abrem uma sequência de 2, 3 ou
+     4 bytes, e \texttt{10} marca continuação --- por isso dá para achar o início
+     de um caractere a partir de qualquer posição};
+\end{tikzpicture}
+```
+UTF-8: o padrão de bits do primeiro byte diz quantos vêm atrás.
+:::
+
+Três propriedades tornam o UTF-8 o padrão de fato:
+
+1. **Compatível com ASCII.** Todo arquivo ASCII já é UTF-8 válido, byte por byte.
+2. **Autossincronizante.** Byte de continuação sempre começa com `10`, então nunca se confunde com um byte inicial. Perdeu o começo do fluxo? Dá para reencontrar a fronteira do próximo caractere.
+3. **Sem ambiguidade de ordem.** Não existe "UTF-8 big endian", logo não há necessidade de marca de ordem de bytes.
+
+**latin-1** (ISO-8859-1) usa exatamente um byte por caractere e cobre 256 deles — o suficiente para o português, o que explica a longevidade dela em sistemas antigos. **cp1252** é a variante da Microsoft, quase igual, com símbolos nas posições 0x80–0x9F que a latin-1 deixa vazias.
+
+E é da mistura entre elas que nasce o *mojibake*:
+
+```python
+utf = "chácara do zé".encode("utf-8")
+print(utf)
+print(repr(utf.decode("latin-1")))
+```
+
+```text
+b'ch\xc3\xa1cara do z\xc3\xa9'
+'chÃ¡cara do zÃ©'
+```
+
+`Ã¡` no lugar de `á` é a assinatura visual de "texto UTF-8 lido como latin-1". Repare que **não houve erro**: latin-1 tem um caractere definido para cada um dos 256 bytes, então ela decodifica qualquer coisa e nunca falha. É o pior dos dois mundos — dado corrompido sem exceção nenhuma. UTF-8 no lugar de latin-1 falha alto, como na abertura; latin-1 no lugar de UTF-8 falha em silêncio.
+
+## Os tratadores de erro
+
+O parâmetro `errors` decide o que fazer quando um byte (ou um caractere) não cabe:
+
+```python
+latin = "CHÁCARA DO ZÉ".encode("latin-1")
+
+print(repr(latin.decode("utf-8", errors="ignore")))
+print(repr(latin.decode("utf-8", errors="replace")))
+print(repr(latin.decode("utf-8", errors="backslashreplace")))
+```
+
+```text
+'CHCARA DO Z'
+'CH�CARA DO Z�'
+'CH\\xc1CARA DO Z\\xc9'
+```
+
+- `strict` (padrão) — levanta a exceção. **É quase sempre o certo**: um erro alto é melhor que dado errado.
+- `ignore` — descarta em silêncio. É o vilão da abertura.
+- `replace` — troca pelo caractere de substituição `U+FFFD` (o `?` dentro de um losango). Perde a informação, mas deixa rastro visível.
+- `backslashreplace` — preserva os bytes originais como escape, então é **reversível**. É a melhor escolha quando você precisa continuar e não quer perder nada.
+
+Na direção da codificação, há mais um:
+
+```python
+print("🐍".encode("ascii", errors="xmlcharrefreplace"))
+```
+
+```text
+b'&#128013;'
+```
+
+E `surrogateescape`, que existe para um problema específico: nomes de arquivo no Linux são bytes, não texto, e podem conter sequências que não são UTF-8 válido.
+
+```python
+ruim = b"arquivo-\xff.log"
+nome = ruim.decode("utf-8", errors="surrogateescape")
+print(repr(nome))
+print(nome.encode("utf-8", errors="surrogateescape") == ruim)
+```
+
+```text
+'arquivo-\udcff.log'
+True
+```
+
+Os bytes inválidos viram pontos de código reservados e voltam intactos na codificação. É assim que o Python trata nomes de arquivo, e é a razão de você conseguir abrir um arquivo cujo nome nenhum editor mostra direito.
+
+## `len()` conta pontos de código, não o que você vê
+
+Esta é a parte que surpreende mesmo quem já sabe o resto:
+
+```python
+casos = ["á", "á", "🐍", "👨‍👩‍👧", "🇧🇷"]
+for c in casos:
+    print(f"{c}  len={len(c)}  utf8={len(c.encode('utf-8'))}")
+```
+
+```text
+á  len=1  utf8=2
+á  len=2  utf8=3
+🐍  len=1  utf8=4
+👨‍👩‍👧  len=5  utf8=18
+🇧🇷  len=2  utf8=8
+```
+
+Os dois primeiros são **visualmente idênticos** e têm comprimentos diferentes. O primeiro é `U+00E1`, o caractere pré-composto. O segundo é `a` seguido de `U+0301`, o acento agudo combinante:
+
+```python
+import unicodedata
+
+nfd = "chácara"          # com acento combinante
+print([unicodedata.name(ch) for ch in "á"])
+```
+
+```text
+['LATIN SMALL LETTER A', 'COMBINING ACUTE ACCENT']
+```
+
+A família de emoji tem cinco pontos de código: três pessoas e dois `ZERO WIDTH JOINER` no meio. A bandeira tem dois, que são as letras regionais `B` e `R`.
+
+O que o usuário chama de "caractere" é um **grafema**, e o Python não conta grafemas — conta pontos de código. Para contar grafemas é preciso a biblioteca externa `regex` (com `\X`) ou `grapheme`. Na prática isso importa em três lugares: contar caracteres para um limite de campo, truncar texto sem partir um emoji ao meio, e alinhar tabela em terminal.
+
+## Normalização
+
+Se `"á"` e `"á"` são strings diferentes, comparar texto do usuário fica perigoso:
+
+```python
+nfc = "chácara"          # á pré-composto
+nfd = "chácara"          # a + acento combinante
+
+print(nfc == nfd, len(nfc), len(nfd))
+print(nfc.casefold() == nfd.casefold())
+print("chá" in nfd)
+```
+
+```text
+False 7 8
+False
+False
+```
+
+Nem a igualdade, nem o `casefold` do @sec-cap013, nem a busca por subcadeia funcionam. O `in` falhou porque `"chá"` (com `á` pré-composto) não aparece literalmente na versão decomposta.
+
+A solução é normalizar antes de comparar. O `unicodedata` oferece quatro formas:
+
+- **NFC** — compõe o máximo possível. É o formato canônico da web e o que você quer no armazenamento.
+- **NFD** — decompõe o máximo possível. Útil para processar acentos separadamente (é o macOS que grava assim).
+- **NFKC** e **NFKD** — as versões de *compatibilidade*, que além de compor ou decompor também unificam formas equivalentes: `ﬁ` vira `fi`, `①` vira `1`, `²` vira `2`.
+
+```python
+print(unicodedata.normalize("NFC", nfd) == nfc)
+print(unicodedata.normalize("NFKC", "①²ﬁ"))
+```
+
+```text
+True
+12fi
+```
+
+E daí sai a receita de remover acentos sem tabela escrita à mão — melhor do que o `str.maketrans` do @sec-cap013, porque cobre o alfabeto inteiro:
+
+```python
+def sem_acento(texto):
+    decomposto = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in decomposto if unicodedata.category(c) != "Mn")
+
+
+print(sem_acento("Configuração Ótima da Estação"))
+```
+
+```text
+Configuracao Otima da Estacao
+```
+
+Decompõe (separando a letra do acento) e descarta tudo que for da categoria `Mn`, *Mark, nonspacing* — os acentos combinantes. Funciona para qualquer idioma com acentuação decomponível.
+
+E com isso a ordenação do @sec-cap012 finalmente fica em ordem de dicionário:
+
+```python
+nomes = ["Zebra", "abacaxi", "ácido", "agua"]
+print(sorted(nomes))
+print(sorted(nomes, key=lambda s: (sem_acento(s).casefold(), s)))
+```
+
+```text
+['Zebra', 'abacaxi', 'agua', 'ácido']
+['abacaxi', 'ácido', 'agua', 'Zebra']
+```
+
+A segunda é a ordem que um leitor de português espera. Para ordenação cultural completa — com as regras de cada idioma, incluindo os casos em que uma letra acentuada é uma letra distinta —, a resposta é `locale.strxfrm` ou `PyICU`.
+
+## A codificação padrão, e por que não confiar nela
+
+```python
+import locale
+import sys
+
+print(sys.getdefaultencoding())
+print(sys.getfilesystemencoding())
+print(locale.getpreferredencoding(False))
+```
+
+```text
+utf-8
+utf-8
+UTF-8
+```
+
+Neste Kali, tudo é UTF-8. Num Windows com português do Brasil, `locale.getpreferredencoding()` costuma responder `cp1252` — e é exatamente essa diferença que faz um script funcionar na máquina de quem escreveu e quebrar na de quem usa.
+
+`open()` **sem** `encoding=` usa a codificação preferida do sistema. Por isso a regra é curta e não tem exceção: **sempre passe `encoding=`**.
+
+```python
+# antipadrão: depende do sistema operacional e do idioma dele
+texto = Path("clientes.csv").read_text()
+```
+
+```python
+# pythônico: reprodutível em qualquer máquina
+texto = Path("clientes.csv").read_text(encoding="utf-8")
+```
+
+Duas notas de versão importantes aqui. Desde o **Python 3.10**, `open()` sem `encoding=` emite `EncodingWarning` se o modo de aviso estiver ligado (`python -X warn_default_encoding`), justamente para achar essas chamadas. E a **PEP 686** define UTF-8 como padrão do interpretador; a mudança está programada para o Python 3.15, e até lá `PYTHONUTF8=1` ou `python -X utf8` liga o comportamento novo em qualquer versão a partir da 3.7.
+
+## O BOM
+
+Alguns editores do Windows gravam três bytes no começo do arquivo (`EF BB BF`) para marcar que ele é UTF-8:
+
+```python
+com_bom = "Zé".encode("utf-8-sig")
+print(com_bom)
+print(repr(com_bom.decode("utf-8")))
+print(repr(com_bom.decode("utf-8-sig")))
+```
+
+```text
+b'\xef\xbb\xbfZ\xc3\xa9'
+'﻿Zé'
+'Zé'
+```
+
+Lido como `utf-8`, o BOM vira um caractere invisível no começo da string — e o nome da primeira coluna do seu CSV passa a ser `﻿cliente`, que não casa com `"cliente"` em lugar nenhum. É a causa do "a primeira coluna sumiu" em importação de planilha. O codec `utf-8-sig` consome o BOM na leitura; na escrita, prefira `utf-8` puro, porque BOM em UTF-8 não serve para nada em sistema que não seja Windows.
+
+## 🐍 Jeito Pythônico
+
+**Sempre `encoding=`.** Em `open`, em `read_text`, em `write_text`, em `subprocess.run(text=True, encoding=...)`, em `json.loads` de bytes. Se você não escreveu, o sistema escolheu por você.
+
+**`errors="strict"` é o padrão e deve continuar sendo.** Quando precisar de tolerância, prefira `backslashreplace` (reversível) ou `replace` (visível) a `ignore` (silencioso). `ignore` só se justifica quando você já sabe exatamente o que está descartando e por quê.
+
+**Não adivinhe a codificação — descubra e documente.** Quando o arquivo vem de fora sem contrato, `charset-normalizer` ou `chardet` dão um palpite; use o palpite para **decidir uma vez** e escreva a decisão no código, em vez de adivinhar a cada execução.
+
+**Normalize na fronteira, junto com a decodificação.** Se o texto vai ser comparado, buscado ou usado como chave, `unicodedata.normalize("NFC", ...)` na entrada resolve a classe inteira de bugs de `"á" != "á"`.
+
+**Para comparar identificador do usuário, normalize e faça `casefold`.** Nessa ordem, e com NFKC quando o campo for nome de conta:
+
+```python
+def chave(nome):
+    return unicodedata.normalize("NFKC", nome).casefold()
+```
+
+Sem isso, `ADMIN`, `admin` e `ａｄｍｉｎ` (largura total) são três contas diferentes num sistema e a mesma conta em outro — que é como se fabrica um ataque de personificação.
+
+**Não fatie `bytes` de texto.** `b[:10]` pode cortar um caractere no meio e produzir uma sequência inválida. Decodifique primeiro, fatie a `str` depois.
+
+**Guarde e transmita em UTF-8.** Não há decisão a tomar em 2026: UTF-8 na saída, sempre, sem BOM.
+
+Um antipadrão que vale nome:
+
+```python
+# antipadrão: o "conserto" que apaga dados
+texto = dados.decode("utf-8", errors="ignore")
+```
+
+```python
+# pythônico: falhe alto, ou preserve o que não entendeu
+texto = dados.decode("utf-8")                          # deixa estourar
+texto = dados.decode("utf-8", errors="backslashreplace")   # reversível
+```
+
+Sobre versões:
+
+- **Python 3.0** — `str` virou texto Unicode e `bytes` virou tipo separado, sem conversão implícita. É a mudança mais importante do Python 3 e a que mais quebrou código do Python 2.
+- **Python 3.1** — `surrogateescape` para nomes de arquivo (PEP 383).
+- **Python 3.7** — `PYTHONUTF8` e `-X utf8` (PEP 540); `PYTHONCOERCECLOCALE` para o *locale* `C`.
+- **Python 3.10** — `EncodingWarning` (PEP 597) para encontrar chamadas sem `encoding=`.
+- **Python 3.11** — a base de dados Unicode subiu para a versão 14; cada versão do Python traz uma atualização, então `unicodedata.unidata_version` diz qual você tem.
+- **Python 3.15** — UTF-8 passa a ser o padrão do interpretador (PEP 686), tornando `encoding="utf-8"` redundante. Escrever mesmo assim continua sendo boa prática enquanto houver 3.13 em produção.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o estrago da abertura, ver os bytes de cada codificação, medir a diferença entre ponto de código e grafema, e escrever um importador que não perde acento.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab14 && cd ~/lab14
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Fabrique o arquivo do problema.**
+
+```bash
+python -c "
+from pathlib import Path
+conteudo = 'cliente;nivel\nCHÁCARA DO ZÉ;-18.4\nSÍTIO MANGUEIRA;-21.7\n'
+Path('clientes.csv').write_bytes(conteudo.encode('latin-1'))
+print(Path('clientes.csv').read_bytes()[:30])
+"
+```
+
+```text
+b'cliente;nivel\nCH\xc1CARA DO Z\xc9;-1'
+```
+
+O `\xc1` de um byte só é a assinatura da latin-1: em UTF-8, `Á` seriam dois bytes.
+
+**3. Reproduza os três desfechos.**
+
+```bash
+python -c "
+from pathlib import Path
+d = Path('clientes.csv').read_bytes()
+try:
+    d.decode('utf-8')
+except UnicodeDecodeError as e:
+    print('ERRO:', e)
+print(repr(d.decode('utf-8', errors='ignore')))
+print(repr(d.decode('utf-8', errors='replace')))
+print(repr(d.decode('utf-8', errors='backslashreplace')))
+print(repr(d.decode('latin-1')))
+"
+```
+
+```text
+ERRO: 'utf-8' codec can't decode byte 0xc1 in position 16: invalid start byte
+'cliente;nivel\nCHCARA DO Z;-18.4\nSTIO MANGUEIRA;-21.7\n'
+'cliente;nivel\nCH�CARA DO Z�;-18.4\nS�TIO MANGUEIRA;-21.7\n'
+'cliente;nivel\nCH\\xc1CARA DO Z\\xc9;-18.4\nS\\xcdTIO MANGUEIRA;-21.7\n'
+'cliente;nivel\nCHÁCARA DO ZÉ;-18.4\nSÍTIO MANGUEIRA;-21.7\n'
+```
+
+Compare linha a linha: `ignore` apagou, `replace` marcou, `backslashreplace` preservou de forma reversível, e só a última está certa.
+
+**4. Descubra a codificação por tentativa.**
+
+```bash
+python -c "
+from pathlib import Path
+d = Path('clientes.csv').read_bytes()
+for enc in ('utf-8', 'latin-1', 'cp1252'):
+    try:
+        print(f'{enc:<10} OK    {d.decode(enc).splitlines()[1]!r}')
+    except UnicodeDecodeError as e:
+        print(f'{enc:<10} FALHA {e.reason} em {e.start}')
+"
+```
+
+```text
+utf-8      FALHA invalid start byte em 16
+latin-1    OK    'CHÁCARA DO ZÉ;-18.4'
+cp1252     OK    'CHÁCARA DO ZÉ;-18.4'
+```
+
+Latin-1 e cp1252 concordam aqui — e sempre concordam quando não há bytes na faixa 0x80–0x9F. Como latin-1 **nunca** falha, ela dá certo em qualquer arquivo: "não deu erro" não é prova de que a codificação é essa.
+
+**5. Veja o mojibake ao contrário.**
+
+```bash
+python -c "
+utf = 'chácara do zé'.encode('utf-8')
+print(utf)
+print(repr(utf.decode('latin-1')))
+"
+```
+
+```text
+b'ch\xc3\xa1cara do z\xc3\xa9'
+'chÃ¡cara do zÃ©'
+```
+
+Sem exceção nenhuma. Grave o padrão `Ã¡`, `Ã©`, `Ã§`: sempre que ele aparecer numa tela, é UTF-8 lido como latin-1.
+
+**6. Conte os bytes de cada caractere.**
+
+```bash
+python -c "
+import unicodedata
+for c in 'A', 'é', '€', '🐍':
+    e = c.encode('utf-8')
+    print(f'{c}  U+{ord(c):04X}  {len(e)}B  {e.hex(\" \")}  {unicodedata.name(c)}')
+print([f'{x:08b}' for x in 'é'.encode('utf-8')])
+print([f'{x:08b}' for x in '🐍'.encode('utf-8')])
+"
+```
+
+```text
+A  U+0041  1B  41  LATIN CAPITAL LETTER A
+é  U+00E9  2B  c3 a9  LATIN SMALL LETTER E WITH ACUTE
+€  U+20AC  3B  e2 82 ac  EURO SIGN
+🐍  U+1F40D  4B  f0 9f 90 8d  SNAKE
+['11000011', '10101001']
+['11110000', '10011111', '10010000', '10001101']
+```
+
+Confira os prefixos na @fig-utf8-bytes: `110` abre dois bytes, `11110` abre quatro, e todo byte de continuação começa com `10`.
+
+**7. `len` não é o que você vê.**
+
+```bash
+python -c "
+casos = ['á', 'á', '\U0001F40D', '\U0001F468‍\U0001F469‍\U0001F467', '\U0001F1E7\U0001F1F7']
+for c in casos:
+    print(f'{c}  len={len(c)}  utf8={len(c.encode(\"utf-8\"))}  {[hex(ord(x)) for x in c]}')
+"
+```
+
+```text
+á  len=1  utf8=2  ['0xe1']
+á  len=2  utf8=3  ['0x61', '0x301']
+🐍  len=1  utf8=4  ['0x1f40d']
+👨‍👩‍👧  len=5  utf8=18  ['0x1f468', '0x200d', '0x1f469', '0x200d', '0x1f467']
+🇧🇷  len=2  utf8=8  ['0x1f1e7', '0x1f1f7']
+```
+
+As duas primeiras linhas são o mesmo `á` na tela e strings diferentes na memória.
+
+**8. Normalize.**
+
+```bash
+python -c "
+import unicodedata
+nfc, nfd = 'chácara', 'chácara'
+print(nfc, nfd)
+print(nfc == nfd, nfc.casefold() == nfd.casefold(), 'chá' in nfd)
+print(unicodedata.normalize('NFC', nfd) == nfc)
+print('chá' in unicodedata.normalize('NFC', nfd))
+print(nfc.encode('utf-8').hex(' '))
+print(nfd.encode('utf-8').hex(' '))
+"
+```
+
+```text
+chácara chácara
+False False False
+True
+True
+63 68 c3 a1 63 61 72 61
+63 68 61 cc 81 63 61 72 61
+```
+
+Três `False` na segunda linha — igualdade, `casefold` e busca, todos falhando em strings que a tela mostra idênticas. E os bytes na quinta e sexta linha explicam por quê.
+
+**9. NFKC unifica formas de compatibilidade.**
+
+```bash
+python -c "
+import unicodedata
+print(unicodedata.normalize('NFKC', '①²ﬁ'))
+print('ﬁ' == 'fi', unicodedata.normalize('NFKC', 'ﬁ') == 'fi')
+print(unicodedata.normalize('NFKC', 'ａｄｍｉｎ'))
+"
+```
+
+```text
+12fi
+False True
+admin
+```
+
+A última linha é o motivo de NFKC entrar na comparação de nome de conta.
+
+**10. Remova acentos direito.**
+
+```bash
+python -c "
+import unicodedata
+def sem_acento(t):
+    d = unicodedata.normalize('NFD', t)
+    return ''.join(c for c in d if unicodedata.category(c) != 'Mn')
+print(sem_acento('Configuração Ótima da Estação'))
+nomes = ['Zebra', 'abacaxi', 'ácido', 'agua']
+print(sorted(nomes))
+print(sorted(nomes, key=lambda s: (sem_acento(s).casefold(), s)))
+"
+```
+
+```text
+Configuracao Otima da Estacao
+['Zebra', 'abacaxi', 'agua', 'ácido']
+['abacaxi', 'ácido', 'agua', 'Zebra']
+```
+
+**11. Encontre o BOM.**
+
+```bash
+python -c "
+com = 'cliente;nivel'.encode('utf-8-sig')
+print(com[:6])
+print(repr(com.decode('utf-8').split(';')[0]))
+print(repr(com.decode('utf-8-sig').split(';')[0]))
+print(com.decode('utf-8').split(';')[0] == 'cliente')
+"
+```
+
+```text
+b'\xef\xbb\xbfcli'
+'﻿cliente'
+'cliente'
+False
+```
+
+O `False` da última linha é o "a primeira coluna sumiu" de toda importação de planilha exportada pelo Excel.
+
+**12. Escreva o importador que não perde acento.** Crie `importar.py`:
+
+```python
+"""Le o CSV da OLT antiga sem perder acento e normaliza o texto na entrada."""
+
+import csv
+import unicodedata
+from pathlib import Path
+
+CODIFICACAO_ORIGEM = "latin-1"      # decidido uma vez, documentado aqui
+
+
+def chave(texto):
+    """Forma canonica para comparar e indexar."""
+    return unicodedata.normalize("NFKC", texto).casefold()
+
+
+def carregar(caminho):
+    bruto = Path(caminho).read_text(encoding=CODIFICACAO_ORIGEM)
+    bruto = unicodedata.normalize("NFC", bruto)
+    return list(csv.DictReader(bruto.splitlines(), delimiter=";"))
+
+
+if __name__ == "__main__":
+    registros = carregar("clientes.csv")
+    for r in registros:
+        print(f"{r['cliente']:<20} {chave(r['cliente']):<20} {r['nivel']:>7}")
+
+    saida = Path("clientes-utf8.csv")
+    saida.write_text(
+        "\n".join(f"{r['cliente']};{r['nivel']}" for r in registros) + "\n",
+        encoding="utf-8",
+    )
+    print("gravado:", saida.stat().st_size, "bytes em utf-8")
+```
+
+```bash
+python importar.py
+```
+
+```text
+CHÁCARA DO ZÉ        chácara do zé          -18.4
+SÍTIO MANGUEIRA      sítio mangueira        -21.7
+gravado: 45 bytes em utf-8
+```
+
+Todas as camadas do sanduíche estão ali: a codificação de origem declarada numa constante com nome, a normalização NFC logo depois da decodificação, o texto em `str` durante o processamento, uma função de chave canônica para comparar, e UTF-8 explícito na saída.
+
+**13. Confirme que a saída está certa.**
+
+```bash
+python -c "
+from pathlib import Path
+d = Path('clientes-utf8.csv').read_bytes()
+print(d)
+print(d.decode('utf-8'))
+"
+```
+
+```text
+b'CH\xc3\x81CARA DO Z\xc3\x89;-18.4\nS\xc3\x8dTIO MANGUEIRA;-21.7\n'
+CHÁCARA DO ZÉ;-18.4
+SÍTIO MANGUEIRA;-21.7
+```
+
+Dois bytes por letra acentuada — agora é UTF-8 de verdade.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- `str` é sequência de pontos de código Unicode; `bytes` é sequência de inteiros de 0 a 255. Não há conversão implícita: `encode` vai de texto para bytes, `decode` volta. Indexar `bytes` devolve `int`; fatiar devolve `bytes`.
+- Sanduíche Unicode: decodifique na entrada, processe só em `str`, codifique na saída. A codificação aparece em dois lugares do programa, e nos dois é escrita.
+- UTF-8 usa de 1 a 4 bytes, é compatível com ASCII e autossincronizante. latin-1 usa 1 byte e **nunca falha ao decodificar** — por isso corrompe em silêncio, enquanto UTF-8 falha alto. `Ã¡` na tela é a assinatura do erro.
+- `errors="ignore"` apaga dados sem avisar; prefira `strict` (padrão), `replace` (visível) ou `backslashreplace` (reversível). `surrogateescape` é o que permite tratar nome de arquivo inválido.
+- `len()` conta pontos de código, não grafemas: `"á"` pode ter comprimento 1 ou 2, uma família de emoji tem 5 e uma bandeira tem 2.
+- Normalize antes de comparar: NFC para armazenar, NFD para processar acento, NFKC para comparar identificador — junto com `casefold`. Sem isso, strings visualmente idênticas são diferentes para `==`, para `in` e para chave de dicionário.
+- `open()` sem `encoding=` usa o padrão do sistema, que é `cp1252` em Windows brasileiro e `utf-8` em Linux. Passe sempre, até a PEP 686 chegar no 3.15.
+- Remoção correta de acentos: `NFD` e descarte da categoria `Mn`. Ordenação de dicionário: essa chave mais `casefold`, ou `locale.strxfrm` para as regras completas.

@@ -26,7 +26,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 011** - Booleanos, valor-verdade e os operadores lógicos - `vol02/cap011-booleanos-valor-verdade-e-os-operadores.qmd`
 - [x] **cap 012** - Strings: criação, indexação e fatiamento - `vol02/cap012-strings-criacao-indexacao-e-fatiamento.qmd`
 - [x] **cap 013** - Métodos de string, formatação e f-strings - `vol02/cap013-metodos-de-string-formatacao-e-f-strings.qmd`
-- [ ] **cap 014** - Unicode, bytes e codificação de caracteres - `vol02/cap014-unicode-bytes-e-codificacao-de-caracteres.qmd`
+- [x] **cap 014** - Unicode, bytes e codificação de caracteres - `vol02/cap014-unicode-bytes-e-codificacao-de-caracteres.qmd`
 
 ### Volume 3 — Controle de Fluxo e Funções
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (7 concluidos).
+**Total:** 104 capitulos em 16 volumes (14 concluidos).
 
