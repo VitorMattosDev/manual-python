@@ -64,7 +64,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 - [x] **cap 035** - Leitura e escrita de arquivos de texto - `vol06/cap035-leitura-e-escrita-de-arquivos-de-texto.qmd`
 - [x] **cap 036** - Arquivos binários, buffers e o módulo io - `vol06/cap036-arquivos-binarios-buffers-e-o-modulo-io.qmd`
-- [ ] **cap 037** - Caminhos e o sistema de arquivos com pathlib - `vol06/cap037-caminhos-e-o-sistema-de-arquivos-com-pathlib.qmd`
+- [x] **cap 037** - Caminhos e o sistema de arquivos com pathlib - `vol06/cap037-caminhos-e-o-sistema-de-arquivos-com-pathlib.qmd`
 - [ ] **cap 038** - Exceções: hierarquia e o bloco try, except, else e finally - `vol06/cap038-excecoes-hierarquia-e-o-bloco-try-except-else.qmd`
 - [ ] **cap 039** - Levantando exceções e criando exceções próprias - `vol06/cap039-levantando-excecoes-e-criando-excecoes.qmd`
 - [ ] **cap 040** - Gerenciadores de contexto e a instrução with - `vol06/cap040-gerenciadores-de-contexto-e-a-instrucao-with.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (36 concluidos).
+**Total:** 104 capitulos em 16 volumes (37 concluidos).
 

@@ -1,3 +1,840 @@
-# Caminhos e o sistema de arquivos com pathlib {#sec-cap037}
+# Caminhos e o sistema de arquivos com `pathlib` {#sec-cap037}
 
-*(em elaboracao)*
+O script de arquivamento montava o caminho da coleta assim:
+
+```python
+caminho = base + "/" + olt + "/" + dia + "/leituras.csv"
+```
+
+Funcionou por um ano. Quebrou quando alguém rodou no Windows (a barra invertida), quando a variável `base` veio com barra no fim (`coletas//olt-borda-01`), quando o nome da OLT veio com espaço no fim, e quando um técnico pediu o arquivo `../../../etc/passwd` pela interface web — e recebeu.
+
+Caminho de arquivo parece string e não é. É uma estrutura com partes, com regras de plataforma e com um mundo real do outro lado, onde as coisas existem ou não existem, são diretório ou arquivo, e mudam entre o instante em que você pergunta e o instante em que você age. O módulo `pathlib`, na biblioteca padrão desde o Python 3.4 (PEP 428), trata caminho como o que ele é.
+
+## A barra que substitui a concatenação
+
+```python
+from pathlib import Path
+
+base = Path("coletas")
+p = base / "olt-borda-01" / "2026-08-11" / "leituras.csv"
+print("p       =", p)
+print("repr(p) =", repr(p))
+print("tipo    =", type(p).__name__)
+```
+
+```text
+p       = coletas/olt-borda-01/2026-08-11/leituras.csv
+repr(p) = PosixPath('coletas/olt-borda-01/2026-08-11/leituras.csv')
+tipo    = PosixPath
+```
+
+O operador `/` monta caminho. Ele aceita `str` dos dois lados, e há também o método explícito:
+
+```python
+print(Path("coletas") / "olt-borda-01")
+print("coletas" / Path("olt-borda-01"))
+print(Path("coletas").joinpath("olt-borda-01", "2026-08-11"))
+```
+
+```text
+coletas/olt-borda-01
+coletas/olt-borda-01
+coletas/olt-borda-01/2026-08-11
+```
+
+O que **não** funciona é somar, e isso é proposital:
+
+```python
+print(Path("coletas") + "/olt-borda-01")
+```
+
+```text
+TypeError: unsupported operand type(s) for +: 'PosixPath' and 'str'
+```
+
+O `+` não sabe se você quer juntar caminhos ou colar texto no nome do arquivo. O `/` sabe: ele normaliza barras repetidas, usa o separador da plataforma e não deixa você inventar um `coletas//olt`.
+
+Note que o tipo é `PosixPath`, não `Path`. `Path()` é uma fábrica: ela devolve `PosixPath` no Linux e no macOS, `WindowsPath` no Windows. Você escreve `Path` e recebe a implementação certa.
+
+## A anatomia de um caminho
+
+Todo caminho se decompõe, e os nomes das partes são os mesmos em qualquer projeto Python:
+
+::: {#fig-anatomia-caminho}
+```{.tikz}
+%%| filename: anatomia-caminho
+%%| alt: Um caminho absoluto decomposto nas propriedades de Path - parts, anchor, parent, name, stem e suffix - com o valor de cada uma indicado sobre o trecho correspondente
+\begin{tikzpicture}[
+  seg/.style={draw=manualblue, very thick, fill=manualblue!10,
+              minimum height=0.85cm, font=\ttfamily\small},
+  fin/.style={draw=manualgreen, very thick, fill=manualgreen!14,
+              minimum height=0.85cm, font=\ttfamily\small},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  pr/.style={font=\ttfamily\scriptsize, text=manualred, align=center},
+  cv/.style={thick, manualgray},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-4.0);
+
+  \node[seg, minimum width=0.7cm] at (0.55, 0.0) {/};
+  \node[seg, minimum width=1.5cm] at (1.65, 0.0) {home};
+  \node[seg, minimum width=1.5cm] at (3.35, 0.0) {vitor};
+  \node[seg, minimum width=2.2cm] at (5.45, 0.0) {coletas};
+  \node[seg, minimum width=3.0cm] at (8.15, 0.0) {2026-08-11};
+  \node[fin, minimum width=2.4cm] at (11.05, 0.0) {leituras};
+  \node[fin, minimum width=1.5cm, fill=manualgreen!26] at (13.05, 0.0) {.csv};
+
+  \node[pr] at (0.55, 0.85) {anchor};
+
+  \draw[cv] (0.2, -0.75) -- (0.2, -1.05) -- (9.65,-1.05) -- (9.65,-0.75);
+  \node[pr] at (4.9,-1.45) {parent};
+  \node[lb, text width=8.0cm] at (4.9,-1.95)
+    {\texttt{/home/vitor/coletas/2026-08-11}};
+
+  \draw[cv] (9.85,-0.75) -- (9.85,-1.05) -- (13.8,-1.05) -- (13.8,-0.75);
+  \node[pr] at (11.8,-1.45) {name};
+  \node[lb] at (11.8,-1.95) {\texttt{leituras.csv}};
+
+  \node[pr] at (11.05, 0.85) {stem};
+  \node[pr] at (13.05, 0.85) {suffix};
+
+  \draw[cv] (0.2, 1.35) -- (0.2, 1.65) -- (13.8, 1.65) -- (13.8, 1.35);
+  \node[pr] at (7.0, 2.05) {parts};
+  \node[lb, text width=13.0cm] at (7.0, 2.55)
+    {\texttt{('/', 'home', 'vitor', 'coletas', '2026-08-11', 'leituras.csv')}};
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.8)
+    {\texttt{suffixes} devolve a lista de todas as extensões:
+     \texttt{leituras.csv.gz} tem \texttt{suffix} igual a \texttt{'.gz'} e
+     \texttt{suffixes} igual a \texttt{['.csv', '.gz']} --- e o \texttt{stem},
+     nesse caso, é \texttt{'leituras.csv'}. \texttt{parents} devolve a sequência
+     de todos os diretórios acima, do mais próximo ao mais distante.};
+\end{tikzpicture}
+```
+As propriedades de um `Path`. Todas devolvem `str`, exceto `parent` e `parents`, que devolvem `Path`.
+:::
+
+Num caminho com duas extensões:
+
+```python
+p = Path("/home/vitor/lab37/coletas/olt-borda-01/2026-08-11/leituras.csv.gz")
+print("parts    =", p.parts)
+print("parent   =", p.parent)
+print("name     =", p.name)
+print("stem     =", p.stem)
+print("suffix   =", p.suffix)
+print("suffixes =", p.suffixes)
+print("anchor   =", repr(p.anchor))
+```
+
+```text
+parts    = ('/', 'home', 'vitor', 'lab37', 'coletas', 'olt-borda-01', '2026-08-11', 'leituras.csv.gz')
+parent   = /home/vitor/lab37/coletas/olt-borda-01/2026-08-11
+name     = leituras.csv.gz
+stem     = leituras.csv
+suffix   = .gz
+suffixes = ['.csv', '.gz']
+anchor   = '/'
+```
+
+E os três métodos que produzem um caminho novo a partir do velho — porque `Path` é imutável, como `str` e `tuple`:
+
+```python
+p = Path("coletas/olt-borda-01/2026-08-11/leituras.csv")
+print("with_suffix :", p.with_suffix(".json"))
+print("with_name   :", p.with_name("falhas.csv"))
+print("with_stem   :", p.with_stem("leituras-limpas"))
+print("tirar sufixo:", p.with_suffix(""))
+```
+
+```text
+with_suffix : coletas/olt-borda-01/2026-08-11/leituras.json
+with_name   : coletas/olt-borda-01/2026-08-11/falhas.csv
+with_stem   : coletas/olt-borda-01/2026-08-11/leituras-limpas.csv
+tirar sufixo: coletas/olt-borda-01/2026-08-11/leituras
+```
+
+`with_suffix(".json")` é a resposta certa para "quero o mesmo arquivo com outra extensão", e é imune ao nome com ponto no meio que quebra qualquer solução com `split(".")`.
+
+## Absoluto, relativo e `resolve`
+
+```python
+print("cwd()      =", Path.cwd())
+print("home()     =", Path.home())
+
+p = Path("coletas/../coletas/./README.txt")
+print("cru        =", p)
+print("absolute() =", p.absolute())
+print("resolve()  =", p.resolve())
+print("expanduser =", Path("~/lab37").expanduser())
+```
+
+```text
+cwd()      = /home/vitor/lab37
+home()     = /home/vitor
+cru        = coletas/../coletas/README.txt
+absolute() = /home/vitor/lab37/coletas/../coletas/README.txt
+resolve()  = /home/vitor/lab37/coletas/README.txt
+expanduser = /home/vitor/lab37
+```
+
+A diferença entre os dois últimos é a que importa: `absolute()` só cola o diretório atual na frente; `resolve()` **normaliza** — elimina `.` e `..`, segue links simbólicos e devolve o caminho canônico. É `resolve()` que você quer sempre que o caminho vier de fora do seu programa.
+
+Note também que `Path("~/lab37")` não expande o til sozinho: para o sistema de arquivos, `~` é um nome de diretório comum. Quem expande é o shell, e no Python é o `expanduser()`.
+
+E `resolve()` não exige que o caminho exista:
+
+```python
+print(Path("nao/existe/../existe.txt").resolve())
+```
+
+```text
+/home/vitor/lab37/nao/existe.txt
+```
+
+## Perguntando ao sistema
+
+Até aqui, tudo era manipulação de texto. A partir daqui, cada chamada vai ao disco.
+
+```python
+for alvo in ("coletas", "coletas/README.txt", "coletas/nao-existe", "/dev/null"):
+    p = Path(alvo)
+    print(f"{alvo:22} exists={p.exists()!s:5} is_dir={p.is_dir()!s:5} is_file={p.is_file()!s:5}")
+```
+
+```text
+coletas                exists=True  is_dir=True  is_file=False
+coletas/README.txt     exists=True  is_dir=False is_file=True
+coletas/nao-existe     exists=False is_dir=False is_file=False
+/dev/null              exists=True  is_dir=False is_file=False
+```
+
+A última linha é o lembrete de que `not is_dir()` não significa "é arquivo": `/dev/null` existe, não é diretório e não é arquivo comum. Há também `is_symlink()`, `is_socket()`, `is_fifo()` e `is_block_device()`.
+
+Os metadados vêm de `stat()`, que é a chamada de sistema de mesmo nome:
+
+```python
+from datetime import datetime
+
+s = Path("coletas/README.txt").stat()
+print("st_size =", s.st_size)
+print("st_mode =", oct(s.st_mode))
+print("mtime   =", datetime.fromtimestamp(s.st_mtime).isoformat(timespec="seconds"))
+```
+
+```text
+st_size = 27
+st_mode = 0o100644
+mtime   = 2026-08-11T20:40:13
+```
+
+Uma chamada de `stat` traz tamanho, permissões e três horários de uma vez. Isso importa quando há muitos arquivos: `p.exists()` seguido de `p.stat().st_size` são duas idas ao disco onde uma bastaria.
+
+## Listar: `iterdir`, `glob` e `rglob`
+
+```python
+for p in sorted(Path("coletas").iterdir()):
+    print("  ", p, "(dir)" if p.is_dir() else "")
+```
+
+```text
+   coletas/README.txt
+   coletas/olt-borda-01 (dir)
+   coletas/olt-borda-02 (dir)
+```
+
+`iterdir()` lista um nível. Para procurar por padrão, `glob`:
+
+```python
+for p in sorted(Path("coletas").glob("*/2026-08-11/*.csv")):
+    print(" ", p)
+```
+
+```text
+  coletas/olt-borda-01/2026-08-11/falhas.csv
+  coletas/olt-borda-01/2026-08-11/leituras.csv
+  coletas/olt-borda-02/2026-08-11/leituras.csv
+```
+
+E para varrer a árvore inteira, `rglob` — que é apenas `glob` com `**/` na frente:
+
+```python
+csvs = sorted(Path("coletas").rglob("*.csv"))
+print(len(csvs), "arquivos .csv")
+```
+
+```text
+7 arquivos .csv
+  coletas/olt-borda-01/2026-08-09/leituras.csv
+  coletas/olt-borda-01/2026-08-10/leituras.csv
+  coletas/olt-borda-01/2026-08-11/falhas.csv
+  coletas/olt-borda-01/2026-08-11/leituras.csv
+```
+
+::: {#fig-glob-arvore}
+```{.tikz}
+%%| filename: glob-arvore
+%%| alt: A arvore de coletas com dois niveis de OLT e data, e quais arquivos cada padrao de glob e rglob seleciona
+\begin{tikzpicture}[
+  dir/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=2.9cm, align=center, minimum height=0.62cm,
+              font=\ttfamily\scriptsize},
+  arq/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualgray!7,
+              text width=2.9cm, align=center, minimum height=0.55cm,
+              font=\ttfamily\scriptsize},
+  sel/.style={draw=manualgreen, very thick, rounded corners=1pt,
+              fill=manualgreen!16, text width=2.9cm, align=center,
+              minimum height=0.55cm, font=\ttfamily\scriptsize},
+  pt/.style={draw=manualgray!50, thick},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  cd/.style={font=\ttfamily\scriptsize, text=manualgray, anchor=west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.5, 1.4) rectangle (15.0,-8.4);
+
+  \node[dir] at (1.5, 0.7) {coletas/};
+  \node[arq] at (4.6,-0.2) {README.txt};
+  \node[dir] at (4.6,-1.1) {olt-borda-01/};
+  \node[dir] at (7.7,-2.0) {2026-08-09/};
+  \node[arq] at (10.9,-2.0) {leituras.csv};
+  \node[dir] at (7.7,-2.9) {2026-08-10/};
+  \node[arq] at (10.9,-2.9) {leituras.csv};
+  \node[dir] at (7.7,-3.8) {2026-08-11/};
+  \node[sel] at (10.9,-3.8) {leituras.csv};
+  \node[sel] at (10.9,-4.5) {falhas.csv};
+  \node[dir] at (4.6,-5.4) {olt-borda-02/};
+  \node[dir] at (7.7,-6.3) {2026-08-11/};
+  \node[sel] at (10.9,-6.3) {leituras.csv};
+
+  \draw[pt] (1.5, 0.39) -- (1.5,-5.4);
+  \draw[pt] (1.5,-0.2) -- (3.38,-0.2);
+  \draw[pt] (1.5,-1.1) -- (3.38,-1.1);
+  \draw[pt] (1.5,-5.4) -- (3.38,-5.4);
+
+  \draw[pt] (4.6,-1.41) -- (4.6,-3.8);
+  \draw[pt] (4.6,-2.0) -- (6.48,-2.0);
+  \draw[pt] (4.6,-2.9) -- (6.48,-2.9);
+  \draw[pt] (4.6,-3.8) -- (6.48,-3.8);
+
+  \draw[pt] (4.6,-5.71) -- (4.6,-6.3);
+  \draw[pt] (4.6,-6.3) -- (6.48,-6.3);
+
+  \draw[pt] (8.92,-2.0) -- (9.68,-2.0);
+  \draw[pt] (8.92,-2.9) -- (9.68,-2.9);
+  \draw[pt] (8.92,-3.8) -- (9.68,-3.8);
+  \draw[pt] (8.92,-6.3) -- (9.68,-6.3);
+  \draw[pt] (9.2,-3.8) -- (9.2,-4.5) -- (9.68,-4.5);
+
+  \node[lb, text width=2.4cm] at (12.4,-1.1)
+    {em verde, o que o padrão abaixo seleciona};
+
+  \node[cd] at (-0.3,-7.2) {glob("*/2026-08-11/*.csv")};
+  \node[lb, text width=8.0cm] at (6.4,-7.2)
+    {\texttt{*} casa \textbf{um} nível e não atravessa a barra --- os três em
+     verde};
+  \node[cd] at (-0.3,-7.9) {rglob("*.csv")};
+  \node[lb, text width=8.0cm] at (6.4,-7.9)
+    {equivale a \texttt{glob("**/*.csv")}: qualquer profundidade --- os sete
+     \texttt{.csv} da árvore (os \texttt{coleta.log} foram omitidos aqui)};
+\end{tikzpicture}
+```
+`*` casa dentro de um nível; `**` atravessa níveis. `rglob(p)` é `glob("**/" + p)`.
+:::
+
+Três detalhes que evitam surpresa.
+
+**`glob` devolve um iterador preguiçoso**, não uma lista:
+
+```python
+g = Path("coletas").rglob("*.csv")
+print(type(g).__name__, g)
+print("primeiro:", next(g))
+```
+
+```text
+map <map object at 0x71f8d28c26e0>
+primeiro: coletas/olt-borda-02/2026-08-10/leituras.csv
+```
+
+Numa árvore grande isso é ótimo — você processa enquanto ele varre. E se você precisa contar ou indexar, `list()` explícito.
+
+**A ordem não é definida.** Repare que o primeiro item veio da `olt-borda-02`, e não da `01`. O `glob` entrega na ordem em que o sistema de arquivos devolve, que varia com o sistema, com a versão e com a ordem de criação. Se a ordem importa — e ela importa em relatório e em teste —, `sorted()`.
+
+**`*` não atravessa barra; `**` atravessa.** É a mesma convenção do shell, e a fonte do padrão que "não acha nada":
+
+```python
+print(len(list(Path("coletas").glob("**/*.log"))), 'logs com glob("**/*.log")')
+print(len(list(Path("coletas").glob("*.txt"))), "txt na raiz")
+print(len(list(Path("coletas").rglob("*.txt"))), "txt em toda a arvore")
+```
+
+```text
+6 logs com glob("**/*.log")
+1 txt na raiz
+1 txt em toda a arvore
+```
+
+Somando tudo com uma compreensão de gerador (@sec-cap026):
+
+```python
+total = sum(p.stat().st_size for p in Path("coletas").rglob("*") if p.is_file())
+n = sum(1 for p in Path("coletas").rglob("*") if p.is_file())
+print(f"{n} arquivos, {total} bytes")
+```
+
+```text
+14 arquivos, 305 bytes
+```
+
+```bash
+du -sb coletas
+```
+
+```text
+305	coletas
+```
+
+O `rglob("*")` traz diretórios também — daí o filtro `is_file()`. Desde o Python 3.12 há uma alternativa que faz uma travessia só e entrega diretórios e arquivos separados, à la `os.walk`:
+
+```python
+for raiz, dirs, arquivos in Path("coletas").walk():
+    print(f"{str(raiz):48} dirs={len(dirs)} arquivos={len(arquivos)}")
+```
+
+```text
+coletas                                          dirs=2 arquivos=1
+coletas/olt-borda-01                             dirs=3 arquivos=0
+coletas/olt-borda-01/2026-08-10                  dirs=0 arquivos=2
+coletas/olt-borda-01/2026-08-11                  dirs=0 arquivos=3
+coletas/olt-borda-01/2026-08-09                  dirs=0 arquivos=2
+coletas/olt-borda-02                             dirs=3 arquivos=0
+```
+
+A lista `dirs` é modificável no meio do laço, e é assim que se poda uma varredura: `dirs.remove(".git")` impede a descida.
+
+## Criar, renomear, apagar
+
+```python
+d = Path("saida/2026-08-11/relatorios")
+d.mkdir(parents=True, exist_ok=True)
+```
+
+Os dois argumentos existem porque os dois casos falham por padrão. Sem `parents=True`, criar um diretório cuja pasta-mãe não existe:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'saida/nova/funda'
+```
+
+E sem `exist_ok=True`, criar de novo o que já existe:
+
+```text
+FileExistsError: [Errno 17] File exists: 'saida/2026-08-11/relatorios'
+```
+
+`parents=True, exist_ok=True` é o equivalente do `mkdir -p`, e é o que se escreve na esmagadora maioria das vezes.
+
+Renomear tem duas formas, e a diferença entre elas é a mesma do @sec-cap035:
+
+```python
+a = Path("saida/a.txt"); a.write_text("conteudo A\n", encoding="utf-8")
+b = Path("saida/b.txt"); b.write_text("conteudo B\n", encoding="utf-8")
+a.rename("saida/renomeado.txt")
+Path("saida/renomeado.txt").replace("saida/b.txt")
+print("conteudo de b.txt:", Path("saida/b.txt").read_text(encoding="utf-8"), end="")
+```
+
+```text
+depois do rename : ['b.txt', 'renomeado.txt']
+depois do replace: ['b.txt']
+conteudo de b.txt: conteudo A
+```
+
+`replace` sobrescreve o destino silenciosamente em todas as plataformas; `rename` falha no Windows se o destino existir. Quando a intenção é substituir, `replace` é o portátil.
+
+Apagar arquivo é `unlink`, e ele reclama do que não existe:
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'saida/b.txt'
+```
+
+```python
+Path("saida/b.txt").unlink(missing_ok=True)   # Python 3.8+
+```
+
+Apagar diretório é `rmdir`, e ele só aceita diretório vazio:
+
+```text
+OSError: [Errno 39] Directory not empty: 'coletas/olt-borda-01'
+```
+
+Para apagar uma árvore inteira, `pathlib` não serve — e essa recusa é uma decisão de projeto, não uma lacuna.
+
+::: {.callout-warning}
+`shutil.rmtree` apaga o diretório e **todo** o conteúdo, recursivamente, sem confirmação e sem lixeira. Um caminho errado numa variável destrói o que estiver embaixo dele. Antes de chamar, imprima o alvo resolvido e confira; em código de produção, valide com `is_relative_to` que o alvo está dentro da área que o programa pode tocar. Nos exemplos abaixo, o alvo é uma cópia descartável dentro de `~/lab37`.
+:::
+
+```python
+import shutil
+
+alvo = Path("saida/olt-borda-02")
+print("antes :", alvo.exists(), len(list(alvo.rglob("*"))), "entradas")
+shutil.rmtree(alvo)
+print("depois:", alvo.exists())
+```
+
+```text
+antes : True 9 entradas
+depois: False
+```
+
+O `shutil` é o complemento natural do `pathlib`: cópia, movimentação e remoção recursiva.
+
+```python
+shutil.copy2("coletas/README.txt", "saida/README-copia.txt")
+shutil.copytree("coletas/olt-borda-02", "saida/olt-borda-02")
+print("disk :", shutil.disk_usage("/").free // (1024**3), "GiB livres")
+```
+
+```text
+copy2   : coletas de potencia optica
+copytree: 9 entradas copiadas
+disk    : 936 GiB livres
+```
+
+`copy2` preserva os horários e as permissões; `copy` não. É a diferença entre `cp -p` e `cp`.
+
+E, para trabalho descartável, `tempfile` cria e limpa sozinho:
+
+```python
+import tempfile
+
+with tempfile.TemporaryDirectory() as td:
+    d = Path(td)
+    print("temporario:", d)
+    (d / "teste.csv").write_text("onu,nivel\n", encoding="utf-8")
+    guardado = d
+print("depois do with, existe?", guardado.exists())
+```
+
+```text
+temporario: /tmp/tmp5jakluf6
+conteudo  : ['teste.csv']
+depois do with, existe? False
+```
+
+O diretório e tudo dentro dele desaparecem ao sair do bloco. É o que a fixture `tmp_path` do pytest usa por baixo, e é a forma segura de ensaiar qualquer código destrutivo.
+
+## Caminho que veio de fora
+
+O quarto defeito da abertura do capítulo — o técnico que pediu `../../../etc/passwd` — tem nome: travessia de diretório. É uma das falhas de segurança mais antigas que existem, e a defesa cabe em três linhas.
+
+```python
+BASE = Path("coletas").resolve()
+
+
+def caminho_seguro(pedido: str) -> Path:
+    alvo = (BASE / pedido).resolve()
+    if not alvo.is_relative_to(BASE):
+        raise ValueError(f"fora da base: {pedido}")
+    return alvo
+```
+
+```text
+olt-borda-01/2026-08-11/leituras.csv   -> /home/vitor/lab37/coletas/olt-borda-01/2026-08-11/leituras.csv
+../../../etc/passwd                    -> RECUSADO (fora da base: ../../../etc/passwd)
+```
+
+A ordem das operações é o que faz a defesa funcionar: **junte, resolva e só então verifique**. Resolver antes de verificar é o que elimina os `..` e os links simbólicos; verificar antes de resolver deixa passar tudo. E procurar `".."` na string com um `if` é a defesa que não funciona, porque há codificação de URL, barra invertida, link simbólico e uma dúzia de variações.
+
+`is_relative_to` chegou no Python 3.9. Antes dele, o mesmo teste era `relative_to` dentro de um `try`, porque ele levanta em vez de devolver `False`:
+
+```python
+print("relative_to    :", p.relative_to(base))
+print("is_relative_to :", p.is_relative_to(base))
+print("match(*.csv)   :", p.match("*.csv"))
+print("full_match     :", p.full_match("**/olt-*/2026-08-11/*.csv"))
+```
+
+```text
+relative_to    : olt-borda-01/2026-08-11/leituras.csv
+is_relative_to : True
+match(*.csv)   : True
+full_match     : True
+```
+
+```text
+ValueError: '/etc/passwd' is not in the subpath of '/home/vitor'
+```
+
+`match` compara da direita para a esquerda e ignora o que sobra à esquerda; `full_match`, novidade do **Python 3.13**, exige que o padrão cubra o caminho inteiro e aceita `**`. Quando o que você quer é filtrar uma lista por padrão completo, `full_match` é o correto.
+
+## `PurePath`: caminho sem sistema de arquivos
+
+Às vezes você precisa manipular um caminho de outra plataforma — ler um manifesto gerado no Windows, por exemplo — sem que ele signifique nada no disco local. É para isso que existem as classes puras:
+
+```python
+from pathlib import PurePosixPath, PureWindowsPath
+
+w = PureWindowsPath(r"C:\Users\vitor\coletas\leituras.csv")
+print("PureWindowsPath:", w)
+print("  parts        :", w.parts)
+print("  drive / root :", repr(w.drive), repr(w.root))
+print("  as_posix()   :", w.as_posix())
+```
+
+```text
+PureWindowsPath: C:\Users\vitor\coletas\leituras.csv
+  parts        : ('C:\\', 'Users', 'vitor', 'coletas', 'leituras.csv')
+  drive / root : 'C:' '\\'
+  as_posix()   : C:/Users/vitor/coletas/leituras.csv
+```
+
+Elas só fazem manipulação de texto: não têm `exists()`, `stat()` nem `open()`. E carregam as regras da plataforma que representam, o que inclui uma diferença que morde:
+
+```python
+print("no windows:", PureWindowsPath("LEITURAS.CSV") == PureWindowsPath("leituras.csv"))
+print("no posix  :", PurePosixPath("LEITURAS.CSV") == PurePosixPath("leituras.csv"))
+```
+
+```text
+no windows: True
+no posix  : False
+```
+
+Comparação de caminho no Windows ignora maiúsculas; no Linux, não. Um dicionário indexado por caminho pode ter duas entradas para o mesmo arquivo num sistema e uma no outro — e essa é a razão de bugs que só aparecem em metade da equipe.
+
+Uma observação para quem escreve caminho literal do Windows: use *raw string* (`r"C:\Users\..."`). Sem o `r`, `\U` e `\n` são sequências de escape do Python, não separadores.
+
+## Links simbólicos
+
+```python
+link = Path("saida/atalho.txt")
+link.symlink_to(alvo.resolve())
+print("is_symlink:", link.is_symlink())
+print("is_file   :", link.is_file())
+print("readlink  :", link.readlink())
+print("stat size :", link.stat().st_size, "| lstat size:", link.lstat().st_size)
+```
+
+```text
+is_symlink: True
+is_file   : True
+readlink  : /home/vitor/lab37/coletas/README.txt
+stat size : 27 | lstat size: 36
+```
+
+`is_file()` devolve `True` porque segue o link; `is_symlink()` olha o link em si. A mesma distinção separa `stat()` (segue) de `lstat()` (não segue): 27 bytes é o arquivo apontado, 36 é o tamanho do próprio link, que guarda o texto do caminho. E `unlink()` num link apaga o link, não o alvo.
+
+## `pathlib` e `os.path`
+
+O `os.path` continua funcionando e continua aparecendo em código existente. A tradução é direta:
+
+```text
+os.path.basename : leituras.csv | Path.name    : leituras.csv
+os.path.dirname  : coletas/olt-borda-01/2026-08-11
+Path.parent      : coletas/olt-borda-01/2026-08-11
+os.path.splitext : ('coletas/olt-borda-01/2026-08-11/leituras', '.csv')
+Path.stem/suffix : leituras .csv
+os.path.exists   : True | Path.exists(): True
+os.path.getsize  : 26 | Path.stat(): 26
+```
+
+| `os.path` / `os` | `pathlib` |
+|---|---|
+| `os.path.join(a, b)` | `Path(a) / b` |
+| `os.path.basename(p)` | `p.name` |
+| `os.path.dirname(p)` | `p.parent` |
+| `os.path.splitext(p)` | `p.stem` e `p.suffix` |
+| `os.path.abspath(p)` | `p.resolve()` |
+| `os.path.expanduser(p)` | `p.expanduser()` |
+| `os.path.exists(p)` | `p.exists()` |
+| `os.path.getsize(p)` | `p.stat().st_size` |
+| `os.listdir(d)` | `d.iterdir()` |
+| `glob.glob(padrao)` | `d.glob(padrao)` |
+| `os.makedirs(d, exist_ok=True)` | `d.mkdir(parents=True, exist_ok=True)` |
+| `os.remove(p)` | `p.unlink()` |
+| `os.rename(a, b)` | `a.rename(b)` |
+| `os.replace(a, b)` | `a.replace(b)` |
+| `os.walk(d)` | `d.walk()` (3.12+) |
+
+A diferença prática é que `os.path` opera sobre strings e devolve strings: cada função precisa ser aninhada na anterior, e o resultado não sabe que é caminho. Com `Path`, as operações encadeiam.
+
+Compatibilidade não é problema: `Path` implementa `os.PathLike`, então qualquer função que aceite um nome de arquivo aceita um `Path` — `open`, `json.load`, `subprocess`, `pandas.read_csv`. O caminho contrário é `str(p)`, necessário só em bibliotecas antigas ou em `%s` de linha de comando.
+
+## Um relatório completo
+
+Juntando o capítulo num programa que faz o que o script quebrado da abertura deveria fazer:
+
+```python
+from pathlib import Path
+
+BASE = Path("coletas")
+
+por_olt = {}
+for csv in sorted(BASE.rglob("*.csv")):
+    olt = csv.relative_to(BASE).parts[0]
+    por_olt.setdefault(olt, []).append(csv)
+
+for olt, arquivos in sorted(por_olt.items()):
+    bytes_totais = sum(p.stat().st_size for p in arquivos)
+    print(f"{olt:14} {len(arquivos):2} arquivos  {bytes_totais:5} bytes")
+    mais_novo = max(arquivos, key=lambda p: p.stat().st_mtime)
+    print(f"               mais recente: {mais_novo.relative_to(BASE)}")
+```
+
+```text
+olt-borda-01    4 arquivos    110 bytes
+               mais recente: olt-borda-01/2026-08-11/falhas.csv
+olt-borda-02    3 arquivos     78 bytes
+               mais recente: olt-borda-02/2026-08-10/leituras.csv
+```
+
+Nenhuma concatenação de string, nenhuma suposição sobre separador, e a chave do agrupamento sai de `relative_to(BASE).parts[0]` — o primeiro nível abaixo da base, seja qual for a profundidade da base.
+
+## 🐍 Jeito Pythônico
+
+**`Path` em vez de string, do começo ao fim.** Converta na fronteira do programa (argumento de linha de comando, configuração) e trabalhe com `Path` daí em diante.
+
+```python
+# antipadrão
+caminho = base + "/" + olt + "/" + dia + "/leituras.csv"
+if os.path.exists(caminho):
+    with open(caminho) as f:
+        ...
+```
+
+```python
+# pythônico
+caminho = Path(base) / olt / dia / "leituras.csv"
+if caminho.is_file():
+    with caminho.open(encoding="utf-8") as f:
+        ...
+```
+
+**`/` para juntar, `with_suffix` para trocar extensão.** Nunca `+`, nunca `split(".")`, nunca `replace("/", "\\")`.
+
+**`resolve()` em todo caminho vindo de fora**, e `is_relative_to` para confirmar que ele ficou onde devia. Nessa ordem.
+
+**`sorted()` em volta de `glob`** quando a ordem importa — e ela importa em relatório e em teste.
+
+**`mkdir(parents=True, exist_ok=True)`** é a forma normal; sem os dois argumentos, você está escrevendo `try`/`except` à toa.
+
+**`unlink(missing_ok=True)`** quando apagar o que não existe não é erro.
+
+**`is_file()` em vez de `exists()`** quando a próxima linha vai abrir o arquivo — diretório existe e não abre.
+
+**Uma chamada de `stat()`, não três.** `exists()`, `is_file()` e `stat()` são três idas ao disco; guarde o resultado quando estiver num laço grande.
+
+**`shutil` para o que `pathlib` não faz**: `copy2`, `copytree`, `move`, `rmtree`. E `tempfile.TemporaryDirectory` para qualquer ensaio destrutivo.
+
+Sobre versões:
+
+- **Python 3.4** — `pathlib` entra na biblioteca padrão (PEP 428).
+- **Python 3.6** — `os.PathLike` (PEP 519) faz `Path` funcionar em qualquer função que aceite nome de arquivo, inclusive de bibliotecas externas.
+- **Python 3.8** — `unlink(missing_ok=True)`, `Path.link_to`.
+- **Python 3.9** — `is_relative_to`, `with_stem`, e `Path.readlink`.
+- **Python 3.12** — `Path.walk`, e `pathlib` passa a ser extensível por subclasse com armazenamento próprio.
+- **Python 3.13** — `full_match`, `Path.from_uri`, e `glob` com `recurse_symlinks` explícito.
+
+## 🧪 Laboratório
+
+Objetivo: montar uma árvore de coletas, navegar por ela com `glob` e `rglob`, criar e apagar com segurança, defender contra travessia de diretório e produzir um relatório agrupado.
+
+**1. A árvore.**
+
+```bash
+mkdir -p ~/lab37 && cd ~/lab37
+```
+
+`montar.py`:
+
+```python
+from pathlib import Path
+
+BASE = Path("coletas")
+for olt in ("olt-borda-01", "olt-borda-02"):
+    for dia in ("2026-08-09", "2026-08-10", "2026-08-11"):
+        d = BASE / olt / dia
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "leituras.csv").write_text("onu,nivel\nonu-00042,-21.4\n", encoding="utf-8")
+        (d / "coleta.log").write_text("INFO coleta ok\n", encoding="utf-8")
+(BASE / "olt-borda-01" / "2026-08-11" / "falhas.csv").write_text(
+    "onu,erro\nonu-00043,sem resposta\n", encoding="utf-8")
+(BASE / "README.txt").write_text("coletas de potencia optica\n", encoding="utf-8")
+```
+
+```bash
+python3 montar.py && find coletas | sort | head -8
+```
+
+**2. A anatomia.** Imprima `parts`, `parent`, `name`, `stem`, `suffix` e `suffixes` de um caminho com duas extensões, e depois os três `with_*`.
+
+**3. `absolute` contra `resolve`.**
+
+```bash
+python3 -c "
+from pathlib import Path
+p = Path('coletas/../coletas/./README.txt')
+print('absolute() =', p.absolute())
+print('resolve()  =', p.resolve())
+"
+```
+
+```text
+absolute() = /home/vitor/lab37/coletas/../coletas/README.txt
+resolve()  = /home/vitor/lab37/coletas/README.txt
+```
+
+**4. Os padrões.** Compare `glob("*/2026-08-11/*.csv")` com `rglob("*.csv")`, e confirme que `glob` sem `sorted` não vem em ordem alfabética.
+
+**5. A soma.** Some os tamanhos com `rglob("*")` mais `is_file()` e confira com `du -sb coletas`:
+
+```text
+14 arquivos, 305 bytes
+305	coletas
+```
+
+**6. `walk`.** Rode `Path("coletas").walk()` e observe que `dirs` e `arquivos` chegam separados.
+
+**7. Os erros de `mkdir`.** Provoque o `FileNotFoundError` sem `parents=True` e o `FileExistsError` sem `exist_ok=True`.
+
+**8. `rename` contra `replace`.** Crie `a.txt` e `b.txt`, renomeie e substitua, e confirme que `b.txt` ficou com o conteúdo de `a.txt`.
+
+**9. Os erros de remoção.** `unlink()` duas vezes (`FileNotFoundError`, depois `missing_ok=True`), e `rmdir()` num diretório cheio:
+
+```text
+OSError: [Errno 39] Directory not empty: 'coletas/olt-borda-01'
+```
+
+**10. A travessia.** Rode `travessia.py`:
+
+```text
+olt-borda-01/2026-08-11/leituras.csv   -> /home/vitor/lab37/coletas/olt-borda-01/2026-08-11/leituras.csv
+../../../etc/passwd                    -> RECUSADO (fora da base: ../../../etc/passwd)
+```
+
+Depois inverta a ordem — verifique **antes** de `resolve()` — e veja o `/etc/passwd` passar.
+
+**11. A outra plataforma.** Rode os `PureWindowsPath` e confirme a comparação que ignora maiúsculas de um lado e não do outro.
+
+**12. O link.** Crie um link simbólico e compare `stat().st_size` com `lstat().st_size`.
+
+**13. O ensaio destrutivo.** Copie `olt-borda-02` com `copytree` para dentro de `saida/`, confirme o alvo com um `print`, e só então `shutil.rmtree`. Repita dentro de um `tempfile.TemporaryDirectory` e veja o diretório sumir sozinho.
+
+**14. O relatório.** Rode `relatorio.py` e confirme o agrupamento por OLT.
+
+## Resumo
+
+- `Path` trata caminho como estrutura, não como texto: `/` junta, `with_suffix` troca extensão, `parts` decompõe. Somar com `+` é `TypeError`, de propósito.
+- `Path()` é fábrica: devolve `PosixPath` ou `WindowsPath` conforme o sistema. As classes `Pure*` manipulam caminho de outra plataforma sem tocar no disco.
+- `absolute()` só cola o diretório atual; `resolve()` normaliza `..`, segue links e devolve o canônico. Para caminho vindo de fora, sempre `resolve()`.
+- `iterdir()` lista um nível, `glob(padrao)` casa dentro de um nível, `rglob(padrao)` é `glob("**/" + padrao)`. Todos devolvem iterador preguiçoso e **sem ordem definida** — use `sorted()`.
+- `mkdir(parents=True, exist_ok=True)` é o `mkdir -p`; sem os argumentos, os dois casos comuns levantam exceção.
+- `replace` sobrescreve em qualquer plataforma; `rename` não. `unlink(missing_ok=True)` para apagar sem checar antes. `rmdir` só esvazia diretório vazio — árvore inteira é `shutil.rmtree`, que apaga sem perguntar.
+- A defesa contra travessia de diretório é juntar, `resolve()` e então `is_relative_to(BASE)`, nessa ordem. Procurar `".."` na string não é defesa.
+- `stat()` segue links, `lstat()` não; `is_file()` num link diz o que o link aponta, `is_symlink()` diz o que ele é.
+- `pathlib` não copia nem apaga em massa: isso é `shutil`. Ensaio destrutivo vai dentro de `tempfile.TemporaryDirectory`.
+- `Path` funciona em qualquer função que aceite nome de arquivo, graças a `os.PathLike` — não é preciso converter para `str`.
