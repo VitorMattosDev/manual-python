@@ -1,3 +1,817 @@
 # Escolhendo a estrutura certa: custo das operações {#sec-cap028}
 
-*(em elaboracao)*
+O cruzamento é simples: das trinta mil leituras da noite, tirar as ONUs canceladas. Dez linhas, nenhuma delas errada:
+
+```python
+"""Cruza leituras com a lista de ONUs canceladas."""
+
+import time
+
+LEITURAS = [f"onu-{i:05d}" for i in range(30000)]
+CANCELADAS = [f"onu-{i:05d}" for i in range(0, 30000, 3)]
+
+
+def cruzar(leituras, canceladas):
+    return [o for o in leituras if o not in canceladas]
+
+
+inicio = time.perf_counter()
+ativas = cruzar(LEITURAS, CANCELADAS)
+print(f"{len(ativas)} ativas em {time.perf_counter() - inicio:.2f} s")
+```
+
+```text
+20000 ativas em 1.55 s
+```
+
+Um segundo e meio para vinte mil linhas. Com trezentas mil leituras — o volume de uma operadora média — isso vira dois minutos e meio, e o relatório da madrugada começa a atrasar o da manhã.
+
+A correção é **uma linha**:
+
+```python
+def cruzar(leituras, canceladas):
+    bloqueio = set(canceladas)
+    return [o for o in leituras if o not in bloqueio]
+```
+
+```text
+20000 ativas em 0.0018 s
+```
+
+Mil e quinhentos milissegundos viraram menos de dois. Não houve otimização, não houve reescrita: houve a **troca da estrutura de dados** por uma que responde à pergunta que estava sendo feita. `o not in lista` percorre; `o not in conjunto` calcula.
+
+Este capítulo fecha o Volume 4 juntando as quatro estruturas anteriores numa única pergunta prática: *o que este programa pergunta aos dados, e qual estrutura responde a isso barato?*
+
+## O custo cresce, e é isso que importa
+
+A notação `O(...)` descreve como o custo **cresce** com o tamanho, ignorando constantes. `O(1)` é "não depende do tamanho"; `O(n)` é "dobra quando os dados dobram"; `O(n²)` é "quadruplica quando os dados dobram".
+
+Dá para ver isso acontecendo:
+
+```python
+import timeit
+
+print(f"{'n':>8} {'lista (ms)':>12} {'set (ms)':>10} {'razao':>8}")
+for n in (1000, 2000, 4000, 8000, 16000):
+    setup = (
+        f'itens = [f"onu-{{i:06d}}" for i in range({n})]; '
+        "lista = list(itens); conj = set(itens); "
+        f'alvo = "onu-{n - 1:06d}"'
+    )
+    tl = timeit.timeit("alvo in lista", setup=setup, number=2000) * 1000
+    ts = timeit.timeit("alvo in conj", setup=setup, number=2000) * 1000
+    print(f"{n:>8} {tl:>12.2f} {ts:>10.3f} {tl / ts:>8.0f}x")
+```
+
+```text
+       n   lista (ms)   set (ms)    razao
+    1000        13.08      0.034      384x
+    2000        24.25      0.035      692x
+    4000        50.64      0.034     1480x
+    8000       104.64      0.080     1316x
+   16000       207.72      0.035     5900x
+```
+
+Leia a coluna da lista de cima para baixo: 13, 24, 50, 104, 207. **Dobra sempre que `n` dobra** — é `O(n)`. A coluna do conjunto fica em 0,03 do começo ao fim: é `O(1)`, e os números só oscilam porque medir algo tão rápido é medir ruído (a linha dos 8000 é isso). A coluna da razão não é uma medida confiável; a da lista é.
+
+## A tabela
+
+::: {#fig-custos-estruturas}
+```{.tikz}
+%%| filename: custos-estruturas
+%%| alt: Tabela de custo das operacoes mais comuns em lista, tupla, deque, dicionario e conjunto, com destaque para as operacoes lineares que costumam ser escolhidas por engano
+\begin{tikzpicture}[
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, align=center},
+  rw/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  bom/.style={draw=manualgreen, thick, rounded corners=1pt, fill=manualgreen!14,
+              minimum width=1.75cm, minimum height=0.5cm, font=\ttfamily\scriptsize},
+  meio/.style={draw=manualyellow!70!black, thick, rounded corners=1pt,
+               fill=manualyellow!25, minimum width=1.75cm, minimum height=0.5cm,
+               font=\ttfamily\scriptsize},
+  mau/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!12,
+              minimum width=1.75cm, minimum height=0.5cm, font=\ttfamily\scriptsize},
+  na/.style={draw=manualgray!60, thick, rounded corners=1pt, fill=manualgray!5,
+             minimum width=1.75cm, minimum height=0.5cm, font=\scriptsize,
+             text=manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.2) rectangle (14.6,-4.9);
+
+  \node[hd] at (2.0, 1.55) {\texttt{list}};
+  \node[hd] at (3.9, 1.55) {\texttt{tuple}};
+  \node[hd] at (5.8, 1.55) {\texttt{deque}};
+  \node[hd] at (7.7, 1.55) {\texttt{dict}};
+  \node[hd] at (9.6, 1.55) {\texttt{set}};
+  \node[hd] at (12.3, 1.55) {observação};
+
+  \node[rw] at (-0.5, 0.9) {\texttt{x in c}};
+  \node[mau]  at (2.0, 0.9) {O(n)};
+  \node[mau]  at (3.9, 0.9) {O(n)};
+  \node[mau]  at (5.8, 0.9) {O(n)};
+  \node[bom]  at (7.7, 0.9) {O(1)};
+  \node[bom]  at (9.6, 0.9) {O(1)};
+  \node[rw, text width=3.6cm] at (10.8, 0.9) {a troca que mais rende};
+
+  \node[rw] at (-0.5, 0.3) {\texttt{c[i]}};
+  \node[bom]  at (2.0, 0.3) {O(1)};
+  \node[bom]  at (3.9, 0.3) {O(1)};
+  \node[meio] at (5.8, 0.3) {O(n)};
+  \node[bom]  at (7.7, 0.3) {O(1)};
+  \node[na]   at (9.6, 0.3) {não tem};
+  \node[rw, text width=3.6cm] at (10.8, 0.3) {no \texttt{deque}, só as pontas são baratas};
+
+  \node[rw] at (-0.5,-0.3) {\texttt{append}};
+  \node[bom]  at (2.0,-0.3) {O(1)*};
+  \node[na]   at (3.9,-0.3) {imutável};
+  \node[bom]  at (5.8,-0.3) {O(1)};
+  \node[bom]  at (7.7,-0.3) {O(1)*};
+  \node[bom]  at (9.6,-0.3) {O(1)*};
+  \node[rw, text width=3.6cm] at (10.8,-0.3) {* amortizado: realoca de vez em quando};
+
+  \node[rw] at (-0.5,-0.9) {início};
+  \node[mau]  at (2.0,-0.9) {O(n)};
+  \node[na]   at (3.9,-0.9) {imutável};
+  \node[bom]  at (5.8,-0.9) {O(1)};
+  \node[na]   at (7.7,-0.9) {---};
+  \node[na]   at (9.6,-0.9) {---};
+  \node[rw, text width=3.6cm] at (10.8,-0.9) {\texttt{insert(0)} e \texttt{pop(0)} contra \texttt{deque}};
+
+  \node[rw] at (-0.5,-1.5) {\texttt{remove(x)}};
+  \node[mau]  at (2.0,-1.5) {O(n)};
+  \node[na]   at (3.9,-1.5) {imutável};
+  \node[mau]  at (5.8,-1.5) {O(n)};
+  \node[bom]  at (7.7,-1.5) {O(1)};
+  \node[bom]  at (9.6,-1.5) {O(1)};
+  \node[rw, text width=3.6cm] at (10.8,-1.5) {em lista, procura antes de remover};
+
+  \node[rw] at (-0.5,-2.1) {\texttt{sorted}};
+  \node[meio] at (2.0,-2.1) {O(n log n)};
+  \node[meio] at (3.9,-2.1) {O(n log n)};
+  \node[meio] at (5.8,-2.1) {O(n log n)};
+  \node[meio] at (7.7,-2.1) {O(n log n)};
+  \node[meio] at (9.6,-2.1) {O(n log n)};
+  \node[rw, text width=3.6cm] at (10.8,-2.1) {sempre devolve \texttt{list}};
+
+  \node[rw, text width=14.0cm] at (-0.5,-3.9)
+    {Ordem tem preço: \texttt{list} e \texttt{tuple} guardam posição;
+     \texttt{dict} guarda ordem de inserção; \texttt{set} não guarda nada. E
+     \texttt{dict} e \texttt{set} pagam em \textbf{memória} o que economizam em
+     tempo --- num teste com dez mil strings, o \texttt{set} ocupou seis vezes
+     mais que a \texttt{list} (só o continente; as strings em si são as mesmas).};
+\end{tikzpicture}
+```
+O custo das operações mais comuns, e onde a escolha errada dói.
+:::
+
+## Fila: `list` contra `deque`
+
+```python
+import timeit
+from collections import deque
+
+n = 30000
+lista = timeit.timeit("l.pop(0)", setup=f"l = list(range({n}))", number=n)
+fila = timeit.timeit(
+    "d.popleft()",
+    setup=f"from collections import deque; d = deque(range({n}))",
+    number=n,
+)
+print(f"list.pop(0)     {lista * 1000:9.1f} ms")
+print(f"deque.popleft() {fila * 1000:9.1f} ms")
+print(f"razao           {lista / fila:9.0f}x")
+```
+
+```text
+list.pop(0)          43.9 ms
+deque.popleft()       0.6 ms
+razao                  71x
+```
+
+Tirar do começo de uma lista obriga a deslocar todos os outros elementos uma casa para a esquerda. O `deque` é uma lista duplamente ligada de blocos: tem as duas pontas baratas e paga por isso no acesso ao meio.
+
+Ele ainda traz `maxlen`, que resolve "guarde só as últimas N" sem nenhuma linha de controle:
+
+```python
+d = deque(maxlen=3)
+for x in range(6):
+    d.append(x)
+print("deque com maxlen=3:", d)
+```
+
+```text
+deque com maxlen=3: deque([3, 4, 5], maxlen=3)
+```
+
+## Texto: `+=` contra `join`
+
+```python
+import timeit
+
+n = 20000
+setup = f'pedacos = [f"linha {{i}}" for i in range({n})]'
+concat = timeit.timeit(
+    """
+s = ""
+for p in pedacos:
+    s += p
+""",
+    setup=setup,
+    number=5,
+)
+juncao = timeit.timeit('"".join(pedacos)', setup=setup, number=5)
+print(f"concatenacao com +=  {concat * 1000:9.2f} ms")
+print(f'"".join(...)         {juncao * 1000:9.2f} ms')
+print(f"razao                {concat / juncao:9.0f}x")
+```
+
+```text
+concatenacao com +=       3.18 ms
+"".join(...)              0.58 ms
+razao                        6x
+```
+
+Seis vezes — e vale explicar por que não foram mil. Em teoria, concatenar strings num laço é `O(n²)`: cada `+=` cria uma string nova e copia tudo que já havia. Na prática, o CPython tem uma otimização que **redimensiona a string no lugar** quando ela tem uma única referência, e foi ela que segurou o estrago aqui.
+
+A otimização é um detalhe de implementação: não existe em PyPy, some se a string tiver outra referência, e não vale para `str` construída dentro de um objeto. `"".join(...)` é `O(n)` por construção, em qualquer implementação, e ainda diz melhor o que está acontecendo.
+
+## Os k melhores
+
+```python
+import timeit
+
+setup = "import random; dados = [random.random() for _ in range(50000)]"
+a = timeit.timeit("sorted(dados)[:3]", setup=setup, number=20)
+b = timeit.timeit("import heapq; heapq.nsmallest(3, dados)", setup=setup, number=20)
+c = timeit.timeit("min(dados)", setup=setup, number=20)
+print(f"sorted()[:3]      {a * 1000:8.1f} ms")
+print(f"heapq.nsmallest   {b * 1000:8.1f} ms")
+print(f"min()             {c * 1000:8.1f} ms")
+```
+
+```text
+sorted()[:3]      102.3 ms
+heapq.nsmallest    14.7 ms
+min()               6.4 ms
+```
+
+Ordenar cinquenta mil itens para olhar três é pagar `O(n log n)` por uma resposta que custa `O(n)`. Para um item, `min`/`max`; para poucos, `heapq`; para muitos ou para a lista inteira, `sorted`.
+
+## Manter ordenado: `bisect`
+
+Quando a coleção já está ordenada, a busca é logarítmica e a inserção mantém a ordem:
+
+```python
+import bisect
+
+ordenada = [-33.1, -31.2, -26.4, -19.5, -8.0]
+print("posicao de -25.0:", bisect.bisect_left(ordenada, -25.0))
+bisect.insort(ordenada, -25.0)
+print("depois do insort:", ordenada)
+```
+
+```text
+posicao de -25.0: 3
+depois do insort: [-33.1, -31.2, -26.4, -25.0, -19.5, -8.0]
+```
+
+E há um uso que quase ninguém conhece e que substitui escadas de `elif`: classificar um valor em faixas.
+
+```python
+LIMITES = [-28.0, -25.0, -8.0]
+ROTULOS = ["critico", "atencao", "normal", "saturado"]
+for nivel in (-33.1, -26.4, -19.5, -3.0):
+    print(f"  {nivel:>6} -> {ROTULOS[bisect.bisect_right(LIMITES, nivel)]}")
+```
+
+```text
+   -33.1 -> critico
+   -26.4 -> atencao
+   -19.5 -> normal
+     -3.0 -> saturado
+```
+
+É o classificador do @sec-cap015 sem nenhum `if`, e com as faixas viradas dado — dá para carregá-las de um arquivo de configuração.
+
+## O preço em memória
+
+```python
+import sys
+
+n = 10000
+itens = [f"onu-{i:05d}" for i in range(n)]
+print("list     :", sys.getsizeof(list(itens)), "bytes")
+print("tuple    :", sys.getsizeof(tuple(itens)), "bytes")
+print("set      :", sys.getsizeof(set(itens)), "bytes")
+print("dict     :", sys.getsizeof({k: None for k in itens}), "bytes")
+print("uma string:", sys.getsizeof(itens[0]), "bytes")
+```
+
+```text
+list     : 80056 bytes
+tuple    : 80040 bytes
+set      : 524504 bytes
+dict     : 207616 bytes
+uma string: 50 bytes
+```
+
+O conjunto ocupa **seis vezes** mais que a lista, e o dicionário quase três — a tabela hash precisa de folga para as colisões serem raras. Isso é o preço do `O(1)`, e quase sempre vale a pena: as strings em si (50 bytes cada, meio megabyte no total) estão fora dessas contas e são compartilhadas pelas quatro estruturas.
+
+O caso em que não vale é o de coleções pequenas dentro de estruturas grandes — um `set` de três elementos dentro de cada um de cem mil registros.
+
+## Quando a complexidade não importa
+
+```python
+import timeit
+
+for n in (10, 100, 1000):
+    setup = f"itens = list(range({n})); alvo = {n - 1}"
+    tl = timeit.timeit("alvo in itens", setup=setup, number=20000) * 1000
+    ts = timeit.timeit("alvo in conj", setup=setup + "; conj = set(itens)", number=20000) * 1000
+    print(f"n={n:>5}  lista {tl:7.2f} ms   set {ts:7.2f} ms   razao {tl / ts:5.1f}x")
+```
+
+```text
+n=   10  lista    1.14 ms   set    0.34 ms   razao   3.4x
+n=  100  lista    7.10 ms   set    0.35 ms   razao  20.0x
+n= 1000  lista   94.16 ms   set    0.47 ms   razao 200.0x
+```
+
+Com dez elementos, a diferença é de microssegundos — e converter a lista em conjunto a cada chamada custaria mais do que economizaria. **A complexidade só passa a mandar quando `n` cresce**, e a decisão certa depende de onde a estrutura vive:
+
+- **Constante do módulo**, criada uma vez e consultada muitas: `frozenset`, sempre, mesmo com cinco elementos. Custa nada e documenta a intenção.
+- **Coleção pequena e local**, criada e descartada na mesma função: lista está ótima.
+- **Coleção que cresce com a entrada** e é consultada dentro de um laço: aí a escolha decide se o programa termina.
+
+::: {#fig-escolha-estrutura}
+```{.tikz}
+%%| filename: escolha-estrutura
+%%| alt: Arvore de decisao para escolher a estrutura de dados a partir da pergunta que o programa faz aos dados
+\begin{tikzpicture}[
+  perg/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+               text width=5.4cm, align=left, minimum height=0.62cm,
+               font=\scriptsize, anchor=west, inner xsep=7pt},
+  estr/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+               text width=3.5cm, align=center, minimum height=0.62cm,
+               font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.8, 2.1) rectangle (14.8,-5.6);
+
+  \node[hd] at (0.0, 1.6) {a pergunta que o programa faz};
+  \node[hd] at (6.4, 1.6) {a estrutura};
+  \node[hd] at (10.6, 1.6) {porque};
+
+  \node[perg] at (0.0, 0.8) {``já vi este?'', ``tem repetido?''};
+  \node[estr] at (8.0, 0.8) {set / frozenset};
+  \node[lb, text width=4.0cm] at (10.6, 0.8) {pertencimento em O(1), sem valor};
+
+  \node[perg] at (0.0,-0.1) {``qual o valor desta chave?''};
+  \node[estr] at (8.0,-0.1) {dict};
+  \node[lb, text width=4.0cm] at (10.6,-0.1) {busca em O(1) com valor associado};
+
+  \node[perg] at (0.0,-1.0) {``quais são, em ordem, e mudam?''};
+  \node[estr] at (8.0,-1.0) {list};
+  \node[lb, text width=4.0cm] at (10.6,-1.0) {índice em O(1), barata no fim};
+
+  \node[perg] at (0.0,-1.9) {``quais são, e são fixos?''};
+  \node[estr] at (8.0,-1.9) {tuple};
+  \node[lb, text width=4.0cm] at (10.6,-1.9) {menor, hashável, vira chave};
+
+  \node[perg] at (0.0,-2.8) {``o primeiro a entrar sai primeiro?''};
+  \node[estr] at (8.0,-2.8) {deque};
+  \node[lb, text width=4.0cm] at (10.6,-2.8) {as duas pontas em O(1), com \texttt{maxlen}};
+
+  \node[perg] at (0.0,-3.7) {``quantos de cada?''};
+  \node[estr] at (8.0,-3.7) {Counter};
+  \node[lb, text width=4.0cm] at (10.6,-3.7) {contagem em C, com \texttt{most\_common}};
+
+  \node[perg] at (0.0,-4.6) {``todos os X de cada Y?''};
+  \node[estr] at (8.0,-4.6) {defaultdict(list)};
+  \node[lb, text width=4.0cm] at (10.6,-4.6) {agrupamento numa passada};
+
+  \foreach \yy in {0.8,-0.1,-1.0,-1.9,-2.8,-3.7,-4.6}
+    \draw[fl] (5.5,\yy) -- (6.2,\yy);
+\end{tikzpicture}
+```
+A estrutura sai da pergunta que o programa faz aos dados.
+:::
+
+## 🐍 Jeito Pythônico
+
+**Escolha pela pergunta, não pelo hábito.**
+
+- *"Já vi este?"* / *"tem duplicata?"* → `set`
+- *"qual o valor associado a esta chave?"* → `dict`
+- *"quais são, em ordem, e posso mexer?"* → `list`
+- *"quais são, em ordem, e são fixos?"* → `tuple`
+- *"o que entrou primeiro sai primeiro?"* → `deque`
+- *"quantos de cada?"* → `Counter`
+- *"todos os X de cada Y?"* → `defaultdict(list)`
+
+**Converta uma vez, fora do laço.** O erro da abertura não é usar lista: é consultá-la n vezes. `bloqueio = set(canceladas)` antes do laço resolve.
+
+```python
+# antipadrão
+for r in leituras:
+    if r["onu"] in [c["onu"] for c in canceladas]:
+        ...
+```
+
+```python
+# pythônico
+cancelados = {c["onu"] for c in canceladas}
+for r in leituras:
+    if r["onu"] in cancelados:
+        ...
+```
+
+**`"".join(...)` para montar texto.** Nunca `+=` num laço.
+
+**`deque` para fila**, `list` para pilha (`append`/`pop` no fim são baratos nos dois).
+
+**`min`/`max`/`heapq` quando você quer poucos**, `sorted` quando quer todos.
+
+**Meça antes de reescrever.** `timeit` para trechos, `time.perf_counter` para etapas de um script, e o `cProfile` do Volume 11 para programas inteiros. A intuição sobre desempenho erra com frequência — a otimização de string deste capítulo é um exemplo.
+
+**O sinal de alarme é `in` dentro de laço.** Sempre que ele aparecer, pergunte o que está do lado direito.
+
+Sobre versões:
+
+- **Python 3.7** — `dict` com ordem garantida tornou `dict.fromkeys` a resposta para deduplicar com ordem, tirando trabalho da `list`.
+- **Python 3.9** — `functools.cache` para memoização em uma linha, que é a troca de tempo por memória levada ao limite.
+- **Python 3.11** — ganho geral de 10% a 60% no interpretador (PEP 659), que **não** muda a complexidade: um algoritmo `O(n²)` continua `O(n²)`, só que um pouco mais rápido.
+- **Python 3.12** — compreensões sem quadro próprio (PEP 709), e `Counter`/`deque` seguem sendo os atalhos mais rentáveis da biblioteca padrão.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o cruzamento de um segundo e meio, ver a coluna da lista dobrar enquanto a do conjunto não se move, medir fila, texto e memória, e terminar com o mesmo relatório escrito duas vezes.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab28 && cd ~/lab28
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O cruzamento lento.** Crie `cruzar.py`:
+
+```python
+"""Cruza leituras com a lista de ONUs canceladas."""
+
+import time
+
+LEITURAS = [f"onu-{i:05d}" for i in range(30000)]
+CANCELADAS = [f"onu-{i:05d}" for i in range(0, 30000, 3)]
+
+
+def cruzar(leituras, canceladas):
+    return [o for o in leituras if o not in canceladas]
+
+
+inicio = time.perf_counter()
+ativas = cruzar(LEITURAS, CANCELADAS)
+print(f"{len(ativas)} ativas em {time.perf_counter() - inicio:.2f} s")
+```
+
+```bash
+python cruzar.py
+```
+
+```text
+20000 ativas em 1.55 s
+```
+
+**3. Uma linha a mais.** Em `cruzar2.py`, só a função muda:
+
+```python
+def cruzar(leituras, canceladas):
+    bloqueio = set(canceladas)
+    return [o for o in leituras if o not in bloqueio]
+```
+
+```bash
+python cruzar2.py
+```
+
+```text
+20000 ativas em 0.0018 s
+```
+
+**4. Veja o crescimento.** Crie `crescimento.py`:
+
+```python
+"""Mede como o custo de 'in' cresce com o tamanho."""
+
+import timeit
+
+print(f"{'n':>8} {'lista (ms)':>12} {'set (ms)':>10} {'razao':>8}")
+for n in (1000, 2000, 4000, 8000, 16000):
+    setup = (
+        f'itens = [f"onu-{{i:06d}}" for i in range({n})]; '
+        "lista = list(itens); conj = set(itens); "
+        f'alvo = "onu-{n - 1:06d}"'
+    )
+    tl = timeit.timeit("alvo in lista", setup=setup, number=2000) * 1000
+    ts = timeit.timeit("alvo in conj", setup=setup, number=2000) * 1000
+    print(f"{n:>8} {tl:>12.2f} {ts:>10.3f} {tl / ts:>8.0f}x")
+```
+
+```bash
+python crescimento.py
+```
+
+```text
+       n   lista (ms)   set (ms)    razao
+    1000        13.08      0.034      384x
+    2000        24.25      0.035      692x
+    4000        50.64      0.034     1480x
+    8000       104.64      0.080     1316x
+   16000       207.72      0.035     5900x
+```
+
+A coluna que interessa é a segunda: 13, 24, 50, 104, 207 — dobra com `n`. A terceira fica parada. A quarta é ruído.
+
+**5. Fila.** Crie `fila.py`:
+
+```python
+import timeit
+from collections import deque
+
+n = 30000
+lista = timeit.timeit("l.pop(0)", setup=f"l = list(range({n}))", number=n)
+fila = timeit.timeit(
+    "d.popleft()",
+    setup=f"from collections import deque; d = deque(range({n}))",
+    number=n,
+)
+print(f"list.pop(0)     {lista * 1000:9.1f} ms")
+print(f"deque.popleft() {fila * 1000:9.1f} ms")
+print(f"razao           {lista / fila:9.0f}x")
+
+ins_l = timeit.timeit("l.insert(0, 1)", setup="l = []", number=n)
+ins_d = timeit.timeit(
+    "d.appendleft(1)", setup="from collections import deque; d = deque()", number=n
+)
+print(f"list.insert(0)  {ins_l * 1000:9.1f} ms")
+print(f"deque.appendleft{ins_d * 1000:9.1f} ms")
+
+d = deque(maxlen=3)
+for x in range(6):
+    d.append(x)
+print("deque com maxlen=3:", d)
+```
+
+```bash
+python fila.py
+```
+
+```text
+list.pop(0)          43.9 ms
+deque.popleft()       0.6 ms
+razao                  71x
+list.insert(0)      112.4 ms
+deque.appendleft      0.6 ms
+deque com maxlen=3: deque([3, 4, 5], maxlen=3)
+```
+
+**6. Texto.** Crie `texto.py`:
+
+```python
+import timeit
+
+n = 20000
+setup = f'pedacos = [f"linha {{i}}" for i in range({n})]'
+concat = timeit.timeit(
+    """
+s = ""
+for p in pedacos:
+    s += p
+""",
+    setup=setup,
+    number=5,
+)
+juncao = timeit.timeit('"".join(pedacos)', setup=setup, number=5)
+print(f"concatenacao com +=  {concat * 1000:9.2f} ms")
+print(f'"".join(...)         {juncao * 1000:9.2f} ms')
+print(f"razao                {concat / juncao:9.0f}x")
+```
+
+```bash
+python texto.py
+```
+
+```text
+concatenacao com +=       3.18 ms
+"".join(...)              0.58 ms
+razao                        6x
+```
+
+Só seis vezes por causa da otimização de redimensionamento do CPython. Não conte com ela.
+
+**7. Os k melhores.**
+
+```bash
+python -c "
+import timeit
+setup = 'import random; dados = [random.random() for _ in range(50000)]'
+a = timeit.timeit('sorted(dados)[:3]', setup=setup, number=20)
+b = timeit.timeit('import heapq; heapq.nsmallest(3, dados)', setup=setup, number=20)
+c = timeit.timeit('min(dados)', setup=setup, number=20)
+print(f'sorted()[:3]      {a * 1000:8.1f} ms')
+print(f'heapq.nsmallest   {b * 1000:8.1f} ms')
+print(f'min()             {c * 1000:8.1f} ms')
+"
+```
+
+```text
+sorted()[:3]      102.3 ms
+heapq.nsmallest    14.7 ms
+min()               6.4 ms
+```
+
+**8. Memória.**
+
+```bash
+python -c "
+import sys
+n = 10000
+itens = [f'onu-{i:05d}' for i in range(n)]
+print('list     :', sys.getsizeof(list(itens)), 'bytes')
+print('tuple    :', sys.getsizeof(tuple(itens)), 'bytes')
+print('set      :', sys.getsizeof(set(itens)), 'bytes')
+print('dict     :', sys.getsizeof({k: None for k in itens}), 'bytes')
+print('(so o continente; as strings estao fora)')
+print('uma string:', sys.getsizeof(itens[0]), 'bytes')
+"
+```
+
+```text
+list     : 80056 bytes
+tuple    : 80040 bytes
+set      : 524504 bytes
+dict     : 207616 bytes
+(so o continente; as strings estao fora)
+uma string: 50 bytes
+```
+
+**9. Quando não importa.**
+
+```bash
+python -c "
+import timeit
+for n in (10, 100, 1000):
+    setup = f'itens = list(range({n})); alvo = {n - 1}'
+    tl = timeit.timeit('alvo in itens', setup=setup, number=20000) * 1000
+    ts = timeit.timeit('alvo in conj', setup=setup + '; conj = set(itens)', number=20000) * 1000
+    print(f'n={n:>5}  lista {tl:7.2f} ms   set {ts:7.2f} ms   razao {tl / ts:5.1f}x')
+"
+```
+
+```text
+n=   10  lista    1.14 ms   set    0.34 ms   razao   3.4x
+n=  100  lista    7.10 ms   set    0.35 ms   razao  20.0x
+n= 1000  lista   94.16 ms   set    0.47 ms   razao 200.0x
+```
+
+**10. `bisect`.** Crie `bisect_demo.py`:
+
+```python
+import bisect
+
+ordenada = [-33.1, -31.2, -26.4, -19.5, -8.0]
+print("posicao de -25.0:", bisect.bisect_left(ordenada, -25.0))
+bisect.insort(ordenada, -25.0)
+print("depois do insort:", ordenada)
+
+LIMITES = [-28.0, -25.0, -8.0]
+ROTULOS = ["critico", "atencao", "normal", "saturado"]
+for nivel in (-33.1, -26.4, -19.5, -3.0):
+    print(f"  {nivel:>6} -> {ROTULOS[bisect.bisect_right(LIMITES, nivel)]}")
+```
+
+```bash
+python bisect_demo.py
+```
+
+```text
+posicao de -25.0: 3
+depois do insort: [-33.1, -31.2, -26.4, -25.0, -19.5, -8.0]
+   -33.1 -> critico
+   -26.4 -> atencao
+   -19.5 -> normal
+     -3.0 -> saturado
+```
+
+**11. O mesmo relatório, duas vezes.** Crie `escolha.py`:
+
+```python
+"""O mesmo relatorio escrito duas vezes: estrutura errada e estrutura certa."""
+
+import time
+from collections import Counter, defaultdict, deque
+
+LEITURAS = [
+    {"onu": f"onu-{i:05d}", "olt": f"olt-{i % 4}", "nivel": -20.0 - (i % 15)}
+    for i in range(20000)
+]
+CANCELADAS = [f"onu-{i:05d}" for i in range(0, 20000, 5)]
+
+
+def versao_ruim(leituras, canceladas):
+    ativas = [r for r in leituras if r["onu"] not in canceladas]
+    olts = []
+    for r in ativas:
+        if r["olt"] not in olts:
+            olts.append(r["olt"])
+    contagem = {}
+    for r in ativas:
+        if r["olt"] in contagem:
+            contagem[r["olt"]] += 1
+        else:
+            contagem[r["olt"]] = 1
+    return sorted(olts), contagem
+
+
+def versao_boa(leituras, canceladas):
+    bloqueio = set(canceladas)
+    ativas = [r for r in leituras if r["onu"] not in bloqueio]
+    olts = {r["olt"] for r in ativas}
+    contagem = Counter(r["olt"] for r in ativas)
+    return sorted(olts), dict(contagem)
+
+
+if __name__ == "__main__":
+    inicio = time.perf_counter()
+    a = versao_boa(LEITURAS, CANCELADAS)
+    t_boa = time.perf_counter() - inicio
+
+    inicio = time.perf_counter()
+    b = versao_ruim(LEITURAS, CANCELADAS)
+    t_ruim = time.perf_counter() - inicio
+
+    print("mesmo resultado?", a == b)
+    print(f"versao boa  : {t_boa * 1000:9.1f} ms")
+    print(f"versao ruim : {t_ruim * 1000:9.1f} ms")
+    print(f"razao       : {t_ruim / t_boa:9.0f}x")
+    print("olts:", a[0])
+    print("contagem:", a[1])
+
+    janela = deque(maxlen=5)
+    for r in LEITURAS[:8]:
+        janela.append(r["nivel"])
+    print("ultimas 5 leituras (deque maxlen):", list(janela))
+
+    por_olt = defaultdict(list)
+    for r in LEITURAS[:8]:
+        por_olt[r["olt"]].append(r["onu"])
+    print("agrupado:", dict(por_olt))
+```
+
+```bash
+python escolha.py
+```
+
+```text
+mesmo resultado? True
+versao boa  :       2.7 ms
+versao ruim :     493.8 ms
+razao       :       184x
+olts: ['olt-0', 'olt-1', 'olt-2', 'olt-3']
+contagem: {'olt-1': 4000, 'olt-2': 4000, 'olt-3': 4000, 'olt-0': 4000}
+ultimas 5 leituras (deque maxlen): [-23.0, -24.0, -25.0, -26.0, -27.0]
+agrupado: {'olt-0': ['onu-00000', 'onu-00004'], 'olt-1': ['onu-00001', 'onu-00005'], 'olt-2': ['onu-00002', 'onu-00006'], 'olt-3': ['onu-00003', 'onu-00007']}
+```
+
+A primeira linha é o que torna a comparação honesta: as duas versões produzem **o mesmo resultado**. A diferença é só de estrutura — três trocas, cada uma trocando uma varredura por um cálculo:
+
+| na versão ruim | na versão boa | o que muda |
+|---|---|---|
+| `o not in canceladas` (lista) | `o not in bloqueio` (conjunto) | `O(n)` vira `O(1)` |
+| `if r["olt"] not in olts: olts.append(...)` | `{r["olt"] for r in ativas}` | varredura vira hash |
+| `if k in contagem: ... else: ...` | `Counter(...)` | duas buscas viram uma, em C |
+
+E as duas últimas linhas mostram as ferramentas que ficaram de fora da tabela e resolvem casos inteiros: `deque(maxlen=5)` é uma janela deslizante sem nenhuma linha de controle, e `defaultdict(list)` é o agrupamento do @sec-cap024.
+
+**12. Feche com `deactivate`.**
+
+## Resumo
+
+- `O(1)` não depende do tamanho; `O(n)` dobra quando os dados dobram; `O(n²)` quadruplica. É o crescimento que decide, não a constante.
+- `in` numa `list` é `O(n)`; num `set` ou `dict`, `O(1)`. Converter uma vez, fora do laço, é a troca que mais rende — 1,5 s viraram 1,8 ms na abertura.
+- `list` é ótima no fim (`append`, `pop`) e ruim no começo (`insert(0)`, `pop(0)`): para fila, `deque`, que ainda traz `maxlen`.
+- `"".join(pedacos)` em vez de `+=` num laço; a otimização do CPython que segura o `+=` é detalhe de implementação, não garantia.
+- `min`/`max` para um, `heapq.nsmallest`/`nlargest` para poucos, `sorted` para todos.
+- `bisect` mantém uma lista ordenada e classifica valores em faixas sem escada de `if`.
+- `dict` e `set` pagam memória pelo tempo: num teste de dez mil strings, o `set` ocupou seis vezes mais que a `list`.
+- Com `n` pequeno, a complexidade não importa — mas constante de módulo consultada muitas vezes deve ser `frozenset` de qualquer jeito.
+- Meça: `timeit` para trechos, `perf_counter` para etapas. O sinal de alarme é `in` dentro de um laço.
