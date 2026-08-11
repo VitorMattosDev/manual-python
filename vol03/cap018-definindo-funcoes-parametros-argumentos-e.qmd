@@ -1,3 +1,910 @@
 # Definindo funções: parâmetros, argumentos e retorno {#sec-cap018}
 
-*(em elaboracao)*
+O script de relatório cresceu, e alguém fez a coisa certa: extraiu o cálculo da média para uma função.
+
+```python
+def media_dbm(leituras):
+    if leituras:
+        total = sum(leituras)
+        media = total / len(leituras)
+        print(f"media calculada: {media:.2f}")
+
+
+resultado = media_dbm([-19.5, -21.3, -20.2])
+print("resultado:", resultado)
+print("resultado + 3 =", resultado + 3)
+```
+
+```text
+media calculada: -20.33
+resultado: None
+Traceback (most recent call last):
+  File "/home/vitor/lab18/media_ruim.py", line 10, in <module>
+    print("resultado + 3 =", resultado + 3)
+                             ~~~~~~~~~~^~~
+TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'
+```
+
+A média foi calculada, apareceu na tela, e mesmo assim `resultado` é `None`. A função **imprimiu** o valor em vez de **devolver** o valor — e uma função sem `return` devolve `None`, sempre, sem avisar.
+
+O detalhe cruel é a primeira linha da saída: o número certo apareceu. Quem testou no terminal viu `-20.33` e deu por encerrado. O erro só aparece quando alguém tenta usar o resultado, possivelmente num arquivo diferente, dias depois — e o `NoneType` do traceback não diz nada sobre a função que faltou devolver.
+
+```python
+def media(leituras):
+    if not leituras:
+        return None
+    return sum(leituras) / len(leituras)
+
+
+print(media([-19.5, -21.3, -20.2]))
+print(media([]))
+```
+
+```text
+-20.333333333333332
+None
+```
+
+Agora o `None` é uma decisão escrita, não um acidente. Este capítulo é sobre o que acontece quando você escreve `def`: o objeto que nasce, o quadro que a chamada empilha, como os argumentos chegam nos parâmetros e o que exatamente volta.
+
+## Anatomia de uma definição
+
+```python
+def classificar(nivel):
+    """Devolve a faixa operacional de um nivel optico em dBm."""
+    if nivel < -28:
+        return "critico"
+    if nivel < -25:
+        return "atencao"
+    return "normal"
+```
+
+::: {#fig-anatomia-funcao}
+```{.tikz}
+%%| filename: anatomia-funcao
+%%| alt: Anatomia de uma definicao de funcao em Python, com a palavra-chave def, o nome, a lista de parametros, a anotacao de retorno, os dois-pontos, a docstring, o corpo indentado e a instrucao return
+\begin{tikzpicture}[
+  cod/.style={font=\ttfamily\small, anchor=west, inner sep=1pt},
+  tok/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!12,
+              font=\ttfamily\small, anchor=west, inner xsep=3pt, inner ysep=2.5pt},
+  tkv/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!14,
+              font=\ttfamily\small, anchor=west, inner xsep=3pt, inner ysep=2.5pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  lbe/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  seta/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.4, 3.6) rectangle (14.6,-4.8);
+
+  \node[tok] (kw)  at (0.00, 1.55) {def};
+  \node[tok] (nm)  at (0.85, 1.55) {classificar};
+  \node[tok] (par) at (3.35, 1.55) {(nivel)};
+  \node[tok] (an)  at (5.05, 1.55) {-> str};
+  \node[tok] (dp)  at (6.55, 1.55) {:};
+
+  \node[tkv] (doc) at (0.55, 0.75) {"""Faixa operacional em dBm."""};
+  \node[cod]       at (0.55, 0.15) {if nivel < -28:};
+  \node[tkv] (r1)  at (1.10,-0.45) {return "critico"};
+  \node[cod]       at (0.55,-1.05) {if nivel < -25:};
+  \node[cod]       at (1.10,-1.55) {return "atencao"};
+  \node[cod]       at (0.55,-2.05) {return "normal"};
+
+  \node[lb, text width=2.0cm] at (0.20, 3.15) {palavra-chave};
+  \node[lb, text width=2.2cm] at (2.30, 3.15) {nome (vira uma variável)};
+  \node[lb, text width=2.2cm] at (4.60, 3.15) {\textbf{parâmetros}};
+  \node[lb, text width=2.4cm] at (7.10, 3.15) {anotação de retorno (opcional)};
+  \node[lb, text width=1.7cm] at (9.60, 3.15) {dois-pontos};
+
+  \draw[seta] (0.20, 2.55) -- (kw.north);
+  \draw[seta] (2.30, 2.55) -- (nm.north);
+  \draw[seta] (4.60, 2.55) -- (par.north);
+  \draw[seta] (7.10, 2.55) -- (an.north);
+  \draw[seta] (9.60, 2.55) -- (dp.north);
+
+  \node[lbe, text width=4.8cm, text=manualgreen] at (9.4, 0.75)
+    {\textbf{docstring} --- primeira instrução do corpo, vira
+     \texttt{\_\_doc\_\_} e alimenta o \texttt{help()}};
+  \node[lbe, text width=4.8cm, text=manualgreen] at (9.4,-0.45)
+    {\textbf{return} --- encerra a função na hora e devolve o valor; sem ele, a
+     função devolve \texttt{None}};
+
+  \draw[seta, manualgreen] (9.3, 0.75) -- (doc.east);
+  \draw[seta, manualgreen] (9.3,-0.45) -- (r1.east);
+
+  \node[lbe, text width=13.4cm] at (-1.2,-3.5)
+    {\textbf{corpo} --- delimitado por indentação, não por chaves. Executa
+     \textbf{só na chamada}: erro de digitação dentro do corpo passa despercebido
+     até alguém chamar a função. O que o \texttt{def} faz na definição é criar um
+     objeto do tipo \texttt{function} e ligá-lo ao nome
+     \texttt{classificar} --- nada mais.};
+\end{tikzpicture}
+```
+As partes de um `def`, e o que cada uma faz na definição e na chamada.
+:::
+
+Duas coisas que essa figura resume e que valem repetir:
+
+**O `def` cria um objeto.** Não é declaração, é instrução executável — ela roda, constrói um objeto do tipo `function` e o liga a um nome, do mesmo jeito que uma atribuição comum liga um nome a uma lista.
+
+```python
+def classificar(nivel):
+    """Devolve a faixa operacional de um nivel optico em dBm."""
+    ...
+
+
+print(type(classificar), classificar.__name__)
+print(classificar.__doc__)
+apelido = classificar
+print(apelido(-31.0), apelido is classificar)
+```
+
+```text
+<class 'function'> classificar
+Devolve a faixa operacional de um nivel optico em dBm.
+critico True
+```
+
+`apelido` e `classificar` são dois nomes para o mesmo objeto, exatamente como no @sec-cap008. O que isso destrava — passar função como argumento, guardar em dicionário, devolver de outra função — é o assunto do @sec-cap021.
+
+**O corpo só roda na chamada.** Um `def` com erro de digitação lá dentro é aceito sem reclamar; o `NameError` aparece na primeira chamada, que pode ser em produção.
+
+## Parâmetro e argumento
+
+A distinção é chata e útil:
+
+- **Parâmetro** é o nome na definição (`nivel`).
+- **Argumento** é o valor na chamada (`-31.0`).
+
+Argumentos podem ser passados por **posição** ou por **nome**:
+
+```python
+def area(base, altura):
+    return base * altura / 2
+
+
+print(area(3, 4))
+print(area(altura=4, base=3))
+```
+
+```text
+6.0
+6.0
+```
+
+Passar por nome documenta a chamada e imuniza contra troca de ordem. As regras completas — valores padrão, `*args`, `**kwargs`, parâmetros só-posicionais — são o @sec-cap019.
+
+## `return`
+
+`return` faz duas coisas ao mesmo tempo: **encerra** a função e **devolve** um valor. É por isso que a cláusula de guarda do @sec-cap015 funciona tão bem dentro de função.
+
+Sem valor, `return` devolve `None`; sem `return` nenhum, também:
+
+```python
+def registrar(nivel):
+    if nivel < -28:
+        return "critico"
+    print("nao critico")
+    return
+
+
+print(registrar(-31.0))
+print(registrar(-19.5))
+```
+
+```text
+critico
+nao critico
+None
+```
+
+Um `return` nu é uma saída antecipada legítima. O que não é legítimo é a função **às vezes** devolver e às vezes não — o caso da abertura. Se um caminho devolve `str`, todos devem devolver `str` ou `None` de propósito, e o `None` precisa estar escrito.
+
+### "Vários valores" é uma tupla
+
+Python não devolve múltiplos valores; devolve **um** objeto, que costuma ser uma tupla:
+
+```python
+def estatisticas(leituras):
+    return min(leituras), max(leituras), sum(leituras) / len(leituras)
+
+
+r = estatisticas([-19.5, -31.0, -20.2])
+print(r, type(r))
+pior, melhor, med = estatisticas([-19.5, -31.0, -20.2])
+print(f"{pior=} {melhor=} {med=:.2f}")
+```
+
+```text
+(-31.0, -19.5, -23.566666666666666) <class 'tuple'>
+pior=-31.0 melhor=-19.5 med=-23.57
+```
+
+As vírgulas do `return` montam a tupla; o desempacotamento do lado esquerdo a desmonta. A partir de três ou quatro valores, uma tupla posicional vira armadilha (quem lembra a ordem?), e a resposta é `NamedTuple` ou `dataclass`, do Volume 7.
+
+E a sintaxe `f"{pior=}"`, do @sec-cap013, é o depurador de pobre que todo mundo usa: imprime o nome e o valor juntos.
+
+## O que a chamada faz
+
+Chamar uma função empilha um **quadro** (*frame*): um espaço novo onde os parâmetros já nascem ligados aos argumentos e onde vivem as variáveis locais. Quando a função retorna, o quadro é desempilhado.
+
+É a pilha que o traceback do @sec-cap007 imprime:
+
+```python
+TABELA = {"onu-01": -19.5, "onu-02": -31.2}
+
+
+def nivel_de(onu):
+    return TABELA[onu]
+
+
+def relatar(onu):
+    return f"{onu}: {nivel_de(onu)} dBm"
+
+
+print(relatar("onu-01"))
+print(relatar("onu-99"))
+```
+
+```text
+onu-01: -19.5 dBm
+Traceback (most recent call last):
+  File "/home/vitor/lab18/consulta.py", line 13, in <module>
+    print(relatar("onu-99"))
+          ~~~~~~~^^^^^^^^^^
+  File "/home/vitor/lab18/consulta.py", line 9, in relatar
+    return f"{onu}: {nivel_de(onu)} dBm"
+                     ~~~~~~~~^^^^^
+  File "/home/vitor/lab18/consulta.py", line 5, in nivel_de
+    return TABELA[onu]
+           ~~~~~~^^^^^
+KeyError: 'onu-99'
+```
+
+::: {#fig-pilha-chamadas}
+```{.tikz}
+%%| filename: pilha-chamadas
+%%| alt: A pilha de chamadas com tres quadros empilhados, modulo chamando relatar que chama nivel de, e a correspondencia com as tres molduras do traceback lidas de baixo para cima
+\begin{tikzpicture}[
+  qd/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=5.4cm, align=left, minimum height=1.15cm,
+             font=\ttfamily\scriptsize, inner sep=6pt},
+  topo/.style={draw=manualred, very thick, rounded corners, fill=manualred!11,
+               text width=5.4cm, align=left, minimum height=1.15cm,
+               font=\ttfamily\scriptsize, inner sep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  fl/.style={->,>=stealth, very thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-3.4, 2.7) rectangle (14.6,-4.9);
+
+  \node[qd]   (m) at (0, 1.6)
+    {\textbf{quadro do módulo}\\ TABELA = \{...\}\\ (linha 13)};
+  \node[qd]   (r) at (0, 0.0)
+    {\textbf{quadro de relatar}\\ onu = 'onu-99'\\ (linha 9)};
+  \node[topo] (n) at (0,-1.6)
+    {\textbf{quadro de nivel\_de}\\ onu = 'onu-99'\\ (linha 5) \textcolor{manualred}{KeyError}};
+
+  \draw[fl] (m.east) -- ++(0.9,0) |- (r.east) node[lb, pos=0.25, right=2pt] {chama};
+  \draw[fl] (r.east) -- ++(0.9,0) |- (n.east) node[lb, pos=0.25, right=2pt] {chama};
+
+  \node[lb, anchor=west, text width=6.2cm] at (5.0, 1.6)
+    {\textbf{base da pilha} --- é a \textbf{primeira} moldura impressa no
+     traceback};
+  \node[lb, anchor=west, text width=6.2cm] at (5.0, 0.0)
+    {cada chamada empilha um quadro novo, com os parâmetros já ligados aos
+     argumentos};
+  \node[lb, anchor=west, text width=6.2cm, text=manualred] at (5.0,-1.6)
+    {\textbf{topo da pilha} --- é a \textbf{última} moldura do traceback, onde a
+     exceção nasceu};
+
+  \node[lb, text width=13.5cm] at (-3.2,-3.6)
+    {Ao retornar, o quadro é descartado e as variáveis locais dele somem. Por
+     isso o traceback se lê \textbf{de baixo para cima} quando se quer a causa,
+     e de cima para baixo quando se quer o caminho: a última moldura é onde
+     estourou, a primeira é quem começou tudo.};
+\end{tikzpicture}
+```
+Três chamadas, três quadros — e as três molduras do traceback, na mesma ordem.
+:::
+
+## Como os argumentos chegam
+
+Python não é "por valor" nem "por referência": o que acontece é que o parâmetro vira **mais um nome** para o objeto que veio de fora, exatamente como uma atribuição. As consequências são duas, e é preciso as duas para não se enganar.
+
+**Mutar o objeto afeta quem chamou:**
+
+```python
+def anexar(destino, item):
+    destino.append(item)
+
+
+lista = ["a"]
+anexar(lista, "b")
+print("depois de anexar: ", lista)
+```
+
+```text
+depois de anexar:  ['a', 'b']
+```
+
+**Reatribuir o parâmetro não afeta ninguém:**
+
+```python
+def rebatizar(destino):
+    destino = ["novo"]
+    return destino
+
+
+volta = rebatizar(lista)
+print("depois de rebatizar:", lista, "| devolvido:", volta)
+```
+
+```text
+depois de rebatizar: ['a', 'b'] | devolvido: ['novo']
+```
+
+A atribuição dentro da função só reapontou o nome **local**. Dá para ver com `id`:
+
+```python
+def inspeciona(obj):
+    print("dentro:               ", id(obj))
+    obj = "outro"
+    print("depois da atribuicao: ", id(obj))
+
+
+texto = "original"
+print("fora, antes:          ", id(texto))
+inspeciona(texto)
+print("fora, depois:         ", id(texto), texto)
+```
+
+```text
+fora, antes:           124197974277104
+dentro:                124197974277104
+depois da atribuicao:  124197974127408
+fora, depois:          124197974277104 original
+```
+
+Os identificadores mudam a cada execução; o padrão não muda. Entrou com o mesmo `id` (é o mesmo objeto), a atribuição criou outro `id` só lá dentro, e o de fora ficou igual.
+
+Daí a regra prática: **uma função ou devolve um valor novo, ou modifica o que recebeu — não as duas coisas**, e o nome deve dizer qual das duas. Modificar o argumento sem avisar é a origem de bugs que atravessam módulos.
+
+## Docstring
+
+A docstring é a primeira instrução do corpo, entre aspas triplas, e é o que `help()` mostra:
+
+```python
+help(classificar)
+```
+
+```text
+Help on function classificar in module __main__:
+
+classificar(nivel)
+    Devolve a faixa operacional de um nivel optico em dBm.
+```
+
+A PEP 257 pede uma linha imperativa curta ("Devolve...", "Calcula...", "Grava..."), e, se precisar de mais, uma linha em branco e o resto. Comentário `#` explica **como**; docstring explica **o que** e **para quem chama**.
+
+## Anotações de tipo
+
+```python
+def normaliza(nome: str, casas: int) -> str:
+    return nome.strip().lower()[:casas]
+
+
+print(normaliza("  ONU-Norte-01  ", 8))
+print(normaliza.__annotations__)
+print(normaliza(123, 2))
+```
+
+```text
+onu-nort
+{'nome': <class 'str'>, 'casas': <class 'int'>, 'return': <class 'str'>}
+Traceback (most recent call last):
+  File "/home/vitor/lab18/anotacao.py", line 7, in <module>
+    print(normaliza(123, 2))
+          ~~~~~~~~~^^^^^^^^
+  File "/home/vitor/lab18/anotacao.py", line 2, in normaliza
+    return nome.strip().lower()[:casas]
+           ^^^^^^^^^^
+AttributeError: 'int' object has no attribute 'strip'
+```
+
+A anotação dizia `str` e o `123` passou sem reclamação: **o interpretador não verifica anotações em tempo de execução**. Elas ficam guardadas em `__annotations__` e servem para o verificador estático (`mypy`, `pyright`), para o editor e para quem lê. O erro veio depois, de dentro, quando o `int` não soube fazer `.strip()`. Tipagem é o Volume 11; aqui basta a regra: anotar é documentar de forma verificável, não é validar.
+
+## Funções que devolvem `None` de propósito
+
+Parte da biblioteca padrão devolve `None` deliberadamente, para deixar claro que a operação foi **no lugar**:
+
+```python
+onus = ["onu-03", "onu-01", "onu-02"]
+devolvido = onus.sort()
+print("sort devolveu:", devolvido)
+print("lista agora:  ", onus)
+
+outras = ["onu-03", "onu-01", "onu-02"]
+print("sorted devolveu:", sorted(outras), "| original:", outras)
+```
+
+```text
+sort devolveu: None
+lista agora:   ['onu-01', 'onu-02', 'onu-03']
+sorted devolveu: ['onu-01', 'onu-02', 'onu-03'] | original: ['onu-03', 'onu-01', 'onu-02']
+```
+
+`onus = onus.sort()` é o erro clássico: a lista ordenada é jogada fora e `onus` vira `None`. A convenção vale também para `list.append`, `dict.update` e `random.shuffle` — e vale para o **seu** código: se a função muda o argumento, não devolva ele também, porque isso convida a encadear chamadas que parecem funcionais e não são.
+
+## Recursão, em uma seção curta
+
+Uma função pode chamar a si mesma. Precisa de um caso base, e o Python limita a profundidade:
+
+```python
+import sys
+
+
+def profundidade(n):
+    return profundidade(n + 1)
+
+
+def fatorial(n):
+    """Fatorial de n, com caso base explicito."""
+    if n <= 1:
+        return 1
+    return n * fatorial(n - 1)
+
+
+print("limite:", sys.getrecursionlimit())
+print("fatorial(20):", fatorial(20))
+try:
+    profundidade(0)
+except RecursionError as e:
+    print("RecursionError:", e)
+```
+
+```text
+limite: 1000
+fatorial(20): 2432902008176640000
+RecursionError: maximum recursion depth exceeded
+```
+
+Mil quadros e acabou. O Python **não** faz otimização de chamada de cauda, e a decisão é deliberada: Guido van Rossum argumentou que ela destruiria os tracebacks, que são mais valiosos. Em Python, recursão é ferramenta para estrutura recursiva (árvore, JSON aninhado, sistema de arquivos), não substituto de laço.
+
+## 🐍 Jeito Pythônico
+
+**Uma função, uma responsabilidade, um nome de verbo.** `carregar`, `classificar`, `formatar`, `resumir`. Se o nome precisa de "e" (`carrega_e_valida`), são duas funções.
+
+**Calcular e imprimir são trabalhos diferentes.** A função devolve; quem chamou decide se imprime, grava ou soma. Foi essa mistura que produziu o bug da abertura, e ela também impede testar a função sem capturar a saída padrão.
+
+**Torne o `None` explícito.** Se a função pode não ter resposta, escreva `return None` no caminho correspondente. `None` implícito é indistinguível de esquecimento.
+
+**Não misture cálculo com mutação.** Ou devolve valor novo (`sorted`), ou muda no lugar e devolve `None` (`sort`).
+
+**Docstring em toda função pública**, na forma imperativa, dizendo o que devolve.
+
+**Anote os tipos quando a assinatura não for óbvia.** Custa pouco, o editor usa na hora, e o `mypy` transforma em verificação de verdade.
+
+```python
+# antipadrão: imprime, não devolve, e o nome não diz o que faz
+def dados(x):
+    print(sum(x) / len(x))
+```
+
+```python
+# pythônico
+def media(leituras: list[float]) -> float:
+    """Devolve a media aritmetica das leituras."""
+    return sum(leituras) / len(leituras)
+```
+
+**Prefira `list[float]` a `typing.List[float]`.** A forma nova vale desde o **Python 3.9** (PEP 585); a antiga só sobrevive em código legado.
+
+**Cuidado com o argumento mutável que você não pediu.** Se a função guarda o que recebeu (numa lista de estado, num atributo), guarde uma cópia — senão quem chamou pode mudar por baixo depois.
+
+Sobre versões:
+
+- **Python 3.0** — anotações de função (PEP 3107), sem semântica definida.
+- **Python 3.5** — módulo `typing` e o significado padrão das anotações (PEP 484).
+- **Python 3.8** — parâmetros só-posicionais com `/` (PEP 570), assunto do @sec-cap019.
+- **Python 3.9** — `list[float]` e `dict[str, int]` direto nos tipos embutidos (PEP 585).
+- **Python 3.10** — `X | Y` no lugar de `Union[X, Y]` (PEP 604).
+- **Python 3.12** — sintaxe nova de genéricos, `def f[T](x: T) -> T:` (PEP 695).
+- **Python 3.14** — anotações passam a ser avaliadas de forma preguiçosa (PEP 649), o que muda o comportamento de `__annotations__` em referências adiante. Na 3.13, `from __future__ import annotations` é o jeito de antecipar isso.
+
+## 🧪 Laboratório
+
+Objetivo: ver o `None` implícito estourar longe da causa, ler a pilha de chamadas num traceback de três molduras, medir a diferença entre mutar e reatribuir um parâmetro, e terminar quebrando um script em funções pequenas e testáveis no REPL.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab18 && cd ~/lab18
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O `None` implícito.** Crie `media_ruim.py`:
+
+```python
+def media_dbm(leituras):
+    if leituras:
+        total = sum(leituras)
+        media = total / len(leituras)
+        print(f"media calculada: {media:.2f}")
+
+
+resultado = media_dbm([-19.5, -21.3, -20.2])
+print("resultado:", resultado)
+print("resultado + 3 =", resultado + 3)
+```
+
+```bash
+python media_ruim.py
+```
+
+```text
+media calculada: -20.33
+resultado: None
+Traceback (most recent call last):
+  File "/home/vitor/lab18/media_ruim.py", line 10, in <module>
+    print("resultado + 3 =", resultado + 3)
+                             ~~~~~~~~~~^~~
+TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'
+```
+
+Repare que o traceback aponta a **linha 10**, e o erro está na **linha 5** — a que deveria ser um `return`.
+
+**3. A versão que devolve.**
+
+```bash
+python -c "
+def media(leituras):
+    if not leituras:
+        return None
+    return sum(leituras) / len(leituras)
+print(media([-19.5, -21.3, -20.2]))
+print(media([]))
+"
+```
+
+```text
+-20.333333333333332
+None
+```
+
+**4. A função é um objeto.**
+
+```bash
+python -c "
+def classificar(nivel):
+    '''Devolve a faixa operacional de um nivel optico em dBm.'''
+    if nivel < -28:
+        return 'critico'
+    if nivel < -25:
+        return 'atencao'
+    return 'normal'
+print(type(classificar), classificar.__name__)
+print(classificar.__doc__)
+apelido = classificar
+print(apelido(-31.0), apelido is classificar)
+"
+```
+
+```text
+<class 'function'> classificar
+Devolve a faixa operacional de um nivel optico em dBm.
+critico True
+```
+
+**5. Devolver uma tupla.**
+
+```bash
+python -c "
+def estatisticas(leituras):
+    return min(leituras), max(leituras), sum(leituras) / len(leituras)
+r = estatisticas([-19.5, -31.0, -20.2])
+print(r, type(r))
+pior, melhor, med = estatisticas([-19.5, -31.0, -20.2])
+print(f'{pior=} {melhor=} {med=:.2f}')
+"
+```
+
+```text
+(-31.0, -19.5, -23.566666666666666) <class 'tuple'>
+pior=-31.0 melhor=-19.5 med=-23.57
+```
+
+**6. Mutar contra reatribuir.**
+
+```bash
+python -c "
+def anexar(destino, item):
+    destino.append(item)
+def rebatizar(destino):
+    destino = ['novo']
+    return destino
+lista = ['a']
+anexar(lista, 'b')
+print('depois de anexar: ', lista)
+volta = rebatizar(lista)
+print('depois de rebatizar:', lista, '| devolvido:', volta)
+"
+```
+
+```text
+depois de anexar:  ['a', 'b']
+depois de rebatizar: ['a', 'b'] | devolvido: ['novo']
+```
+
+**7. Confirme com `id`.**
+
+```bash
+python -c "
+def inspeciona(obj):
+    print('dentro:               ', id(obj))
+    obj = 'outro'
+    print('depois da atribuicao: ', id(obj))
+texto = 'original'
+print('fora, antes:          ', id(texto))
+inspeciona(texto)
+print('fora, depois:         ', id(texto), texto)
+"
+```
+
+```text
+fora, antes:           124197974277104
+dentro:                124197974277104
+depois da atribuicao:  124197974127408
+fora, depois:          124197974277104 original
+```
+
+Os números mudam a cada execução. O que importa é que a primeira e a segunda linha são iguais, a terceira é diferente, e a quarta voltou a ser a primeira.
+
+**8. Anotação não é validação.** Crie `anotacao.py`:
+
+```python
+def normaliza(nome: str, casas: int) -> str:
+    return nome.strip().lower()[:casas]
+
+
+print(normaliza("  ONU-Norte-01  ", 8))
+print(normaliza.__annotations__)
+print(normaliza(123, 2))
+```
+
+```bash
+python anotacao.py
+```
+
+```text
+onu-nort
+{'nome': <class 'str'>, 'casas': <class 'int'>, 'return': <class 'str'>}
+Traceback (most recent call last):
+  File "/home/vitor/lab18/anotacao.py", line 7, in <module>
+    print(normaliza(123, 2))
+          ~~~~~~~~~^^^^^^^^
+  File "/home/vitor/lab18/anotacao.py", line 2, in normaliza
+    return nome.strip().lower()[:casas]
+           ^^^^^^^^^^
+AttributeError: 'int' object has no attribute 'strip'
+```
+
+**9. `sort` contra `sorted`.**
+
+```bash
+python -c "
+onus = ['onu-03', 'onu-01', 'onu-02']
+devolvido = onus.sort()
+print('sort devolveu:', devolvido)
+print('lista agora:  ', onus)
+outras = ['onu-03', 'onu-01', 'onu-02']
+print('sorted devolveu:', sorted(outras), '| original:', outras)
+"
+```
+
+```text
+sort devolveu: None
+lista agora:   ['onu-01', 'onu-02', 'onu-03']
+sorted devolveu: ['onu-01', 'onu-02', 'onu-03'] | original: ['onu-03', 'onu-01', 'onu-02']
+```
+
+**10. Recursão e o limite.** Crie `recursao.py`:
+
+```python
+import sys
+
+
+def profundidade(n):
+    return profundidade(n + 1)
+
+
+def fatorial(n):
+    """Fatorial de n, com caso base explicito."""
+    if n <= 1:
+        return 1
+    return n * fatorial(n - 1)
+
+
+print("limite:", sys.getrecursionlimit())
+print("fatorial(20):", fatorial(20))
+try:
+    profundidade(0)
+except RecursionError as e:
+    print("RecursionError:", e)
+```
+
+```bash
+python recursao.py
+```
+
+```text
+limite: 1000
+fatorial(20): 2432902008176640000
+RecursionError: maximum recursion depth exceeded
+```
+
+**11. Leia a pilha num traceback.** Crie `consulta.py`:
+
+```python
+TABELA = {"onu-01": -19.5, "onu-02": -31.2}
+
+
+def nivel_de(onu):
+    return TABELA[onu]
+
+
+def relatar(onu):
+    return f"{onu}: {nivel_de(onu)} dBm"
+
+
+print(relatar("onu-01"))
+print(relatar("onu-99"))
+```
+
+```bash
+python consulta.py
+```
+
+```text
+onu-01: -19.5 dBm
+Traceback (most recent call last):
+  File "/home/vitor/lab18/consulta.py", line 13, in <module>
+    print(relatar("onu-99"))
+          ~~~~~~~^^^^^^^^^^
+  File "/home/vitor/lab18/consulta.py", line 9, in relatar
+    return f"{onu}: {nivel_de(onu)} dBm"
+                     ~~~~~~~~^^^^^
+  File "/home/vitor/lab18/consulta.py", line 5, in nivel_de
+    return TABELA[onu]
+           ~~~~~~^^^^^
+KeyError: 'onu-99'
+```
+
+Três molduras, três quadros — compare com a @fig-pilha-chamadas. A de baixo é onde o erro nasceu; a de cima é quem começou.
+
+**12. Quebre um script em funções.** Crie `leituras.csv` e `relatorio.py`:
+
+```bash
+cat > leituras.csv <<'CSV'
+onu;nivel
+onu-01;-19.5
+onu-02;-31.2
+onu-03;
+onu-04;-26.4
+onu-05;-8.0
+CSV
+```
+
+```python
+"""Relatorio de niveis opticos, escrito como funcoes pequenas e testaveis."""
+
+import csv
+from pathlib import Path
+
+CRITICO = -28.0
+ATENCAO = -25.0
+SATURACAO = -8.0
+
+
+def carregar(caminho):
+    """Le o CSV e devolve uma lista de pares (onu, nivel ou None)."""
+    texto = Path(caminho).read_text(encoding="utf-8")
+    linhas = csv.DictReader(texto.splitlines(), delimiter=";")
+    return [
+        (l["onu"], float(l["nivel"]) if l["nivel"].strip() else None) for l in linhas
+    ]
+
+
+def classificar(nivel):
+    """Faixa operacional de um nivel em dBm; None quando nao ha leitura."""
+    if nivel is None:
+        return "sem leitura"
+    if nivel < CRITICO:
+        return "critico"
+    if nivel < ATENCAO:
+        return "atencao"
+    if nivel <= SATURACAO:
+        return "normal"
+    return "saturado"
+
+
+def resumir(registros):
+    """Devolve (total, quantidade de problemas, pior leitura registrada)."""
+    medidos = [n for _, n in registros if n is not None]
+    problemas = sum(1 for _, n in registros if classificar(n) != "normal")
+    return len(registros), problemas, min(medidos)
+
+
+def formatar(onu, nivel):
+    """Uma linha de relatorio, ja alinhada."""
+    medida = "  ---  " if nivel is None else f"{nivel:>7.1f}"
+    return f"{onu}  {medida}  {classificar(nivel)}"
+
+
+def main(caminho="leituras.csv"):
+    registros = carregar(caminho)
+    for onu, nivel in registros:
+        print(formatar(onu, nivel))
+    total, problemas, pior = resumir(registros)
+    print("-" * 34)
+    print(f"{total} ONUs, {problemas} com problema, pior leitura {pior} dBm")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+python relatorio.py
+```
+
+```text
+onu-01    -19.5  normal
+onu-02    -31.2  critico
+onu-03    ---    sem leitura
+onu-04    -26.4  atencao
+onu-05     -8.0  normal
+----------------------------------
+5 ONUs, 3 com problema, pior leitura -31.2 dBm
+```
+
+**13. Agora use as funções sem rodar o script.** É este o ganho: cada peça pode ser exercitada sozinha.
+
+```bash
+python -c "
+import relatorio
+print(relatorio.classificar(-31.0), relatorio.classificar(None), relatorio.classificar(-19.5))
+print(relatorio.formatar('onu-09', -26.0))
+print(relatorio.resumir([('a', -19.5), ('b', None), ('c', -31.0)]))
+print(relatorio.carregar.__doc__)
+"
+```
+
+```text
+critico sem leitura normal
+onu-09    -26.0  atencao
+(3, 2, -31.0)
+Le o CSV e devolve uma lista de pares (onu, nivel ou None).
+```
+
+Nenhuma dessas quatro chamadas leu arquivo, imprimiu relatório ou dependeu do resto do programa. Uma função que só devolve é uma função que se testa em uma linha — e é por isso que "devolva, não imprima" é a regra que mais rende neste capítulo. O `if __name__ == "__main__":` que protege o `main()` é o que permite importar sem executar; a mecânica dele é o @sec-cap015 aplicada a uma variável do módulo, e o assunto completo é o Volume 5.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- `def` é instrução executável: cria um objeto `function` e liga a um nome. O corpo só roda na chamada, então erro dentro dele aparece tarde.
+- Função sem `return` devolve `None`, e função que **imprime** não é função que **devolve** — a confusão entre as duas é o bug de abertura deste capítulo.
+- `return` encerra e devolve ao mesmo tempo; devolver "vários valores" é devolver uma tupla, desmontada por desempacotamento.
+- Parâmetro é o nome na definição; argumento é o valor na chamada, passado por posição ou por nome.
+- Cada chamada empilha um quadro com os parâmetros ligados aos argumentos; a pilha é exatamente o que o traceback imprime, da base para o topo.
+- O parâmetro é mais um nome para o objeto recebido: mutar afeta quem chamou, reatribuir não afeta ninguém.
+- Uma função ou devolve valor novo (`sorted`) ou muda no lugar e devolve `None` (`sort`) — nunca as duas.
+- Docstring diz o que a função faz e alimenta o `help()`; anotações documentam tipos e **não** são verificadas em execução.
+- Recursão precisa de caso base e esbarra em `sys.getrecursionlimit()` (1000 por padrão); o Python não otimiza chamada de cauda, por decisão de projeto.
