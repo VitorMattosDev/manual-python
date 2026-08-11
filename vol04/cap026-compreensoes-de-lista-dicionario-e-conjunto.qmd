@@ -1,3 +1,821 @@
 # Compreensões de lista, dicionário e conjunto {#sec-cap026}
 
-*(em elaboracao)*
+O relatório precisa de um índice de ONUs por OLT. Uma compreensão de dicionário resolve numa linha:
+
+```python
+LEITURAS = [
+    {"onu": "onu-01", "olt": "norte", "nivel": -19.5},
+    {"onu": "onu-02", "olt": "norte", "nivel": -31.2},
+    {"onu": "onu-03", "olt": "sul", "nivel": -26.4},
+    {"onu": "onu-04", "olt": "sul", "nivel": -8.0},
+    {"onu": "onu-05", "olt": "norte", "nivel": -33.1},
+]
+
+POR_OLT = {r["olt"]: r["onu"] for r in LEITURAS}
+print(f"{len(LEITURAS)} leituras viraram {len(POR_OLT)} registros")
+print(POR_OLT)
+```
+
+```text
+5 leituras viraram 2 registros
+{'norte': 'onu-05', 'sul': 'onu-04'}
+```
+
+Cinco leituras entraram, duas saíram. A compreensão fez exatamente o que foi pedida: para cada leitura, atribuiu `POR_OLT[olt] = onu`. Como três leituras têm `olt == "norte"`, a terceira sobrescreveu as duas anteriores — e sobrou a última.
+
+Não houve erro, não houve aviso, e o dicionário resultante é perfeitamente válido. Só está errado: `norte` tem três ONUs, e o índice diz que tem uma.
+
+**Compreensão de dicionário só é segura quando a chave é única.** Quando não é, o que você quer é agrupar:
+
+```python
+from collections import defaultdict
+
+grupos = defaultdict(list)
+for r in LEITURAS:
+    grupos[r["olt"]].append(r["onu"])
+print(dict(grupos))
+```
+
+```text
+{'norte': ['onu-01', 'onu-02', 'onu-05'], 'sul': ['onu-03', 'onu-04']}
+```
+
+Indexar por `onu`, que é único, é o uso correto da compreensão — e aí os cinco entram e cinco saem.
+
+Este capítulo é sobre a construção mais característica do Python: o que ela faz, em que ordem lê, quando substitui um laço com vantagem e quando é melhor não usar.
+
+## A forma básica
+
+```python
+niveis = [-19.5, -31.2, -8.0, -26.4]
+
+quadrados = []
+for n in niveis:
+    quadrados.append(abs(n))
+print("laco       :", quadrados)
+print("compreensao:", [abs(n) for n in niveis])
+```
+
+```text
+laco       : [19.5, 31.2, 8.0, 26.4]
+compreensao: [19.5, 31.2, 8.0, 26.4]
+```
+
+A compreensão é o `for` com `append` escrito de trás para frente: primeiro o que vai para a lista, depois de onde vem.
+
+::: {#fig-anatomia-compreensao}
+```{.tikz}
+%%| filename: anatomia-compreensao
+%%| alt: Anatomia de uma compreensao de lista mostrando expressao de saida, clausula for e filtro if, com o laco equivalente ao lado e a ordem de leitura
+\begin{tikzpicture}[
+  pe/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!13,
+             font=\ttfamily\small, anchor=west, inner xsep=4pt, inner ysep=3pt},
+  pf/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+             font=\ttfamily\small, anchor=west, inner xsep=4pt, inner ysep=3pt},
+  pc/.style={draw=manualyellow!70!black, very thick, rounded corners=1pt,
+             fill=manualyellow!25, font=\ttfamily\small, anchor=west,
+             inner xsep=4pt, inner ysep=3pt},
+  cod/.style={font=\ttfamily\scriptsize, anchor=west, text=manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  seta/.style={->,>=stealth, thick, manualgray},
+  ord/.style={draw=manualred, thick, fill=manualred!12, circle, inner sep=1.2pt,
+              font=\scriptsize\bfseries, text=manualred}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.2, 3.2) rectangle (14.6,-4.6);
+
+  \node[cod, font=\ttfamily\small, text=black] at (0.0, 1.6) {[};
+  \node[pe] (e) at (0.28, 1.6) {abs(n)};
+  \node[pf] (f) at (1.85, 1.6) {for n in niveis};
+  \node[pc] (c) at (5.4, 1.6) {if n < -20};
+  \node[cod, font=\ttfamily\small, text=black] at (7.6, 1.6) {]};
+
+  \node[lb, text width=2.6cm, text=manualblue] at (0.9, 2.9)
+    {\textbf{o que sai}\\ uma vez por item aprovado};
+  \node[lb, text width=2.8cm, text=manualgreen] at (3.6, 2.9)
+    {\textbf{de onde vem}\\ o laço};
+  \node[lb, text width=2.4cm, text=manualyellow!60!black] at (6.5, 2.9)
+    {\textbf{filtro}\\ opcional};
+
+  \draw[seta] (0.9, 2.35) -- (e.north);
+  \draw[seta] (3.6, 2.35) -- (f.north);
+  \draw[seta] (6.5, 2.35) -- (c.north);
+
+  \node[ord] at (1.0, 0.9) {3};
+  \node[ord] at (2.6, 0.9) {1};
+  \node[ord] at (5.9, 0.9) {2};
+  \node[lb, anchor=west, text=manualred] at (8.2, 0.9)
+    {ordem de \textbf{execução}: percorre, filtra, produz};
+
+  \node[cod, font=\ttfamily\small, text=black] at (0.0,-0.6) {resultado = []};
+  \node[cod, font=\ttfamily\small, text=manualgreen] at (0.0,-1.15) {for n in niveis:};
+  \node[cod, font=\ttfamily\small, text=manualyellow!60!black] at (0.55,-1.7) {if n < -20:};
+  \node[cod, font=\ttfamily\small, text=manualblue] at (1.1,-2.25) {resultado.append(abs(n))};
+
+  \node[lb, anchor=west, text width=5.0cm] at (8.2,-1.4)
+    {o laço equivalente, com as mesmas três partes na ordem em que rodam ---
+     a compreensão só move a saída para a frente};
+
+  \node[lb, text width=13.8cm] at (6.4,-3.8)
+    {Trocar \texttt{[]} por \texttt{\{\}} com \texttt{chave: valor} dá um
+     dicionário; por \texttt{\{\}} sem dois-pontos, um conjunto; por
+     \texttt{()}, um \textbf{gerador} --- que não constrói nada e produz sob
+     demanda. Não existe compreensão de tupla: \texttt{tuple(...)} em volta de
+     um gerador faz o papel.};
+\end{tikzpicture}
+```
+A saída vem primeiro na escrita e por último na execução.
+:::
+
+O `if` no fim **filtra**; o condicional do @sec-cap015 no começo **mapeia todos**:
+
+```python
+print("com filtro :", [abs(n) for n in niveis if n < -20])
+print("com ternario:", ["critico" if n < -28 else "ok" for n in niveis])
+print("os dois    :", ["C" if n < -28 else "A" for n in niveis if n < -20])
+```
+
+```text
+com filtro : [31.2, 26.4]
+com ternario: ['ok', 'critico', 'ok', 'ok']
+os dois    : ['C', 'A']
+```
+
+A distinção é a que mais confunde no começo: **`if` depois do `for` decide se o item entra; `if`/`else` antes do `for` decide qual valor entra**. O `else` é o desempate visual — filtro não tem `else`, e não pode ter.
+
+## As quatro formas
+
+```python
+print("lista :", [n * 2 for n in range(4)])
+print("set   :", {n % 3 for n in range(8)})
+print("dict  :", {n: n * n for n in range(4)})
+print("gerador:", (n * 2 for n in range(4)))
+print("tupla nao existe:", tuple(n * 2 for n in range(4)))
+print("invertendo dict:", {v: k for k, v in {"a": 1, "b": 2}.items()})
+```
+
+```text
+lista : [0, 2, 4, 6]
+set   : {0, 1, 2}
+dict  : {0: 0, 1: 1, 2: 4, 3: 9}
+gerador: <generator object <genexpr> at 0x7723c998aa80>
+tupla nao existe: (0, 2, 4, 6)
+invertendo dict: {1: 'a', 2: 'b'}
+```
+
+O conjunto deduplicou sozinho (`range(8) % 3` produz oito valores e três elementos). E `(...)` não é "compreensão de tupla": é uma **expressão geradora**, que não construiu nada — só devolveu um objeto que sabe produzir os valores quando pedirem.
+
+A inversão de dicionário na última linha é um idioma muito usado, e sofre da mesma armadilha da abertura: se dois valores forem iguais, o dicionário invertido perde entradas.
+
+## Expressão geradora
+
+```python
+import sys
+
+lista = [n for n in range(100000)]
+gerador = (n for n in range(100000))
+print("lista  :", sys.getsizeof(lista), "bytes")
+print("gerador:", sys.getsizeof(gerador), "bytes")
+```
+
+```text
+lista  : 800984 bytes
+gerador: 192 bytes
+```
+
+Oitocentos kilobytes contra cento e noventa e dois bytes. O gerador não guarda os valores: guarda como produzi-los.
+
+Quando o resultado vai direto para uma função que consome iterável, os colchetes são desperdício:
+
+```python
+print("soma com colchetes:", sum([n for n in range(10)]))
+print("soma sem colchetes:", sum(n for n in range(10)))
+print("any curto-circuito:", any(n > 1 for n in range(1000000)))
+```
+
+```text
+soma com colchetes: 45
+soma sem colchetes: 45
+any curto-circuito: True
+```
+
+A versão com colchetes constrói uma lista inteira só para somá-la e jogá-la fora. E o `any` mostra o outro ganho: ele parou no terceiro item, sem produzir os outros 999.997.
+
+Quando a expressão geradora é o **único** argumento, os parênteses dela podem ser omitidos — é o que torna `sum(n for n in ...)` legal.
+
+O preço é o do @sec-cap016: gerador é de uma passada só.
+
+```python
+g = (n for n in range(3))
+print("primeira passada:", list(g))
+print("segunda  passada:", list(g))
+```
+
+```text
+primeira passada: [0, 1, 2]
+segunda  passada: []
+```
+
+## Compreensão aninhada
+
+Dois `for` na mesma compreensão achatam uma estrutura, **na mesma ordem** em que os laços apareceriam:
+
+```python
+MATRIZ = [[1, 2, 3], [4, 5, 6]]
+
+achatada = []
+for linha in MATRIZ:
+    for valor in linha:
+        achatada.append(valor)
+print("laco aninhado :", achatada)
+print("compreensao   :", [valor for linha in MATRIZ for valor in linha])
+```
+
+```text
+laco aninhado : [1, 2, 3, 4, 5, 6]
+compreensao   : [1, 2, 3, 4, 5, 6]
+```
+
+Escrever na ordem invertida é o erro clássico — e, dependendo do que existe no escopo, ele **não** falha:
+
+```python
+print([valor for valor in linha for linha in MATRIZ])
+```
+
+```text
+[4, 4, 5, 5, 6, 6]
+```
+
+Num arquivo limpo isso seria `NameError: name 'linha' is not defined`. Aqui não foi, porque o laço `for linha in MATRIZ` das linhas anteriores **vazou** a variável — o comportamento do @sec-cap020 — e `linha` ainda valia `[4, 5, 6]`. O resultado é lixo silencioso: seis elementos, todos errados.
+
+É o argumento mais forte para não reaproveitar nomes de variável de laço, e para desconfiar de compreensão aninhada que "quase" funciona.
+
+::: {#fig-compreensao-aninhada}
+```{.tikz}
+%%| filename: compreensao-aninhada
+%%| alt: A ordem das clausulas for numa compreensao aninhada corresponde a ordem dos lacos encaixados, do mais externo para o mais interno
+\begin{tikzpicture}[
+  ext/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+              font=\ttfamily\small, anchor=west, inner xsep=4pt, inner ysep=3pt},
+  int/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!13,
+              font=\ttfamily\small, anchor=west, inner xsep=4pt, inner ysep=3pt},
+  sai/.style={draw=manualgray, very thick, rounded corners=1pt, fill=manualgray!8,
+              font=\ttfamily\small, anchor=west, inner xsep=4pt, inner ysep=3pt},
+  cod/.style={font=\ttfamily\small, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  seta/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.2, 3.3) rectangle (14.6,-4.8);
+
+  \node[cod] at (0.0, 1.9) {[};
+  \node[sai] (s) at (0.25, 1.9) {valor};
+  \node[ext] (a) at (1.7, 1.9) {for linha in MATRIZ};
+  \node[int] (b) at (6.2, 1.9) {for valor in linha};
+  \node[cod] at (10.3, 1.9) {]};
+
+  \node[lb, text=manualgreen, anchor=west] at (1.7, 2.7) {externo (o de fora)};
+  \node[lb, text=manualblue, anchor=west] at (6.2, 2.7) {interno (usa o de fora)};
+
+  \node[cod, text=manualgreen] at (0.0,-0.2) {for linha in MATRIZ:};
+  \node[cod, text=manualblue] at (0.55,-0.8) {for valor in linha:};
+  \node[cod, text=manualgray] at (1.1,-1.4) {saida.append(valor)};
+
+  \draw[seta, manualgreen] (a.south) to[out=-90,in=90] (2.6,-0.0);
+  \draw[seta, manualblue] (b.south) to[out=-90,in=60] (4.0,-0.62);
+
+  \node[lb, text width=5.2cm, anchor=west] at (8.4,-0.7)
+    {\textbf{mesma ordem}: o primeiro \texttt{for} da compreensão é o laço mais
+     externo. Basta ler da esquerda para a direita como se fossem linhas
+     encaixadas.};
+
+  \node[lb, text width=13.6cm] at (-1.0,-3.4)
+    {Invertendo (\texttt{[valor for valor in linha for linha in MATRIZ]}) o
+     resultado é \texttt{NameError} --- ou, pior, \textbf{lixo silencioso}, se
+     \texttt{linha} tiver sobrado de um laço anterior no mesmo escopo. Dois
+     níveis é o limite prático: a partir do terceiro, escreva o laço.};
+\end{tikzpicture}
+```
+O primeiro `for` da compreensão é o laço mais externo — a leitura é linear.
+:::
+
+A compreensão **de** compreensão é outra coisa, e produz aninhamento em vez de achatar:
+
+```python
+print("matriz de matriz:", [[v * 10 for v in linha] for linha in MATRIZ])
+print("com filtro no meio:", [v for linha in MATRIZ for v in linha if v % 2 == 0])
+```
+
+```text
+matriz de matriz: [[10, 20, 30], [40, 50, 60]]
+com filtro no meio: [2, 4, 6]
+```
+
+Foi a compreensão de compreensão que resolveu o `[[0] * 3] * 3` do @sec-cap022: cada volta do `for` externo executa o `[...]` interno de novo, produzindo um objeto novo.
+
+## Morsa em compreensão
+
+O `:=` do @sec-cap015 resolve o caso "filtrar pelo resultado de uma função e usar esse resultado":
+
+```python
+import re
+
+linhas = ["onu-01 nivel=-19.5", "onu-02 sem leitura", "onu-03 nivel=-31.2"]
+padrao = re.compile(r"nivel=(-?\d+\.\d+)")
+print([float(m.group(1)) for linha in linhas if (m := padrao.search(linha))])
+```
+
+```text
+[-19.5, -31.2]
+```
+
+Sem ele, seriam duas buscas por linha — uma no filtro e outra na expressão de saída.
+
+## Escopo próprio
+
+```python
+n = "valor de fora"
+quadrados = [n * n for n in range(3)]
+print(quadrados, "| n continua:", n)
+```
+
+```text
+[0, 1, 4] | n continua: valor de fora
+```
+
+A variável da compreensão vive num escopo próprio e **não vaza** — ao contrário do `for` de bloco, como o @sec-cap020 mostrou. É por isso que a compreensão é mais segura que o laço equivalente num arquivo longo, e é também por isso que o erro da compreensão aninhada acima só aconteceu por causa de um `for` de bloco anterior.
+
+## Desempenho
+
+```python
+import timeit
+
+setup = "dados = list(range(2000))"
+a = timeit.timeit(
+    """
+r = []
+for n in dados:
+    r.append(n * 2)
+""",
+    setup=setup,
+    number=2000,
+)
+b = timeit.timeit("[n * 2 for n in dados]", setup=setup, number=2000)
+c = timeit.timeit("list(map(lambda n: n * 2, dados))", setup=setup, number=2000)
+print(f"laco com append  {a * 1000:8.1f} ms")
+print(f"compreensao      {b * 1000:8.1f} ms")
+print(f"map com lambda   {c * 1000:8.1f} ms")
+```
+
+```text
+laco com append      76.4 ms
+compreensao          58.5 ms
+map com lambda      128.9 ms
+```
+
+A compreensão ganha do laço porque não paga a busca do método `append` a cada volta, e ganha do `map` com `lambda` porque não paga uma chamada de função Python por item — o mesmo resultado do @sec-cap021. Desde o **Python 3.12** a vantagem aumentou: as compreensões deixaram de criar um quadro de função próprio (PEP 709).
+
+Dito isso, a razão para preferir compreensão é legibilidade. Ganhar 25% num laço que roda mil vezes não muda nada; escrever a intenção em uma linha, sim.
+
+## Quando *não* usar
+
+```python
+# ilegivel: tudo numa expressao so
+ruim = {
+    r["olt"]: [p for p in r["portas"]]
+    for r in REGISTROS
+    if r["nivel"] is not None and r["portas"]
+}
+```
+
+```python
+# legivel: laco explicito, com nome para cada passo
+bom = defaultdict(list)
+for r in REGISTROS:
+    if r["nivel"] is None:
+        continue
+    bom[r["olt"]].extend(r["portas"])
+```
+
+```text
+ruim: {'norte': [1, 2], 'sul': [3]}
+bom : {'norte': [1, 2], 'sul': [3]}
+```
+
+Os dois dão o mesmo resultado neste conjunto de dados — e o de cima ainda esconde o bug da chave repetida. Quatro sinais de que a compreensão passou do ponto:
+
+1. **Não cabe em uma linha** de forma legível (nem quebrada em duas ou três).
+2. **Tem efeito colateral.** `[print(x) for x in itens]` constrói uma lista de `None` para jogar fora; isso é um laço disfarçado.
+3. **Passa de dois `for`.**
+4. **Precisa de `try`/`except`.** Compreensão não trata exceção; se um item pode falhar, o laço é o lugar.
+
+## 🐍 Jeito Pythônico
+
+**Compreensão para transformar e filtrar; laço para efeito colateral.** Se o resultado é descartado, é laço.
+
+```python
+# antipadrão
+[salvar(r) for r in registros]
+```
+
+```python
+# pythônico
+for r in registros:
+    salvar(r)
+```
+
+**Compreensão de dicionário só com chave única.** Para agrupar, `defaultdict(list)` ou `itertools.groupby`.
+
+**Sem colchetes dentro de `sum`, `any`, `all`, `min`, `max` e `join`.** A expressão geradora não materializa a lista e permite curto-circuito.
+
+```python
+# antipadrão
+total = sum([r["nivel"] for r in leituras if r["nivel"]])
+```
+
+```python
+# pythônico
+total = sum(r["nivel"] for r in leituras if r["nivel"])
+```
+
+**`if` no fim filtra, `if`/`else` no começo mapeia.** Nunca são a mesma coisa.
+
+**Dois `for` no máximo**, e sempre na ordem dos laços equivalentes.
+
+**Não reaproveite o nome da variável do laço** — a compreensão aninhada errada pode encontrar o nome vazado e produzir lixo em vez de erro.
+
+**`list(dict.fromkeys(x))` continua sendo o jeito de deduplicar com ordem** — não tente fazer isso com compreensão e um conjunto auxiliar; fica mais longo e mais lento.
+
+Sobre versões:
+
+- **Python 3.0** — compreensões de conjunto e de dicionário passaram a existir; a variável da compreensão ganhou escopo próprio.
+- **Python 3.6** — compreensões assíncronas, com `async for` (PEP 530).
+- **Python 3.8** — operador morsa dentro de compreensão (PEP 572).
+- **Python 3.12** — compreensões de lista, dicionário e conjunto deixaram de criar quadro de função próprio, ficando até duas vezes mais rápidas (PEP 709).
+
+## 🧪 Laboratório
+
+Objetivo: perder três leituras numa compreensão de dicionário, comparar filtro com ternário, medir gerador contra lista, e ver a compreensão aninhada invertida produzir lixo em vez de erro.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab26 && cd ~/lab26
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. A chave que se repete.** Crie `indice.py`:
+
+```python
+LEITURAS = [
+    {"onu": "onu-01", "olt": "norte", "nivel": -19.5},
+    {"onu": "onu-02", "olt": "norte", "nivel": -31.2},
+    {"onu": "onu-03", "olt": "sul", "nivel": -26.4},
+    {"onu": "onu-04", "olt": "sul", "nivel": -8.0},
+    {"onu": "onu-05", "olt": "norte", "nivel": -33.1},
+]
+
+POR_OLT = {r["olt"]: r["onu"] for r in LEITURAS}
+print(f"{len(LEITURAS)} leituras viraram {len(POR_OLT)} registros")
+print(POR_OLT)
+```
+
+```bash
+python indice.py
+```
+
+```text
+5 leituras viraram 2 registros
+{'norte': 'onu-05', 'sul': 'onu-04'}
+```
+
+A primeira linha é a que deveria estar em todo código que constrói índice: comparar o antes e o depois.
+
+**3. Agrupar em vez de indexar.**
+
+```bash
+python -c "
+from collections import defaultdict
+LEITURAS = [
+    {'onu': 'onu-01', 'olt': 'norte'},
+    {'onu': 'onu-02', 'olt': 'norte'},
+    {'onu': 'onu-03', 'olt': 'sul'},
+]
+grupos = defaultdict(list)
+for r in LEITURAS:
+    grupos[r['olt']].append(r['onu'])
+print(dict(grupos))
+POR_ONU = {r['onu']: r['olt'] for r in LEITURAS}
+print(POR_ONU, len(POR_ONU))
+"
+```
+
+```text
+{'norte': ['onu-01', 'onu-02'], 'sul': ['onu-03']}
+{'onu-01': 'norte', 'onu-02': 'norte', 'onu-03': 'sul'} 3
+```
+
+Indexado por `onu`, que é único, três entram e três saem.
+
+**4. Filtro e ternário.**
+
+```bash
+python -c "
+niveis = [-19.5, -31.2, -8.0, -26.4]
+quadrados = []
+for n in niveis:
+    quadrados.append(abs(n))
+print('laco       :', quadrados)
+print('compreensao:', [abs(n) for n in niveis])
+print('com filtro :', [abs(n) for n in niveis if n < -20])
+print('com ternario:', ['critico' if n < -28 else 'ok' for n in niveis])
+print('os dois    :', ['C' if n < -28 else 'A' for n in niveis if n < -20])
+"
+```
+
+```text
+laco       : [19.5, 31.2, 8.0, 26.4]
+compreensao: [19.5, 31.2, 8.0, 26.4]
+com filtro : [31.2, 26.4]
+com ternario: ['ok', 'critico', 'ok', 'ok']
+os dois    : ['C', 'A']
+```
+
+Quatro entradas: o filtro devolveu duas, o ternário devolveu quatro. É a diferença entre escolher **quais** itens e escolher **qual valor**.
+
+**5. As quatro formas.**
+
+```bash
+python -c "
+print('lista :', [n * 2 for n in range(4)])
+print('set   :', {n % 3 for n in range(8)})
+print('dict  :', {n: n * n for n in range(4)})
+print('gerador:', (n * 2 for n in range(4)))
+print('tupla nao existe:', tuple(n * 2 for n in range(4)))
+print('invertendo dict:', {v: k for k, v in {'a': 1, 'b': 2}.items()})
+"
+```
+
+```text
+lista : [0, 2, 4, 6]
+set   : {0, 1, 2}
+dict  : {0: 0, 1: 1, 2: 4, 3: 9}
+gerador: <generator object <genexpr> at 0x7723c998aa80>
+tupla nao existe: (0, 2, 4, 6)
+invertendo dict: {1: 'a', 2: 'b'}
+```
+
+**6. Gerador contra lista.**
+
+```bash
+python -c "
+import sys
+lista = [n for n in range(100000)]
+gerador = (n for n in range(100000))
+print('lista  :', sys.getsizeof(lista), 'bytes')
+print('gerador:', sys.getsizeof(gerador), 'bytes')
+print('soma com colchetes:', sum([n for n in range(10)]))
+print('soma sem colchetes:', sum(n for n in range(10)))
+g = (n for n in range(3))
+print('primeira passada:', list(g))
+print('segunda  passada:', list(g))
+print('any curto-circuito:', any(n > 1 for n in range(1000000)))
+"
+```
+
+```text
+lista  : 800984 bytes
+gerador: 192 bytes
+soma com colchetes: 45
+soma sem colchetes: 45
+primeira passada: [0, 1, 2]
+segunda  passada: []
+any curto-circuito: True
+```
+
+A última linha é instantânea apesar do milhão: o `any` parou no terceiro item.
+
+**7. Aninhamento, e o erro que não deu erro.** Crie `aninhada.py`:
+
+```python
+MATRIZ = [[1, 2, 3], [4, 5, 6]]
+
+achatada = []
+for linha in MATRIZ:
+    for valor in linha:
+        achatada.append(valor)
+print("laco aninhado :", achatada)
+print("compreensao   :", [valor for linha in MATRIZ for valor in linha])
+
+try:
+    print([valor for valor in linha for linha in MATRIZ])
+except NameError as e:
+    print("NameError:", e)
+
+print("matriz de matriz:", [[v * 10 for v in linha] for linha in MATRIZ])
+print("com filtro no meio:", [v for linha in MATRIZ for v in linha if v % 2 == 0])
+```
+
+```bash
+python aninhada.py
+```
+
+```text
+laco aninhado : [1, 2, 3, 4, 5, 6]
+compreensao   : [1, 2, 3, 4, 5, 6]
+[4, 4, 5, 5, 6, 6]
+matriz de matriz: [[10, 20, 30], [40, 50, 60]]
+com filtro no meio: [2, 4, 6]
+```
+
+A terceira linha era para ter caído no `except NameError` e não caiu: o `for linha in MATRIZ` do laço lá em cima deixou `linha` valendo `[4, 5, 6]`, e a compreensão invertida encontrou esse resto. Apague as quatro primeiras linhas do arquivo e rode de novo — aí sim sai `NameError`.
+
+**8. Morsa em compreensão.**
+
+```bash
+python -c "
+import re
+linhas = ['onu-01 nivel=-19.5', 'onu-02 sem leitura', 'onu-03 nivel=-31.2']
+padrao = re.compile(r'nivel=(-?\d+\.\d+)')
+print([float(m.group(1)) for linha in linhas if (m := padrao.search(linha))])
+"
+```
+
+```text
+[-19.5, -31.2]
+```
+
+**9. Escopo próprio.**
+
+```bash
+python -c "
+n = 'valor de fora'
+quadrados = [n * n for n in range(3)]
+print(quadrados, '| n continua:', n)
+linhas = [1, 2, 3]
+print([x for x in linhas if x > 1])
+try:
+    print(x)
+except NameError as e:
+    print('NameError:', e)
+"
+```
+
+```text
+[0, 1, 4] | n continua: valor de fora
+[2, 3]
+NameError: name 'x' is not defined
+```
+
+O `n` de fora era uma string e sobreviveu intacto; o `x` da compreensão nunca existiu fora dela.
+
+**10. Meça.**
+
+```bash
+python -c "
+import timeit
+setup = 'dados = list(range(2000))'
+a = timeit.timeit('''
+r = []
+for n in dados:
+    r.append(n * 2)
+''', setup=setup, number=2000)
+b = timeit.timeit('[n * 2 for n in dados]', setup=setup, number=2000)
+c = timeit.timeit('list(map(lambda n: n * 2, dados))', setup=setup, number=2000)
+print(f'laco com append  {a * 1000:8.1f} ms')
+print(f'compreensao      {b * 1000:8.1f} ms')
+print(f'map com lambda   {c * 1000:8.1f} ms')
+"
+```
+
+```text
+laco com append      76.4 ms
+compreensao          58.5 ms
+map com lambda      128.9 ms
+```
+
+**11. Quando parar.** Crie `ilegivel.py`:
+
+```python
+REGISTROS = [
+    {"onu": "onu-01", "olt": "norte", "nivel": -19.5, "portas": [1, 2]},
+    {"onu": "onu-02", "olt": "sul", "nivel": -31.2, "portas": [3]},
+    {"onu": "onu-03", "olt": "norte", "nivel": None, "portas": []},
+]
+
+# ilegivel: tudo numa expressao so
+ruim = {r["olt"]: [p for p in r["portas"]] for r in REGISTROS if r["nivel"] is not None and r["portas"]}
+
+# legivel: laco explicito, com nome para cada passo
+from collections import defaultdict
+
+bom = defaultdict(list)
+for r in REGISTROS:
+    if r["nivel"] is None:
+        continue
+    bom[r["olt"]].extend(r["portas"])
+
+print("ruim:", ruim)
+print("bom :", dict(bom))
+```
+
+```bash
+python ilegivel.py
+```
+
+```text
+ruim: {'norte': [1, 2], 'sul': [3]}
+bom : {'norte': [1, 2], 'sul': [3]}
+```
+
+Resultados iguais **neste** conjunto de dados. Acrescente uma quarta ONU em `norte` com portas e rode de novo: a versão de cima perde as portas da primeira, e a de baixo não.
+
+**12. O relatório inteiro.** Crie `relatorio.py`:
+
+```python
+"""Relatorio de varredura escrito com compreensoes onde elas cabem."""
+
+LEITURAS = [
+    {"onu": "onu-01", "olt": "norte", "nivel": -19.5},
+    {"onu": "onu-02", "olt": "norte", "nivel": -31.2},
+    {"onu": "onu-03", "olt": "sul", "nivel": -26.4},
+    {"onu": "onu-04", "olt": "sul", "nivel": None},
+    {"onu": "onu-05", "olt": "norte", "nivel": -33.1},
+]
+
+CRITICO = -28.0
+
+# indice por chave unica: aqui a compreensao de dicionario e segura
+POR_ONU = {r["onu"]: r for r in LEITURAS}
+
+# conjunto de OLTs distintas
+OLTS = {r["olt"] for r in LEITURAS}
+
+# so as medidas, ja filtradas
+MEDIDAS = [r["nivel"] for r in LEITURAS if r["nivel"] is not None]
+
+# rotulo por ONU, com ternario
+FAIXA = {
+    r["onu"]: ("sem leitura" if r["nivel"] is None
+               else "critico" if r["nivel"] < CRITICO else "normal")
+    for r in LEITURAS
+}
+
+if __name__ == "__main__":
+    print("indice:", len(POR_ONU), "ONUs |", "olts:", sorted(OLTS))
+    print("medidas:", MEDIDAS)
+    print("media:", f"{sum(MEDIDAS) / len(MEDIDAS):.2f}")
+    print("faixas:", FAIXA)
+
+    criticas = [onu for onu, faixa in FAIXA.items() if faixa == "critico"]
+    print("criticas:", criticas)
+
+    # gerador: nao materializa nada
+    print("alguma critica?", any(f == "critico" for f in FAIXA.values()))
+    print("quantas medidas abaixo de -25:", sum(1 for n in MEDIDAS if n < -25))
+
+    por_olt = {
+        olt: [r["onu"] for r in LEITURAS if r["olt"] == olt]
+        for olt in sorted(OLTS)
+    }
+    print("por olt:", por_olt)
+```
+
+```bash
+python relatorio.py
+```
+
+```text
+indice: 5 ONUs | olts: ['norte', 'sul']
+medidas: [-19.5, -31.2, -26.4, -33.1]
+media: -27.55
+faixas: {'onu-01': 'normal', 'onu-02': 'critico', 'onu-03': 'normal', 'onu-04': 'sem leitura', 'onu-05': 'critico'}
+criticas: ['onu-02', 'onu-05']
+alguma critica? True
+quantas medidas abaixo de -25: 3
+por olt: {'norte': ['onu-01', 'onu-02', 'onu-05'], 'sul': ['onu-03', 'onu-04']}
+```
+
+Cada compreensão faz uma coisa e tem um nome. O `POR_ONU` é seguro porque `onu` é único; o `por_olt` do fim resolve o agrupamento **sem** `defaultdict`, ao custo de percorrer as leituras uma vez por OLT — aceitável para cinco registros e inaceitável para cinquenta mil, onde o `defaultdict` de uma passada volta a ser a resposta.
+
+O `sum(1 for n in MEDIDAS if n < -25)` é o idioma para contar sem construir lista: um gerador de uns, somado.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- Compreensão é o laço com `append` reescrito com a saída na frente: `[saída for alvo in iterável if filtro]`. A ordem de execução é percorrer, filtrar, produzir.
+- `if` no fim **filtra**; `if`/`else` no começo **mapeia todos**. O `else` distingue os dois.
+- Trocar `[]` por `{}` com dois-pontos dá dicionário, sem dois-pontos dá conjunto, e `()` dá uma **expressão geradora**, que não constrói nada.
+- Compreensão de dicionário só é segura com chave única — chave repetida descarta silenciosamente as anteriores. Para agrupar, `defaultdict(list)`.
+- Gerador ocupa bytes em vez de megabytes, permite curto-circuito em `any`/`all` e é de uma passada só. Dentro de `sum`, `any`, `all` e `join`, dispense os colchetes.
+- Em compreensão aninhada, o primeiro `for` é o laço mais externo. A ordem invertida dá `NameError` — ou lixo silencioso, se o nome tiver vazado de um laço anterior.
+- A variável da compreensão tem escopo próprio e não vaza; a do `for` de bloco vaza.
+- Compreensão é mais rápida que laço com `append` e que `map` com `lambda`, mas a razão para usá-la é legibilidade. Efeito colateral, três `for`, `try` ou linha ilegível são sinais de que o laço é a resposta.
