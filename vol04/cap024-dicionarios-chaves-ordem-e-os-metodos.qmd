@@ -1,3 +1,919 @@
 # Dicionários: chaves, ordem e os métodos essenciais {#sec-cap024}
 
-*(em elaboracao)*
+O índice de ONUs por OLT precisa começar com uma lista vazia para cada OLT conhecida. O `dict.fromkeys` parece feito para isso:
+
+```python
+INDICE = dict.fromkeys(["norte", "sul", "leste"], [])
+INDICE["norte"].append("onu-01")
+print(INDICE)
+print(len({id(v) for v in INDICE.values()}), "listas distintas")
+```
+
+```text
+{'norte': ['onu-01'], 'sul': ['onu-01'], 'leste': ['onu-01']}
+1 listas distintas
+```
+
+A ONU entrou nas três OLTs. É o mesmo mecanismo do `[[0] * 3] * 3` do @sec-cap022, com outra roupa: `fromkeys` recebe **um** objeto e o associa a todas as chaves. Não existem três listas — existe uma, com três nomes.
+
+A correção é criar uma lista por chave, e há duas formas idiomáticas:
+
+```python
+from collections import defaultdict
+
+INDICE = {olt: [] for olt in ("norte", "sul", "leste")}
+INDICE["norte"].append("onu-01")
+print(INDICE)
+print(len({id(v) for v in INDICE.values()}), "listas distintas")
+
+d = defaultdict(list)
+d["norte"].append("onu-01")
+d["sul"].append("onu-04")
+print(dict(d))
+```
+
+```text
+{'norte': ['onu-01'], 'sul': [], 'leste': []}
+3 listas distintas
+{'norte': ['onu-01'], 'sul': ['onu-04']}
+```
+
+A primeira é uma compreensão de dicionário — a expressão `[]` roda uma vez por chave, e o capítulo 26 trata da sintaxe. A segunda nem precisa da lista de chaves: o `defaultdict` cria a lista no momento em que a chave é usada pela primeira vez.
+
+`dict.fromkeys` continua útil — para valor imutável (`dict.fromkeys(chaves, 0)`) ou para tirar duplicatas preservando a ordem (`list(dict.fromkeys(itens))`).
+
+Este capítulo é sobre a estrutura mais importante do Python: como ela acha uma chave, o que serve de chave, e quais dos seus quinze métodos você realmente usa.
+
+## Chave e valor
+
+```python
+d = {"onu": "onu-01", "nivel": -19.5, "ativa": True}
+print(d, len(d))
+print(d["onu"], "nivel" in d, "olt" in d)
+d["olt"] = "norte"
+d["nivel"] = -20.1
+print(d)
+```
+
+```text
+{'onu': 'onu-01', 'nivel': -19.5, 'ativa': True} 3
+onu-01 True False
+{'onu': 'onu-01', 'nivel': -20.1, 'ativa': True, 'olt': 'norte'}
+```
+
+Atribuir a uma chave nova **insere** no fim; atribuir a uma existente **substitui** e mantém a posição original. `in` testa **chave**, nunca valor — e é um teste de tempo constante.
+
+As formas de construir:
+
+```python
+print(dict(a=1, b=2))
+print(dict([("a", 1), ("b", 2)]))
+print(dict(zip("abc", range(3))))
+```
+
+```text
+{'a': 1, 'b': 2}
+{'a': 1, 'b': 2}
+{'a': 0, 'b': 1, 'c': 2}
+```
+
+O `dict(zip(...))` é o idioma para casar duas sequências paralelas — com `strict=True` do @sec-cap016 quando os tamanhos deveriam bater.
+
+## O que pode ser chave
+
+A chave precisa ser **hashável**: ter um `hash()` que não muda ao longo da vida do objeto. Na prática, isso significa imutável.
+
+```python
+d = {}
+d[("olt", 1, 3)] = "tupla serve"
+d[3.0] = "float serve"
+d[True] = "bool serve"
+print(d)
+d[["olt", 1]] = "lista nao"
+```
+
+```text
+{('olt', 1, 3): 'tupla serve', 3.0: 'float serve', True: 'bool serve'}
+TypeError: unhashable type: 'list'
+```
+
+E há uma consequência que pega todo mundo uma vez:
+
+```python
+colisao = {1: "int um", 1.0: "float um", True: "bool um"}
+print("chaves iguais por hash e igualdade:", colisao)
+print(hash(1), hash(1.0), hash(True))
+```
+
+```text
+chaves iguais por hash e igualdade: {1: 'bool um'}
+1 1 1
+```
+
+Três chaves entraram, uma sobrou. `1 == 1.0 == True` e os três têm o mesmo `hash`, então para o dicionário são **a mesma chave**. Repare no detalhe: a chave que ficou é a **primeira** (`1`), e o valor é o **último** (`'bool um'`) — inserir numa chave existente substitui o valor sem tocar na chave.
+
+::: {#fig-tabela-hash}
+```{.tikz}
+%%| filename: tabela-hash
+%%| alt: Como o dicionario encontra uma chave: calcula o hash, converte em indice de slot, compara a chave guardada e devolve o valor, com sondagem quando ha colisao
+\begin{tikzpicture}[
+  et/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=2.9cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  slot/.style={draw=manualgray, thick, fill=white, minimum width=3.3cm,
+               minimum height=0.5cm, font=\ttfamily\scriptsize, anchor=west},
+  cheio/.style={draw=manualgreen, very thick, fill=manualgreen!13,
+                minimum width=3.3cm, minimum height=0.5cm,
+                font=\ttfamily\scriptsize, anchor=west},
+  colide/.style={draw=manualred, very thick, fill=manualred!11,
+                 minimum width=3.3cm, minimum height=0.5cm,
+                 font=\ttfamily\scriptsize, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  idx/.style={font=\ttfamily\scriptsize, text=manualgray, anchor=east},
+  fl/.style={->,>=stealth, very thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.4, 2.9) rectangle (14.8,-5.4);
+
+  \node[et] (k) at (0.0, 1.9) {"onu-02"};
+  \node[et] (h) at (0.0, 0.2) {hash(chave)};
+  \node[et] (i) at (0.0,-1.5) {\& (n - 1)};
+  \draw[fl] (k) -- (h);
+  \draw[fl] (h) -- (i);
+
+  \node[lb, anchor=west, text width=3.0cm] at (1.7, 1.9) {a chave};
+  \node[lb, anchor=west, text width=3.2cm] at (1.7, 0.2)
+    {inteiro grande, estável na vida do objeto};
+  \node[lb, anchor=north, text width=3.6cm, align=center] at (0.0,-2.15)
+    {vira índice de slot, entre 0 e n-1};
+
+  \node[idx] at (7.1, 1.45) {0};
+  \node[slot]  at (7.2, 1.45) {vazio};
+  \node[idx] at (7.1, 0.9) {1};
+  \node[cheio] at (7.2, 0.9) {"onu-01" -> -19.5};
+  \node[idx] at (7.1, 0.35) {2};
+  \node[colide] at (7.2, 0.35) {"onu-07" -> -22.0};
+  \node[idx] at (7.1,-0.2) {3};
+  \node[cheio] at (7.2,-0.2) {"onu-02" -> -31.2};
+  \node[idx] at (7.1,-0.75) {4};
+  \node[slot]  at (7.2,-0.75) {vazio};
+
+  \draw[fl, manualred] (i.east) to[out=0,in=180] (7.15, 0.35);
+  \draw[fl, manualgreen, very thick] (10.6, 0.35) to[out=0,in=0] (10.6,-0.2);
+
+  \node[lb, anchor=west, text width=3.4cm, text=manualred] at (11.2, 0.55)
+    {\textbf{colisão}: o slot está ocupado por outra chave};
+  \node[lb, anchor=west, text width=3.4cm, text=manualgreen] at (11.2,-0.5)
+    {\textbf{sondagem}: tenta o próximo até achar ou concluir que não existe};
+
+  \node[lb, text width=14.0cm] at (-1.2,-4.1)
+    {A busca é \textbf{tempo constante} porque não percorre nada: calcula o
+     índice e compara. O preço é que a chave precisa ser \textbf{hashável} ---
+     se o objeto pudesse mudar depois de guardado, o \texttt{hash} mudaria com
+     ele e a chave ficaria perdida num slot que ninguém mais consulta. É por
+     isso que \texttt{list} não pode ser chave e \texttt{tuple} de imutáveis
+     pode. Quando a tabela passa de dois terços cheia, o dicionário é
+     reconstruído maior --- por isso a memória cresce em saltos.};
+\end{tikzpicture}
+```
+Hash vira índice de slot; a comparação confirma a chave; a colisão vira sondagem.
+:::
+
+## Acessar: `[]`, `get`, `setdefault`
+
+```python
+NIVEIS = {"onu-01": -19.5, "onu-02": -31.2}
+
+NIVEIS["onu-99"]
+```
+
+```text
+KeyError: 'onu-99'
+```
+
+```python
+print("get sem padrao: ", NIVEIS.get("onu-99"))
+print("get com padrao: ", NIVEIS.get("onu-99", float("-inf")))
+print("setdefault novo:", NIVEIS.setdefault("onu-03", -25.0))
+print("setdefault velho:", NIVEIS.setdefault("onu-01", 0.0))
+print("dicionario agora:", NIVEIS)
+```
+
+```text
+get sem padrao:  None
+get com padrao:  -inf
+setdefault novo: -25.0
+setdefault velho: -19.5
+dicionario agora: {'onu-01': -19.5, 'onu-02': -31.2, 'onu-03': -25.0}
+```
+
+A diferença entre `get` e `setdefault` é que o segundo **escreve**: quando a chave não existe, ele a insere com o padrão e devolve o padrão. Quando existe, devolve o que já estava e não toca em nada.
+
+::: {#fig-acesso-dict}
+```{.tikz}
+%%| filename: acesso-dict
+%%| alt: Guia de escolha entre colchetes, get, setdefault, defaultdict e Counter conforme a chave ausente ser erro, ter padrao ou precisar acumular
+\begin{tikzpicture}[
+  op/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!12,
+             text width=3.5cm, align=left, minimum height=0.62cm,
+             font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.8, 2.0) rectangle (14.8,-5.6);
+
+  \node[hd] at (0.0, 1.5) {quando a chave pode faltar};
+  \node[hd] at (4.4, 1.5) {use};
+  \node[hd] at (8.6, 1.5) {porque};
+
+  \node[lb, text width=4.2cm] at (0.0, 0.6) {faltar é \textbf{erro} de programa};
+  \node[op] at (4.4, 0.6) {d[chave]};
+  \node[lb, text width=6.0cm] at (8.6, 0.6)
+    {\texttt{KeyError} alto é melhor que valor errado silencioso};
+
+  \node[lb, text width=4.2cm] at (0.0,-0.5) {faltar é \textbf{normal} e há padrão};
+  \node[op] at (4.4,-0.5) {d.get(chave, pad)};
+  \node[lb, text width=6.0cm] at (8.6,-0.5)
+    {só lê; não insere nada no dicionário};
+
+  \node[lb, text width=4.2cm] at (0.0,-1.6) {precisa \textbf{acumular} na chave};
+  \node[op] at (4.4,-1.6) {d.setdefault(k, [])};
+  \node[lb, text width=6.0cm] at (8.6,-1.6)
+    {insere e devolve o mesmo objeto, pronto para \texttt{append}};
+
+  \node[lb, text width=4.2cm] at (0.0,-2.7) {acumula \textbf{sempre}, em todo o código};
+  \node[op, draw=manualgreen, fill=manualgreen!13] at (4.4,-2.7) {defaultdict(list)};
+  \node[lb, text width=6.0cm] at (8.6,-2.7)
+    {a fábrica roda sozinha no primeiro acesso --- mas cria a chave ao
+     \textbf{ler} também};
+
+  \node[lb, text width=4.2cm] at (0.0,-3.8) {só quer \textbf{contar}};
+  \node[op, draw=manualgreen, fill=manualgreen!13] at (4.4,-3.8) {Counter(iteravel)};
+  \node[lb, text width=6.0cm] at (8.6,-3.8)
+    {conta em C, devolve 0 para ausente e traz \texttt{most\_common}};
+
+  \node[lb, text width=14.0cm] at (-0.6,-5.0)
+    {O antipadrão que os cinco substituem é
+     \texttt{if k in d: d[k] += 1 else: d[k] = 1} --- duas buscas onde uma
+     basta, e uma linha a mais para cada caso.};
+\end{tikzpicture}
+```
+Cinco formas de lidar com a chave ausente, e quando cada uma é a certa.
+:::
+
+## As views
+
+`keys()`, `values()` e `items()` não devolvem listas: devolvem **janelas** que acompanham o dicionário.
+
+```python
+d = {"a": 1, "b": 2, "c": 3}
+print(d.keys())
+print(d.values())
+print(d.items())
+chaves = d.keys()
+d["e"] = 5
+print("a view acompanhou:", chaves)
+print("view e conjunto:", d.keys() & {"a", "e", "z"})
+print(list(d.items())[0], type(list(d.items())[0]))
+```
+
+```text
+dict_keys(['a', 'b', 'c'])
+dict_values([1, 2, 3])
+dict_items([('a', 1), ('b', 2), ('c', 3)])
+a view acompanhou: dict_keys(['a', 'b', 'c', 'e'])
+view e conjunto: {'e', 'a'}
+```
+
+```text
+('a', 1) <class 'tuple'>
+```
+
+A `chaves` foi criada antes do `d["e"] = 5` e mesmo assim enxerga o `e`. Isso é ótimo (não copia nada) e é justamente por isso que **modificar o dicionário durante a iteração levanta `RuntimeError`**, como o @sec-cap016 mostrou — a view está olhando para o dicionário de verdade.
+
+`keys()` e `items()` também suportam operações de conjunto (`&`, `|`, `-`, `^`), o que é o jeito mais curto de comparar dois dicionários. É assunto do capítulo 25, e funciona aqui porque as chaves são únicas e hasháveis.
+
+Cada item de `items()` é uma **tupla** `(chave, valor)` — daí o desempacotamento no `for` do @sec-cap023.
+
+## Modificar
+
+```python
+d = {"a": 1, "b": 2}
+d.update({"b": 20, "c": 3})
+print("update  ", d)
+print("pop     ", d.pop("a"), d)
+print("pop pad ", d.pop("zzz", "ausente"))
+print("popitem ", d.popitem(), d)
+del d["b"]
+print("del     ", d)
+```
+
+```text
+update   {'a': 1, 'b': 20, 'c': 3}
+pop      1 {'b': 20, 'c': 3}
+pop pad  ausente
+popitem  ('c', 3) {'b': 20}
+del      {}
+```
+
+`pop` devolve o valor removido e aceita padrão; `popitem` remove e devolve o **último** par inserido (é uma pilha, desde o 3.7), e levanta `KeyError` no dicionário vazio.
+
+Desde o **Python 3.9**, há operador de união:
+
+```python
+e = {"x": 1} | {"y": 2}
+print("uniao 3.9", e)
+e |= {"z": 3}
+print("|=       ", e)
+print("fusao com **:", {**{"x": 0}, **{"y": 2}})
+```
+
+```text
+uniao 3.9 {'x': 1, 'y': 2}
+|=        {'x': 1, 'y': 2, 'z': 3}
+fusao com **: {'x': 0, 'y': 2}
+```
+
+`|` cria um dicionário novo; `|=` atualiza no lugar (é `update`). Em conflito, **o da direita vence** — nas três formas. A sintaxe `{**a, **b}` é a de antes do 3.9 e continua válida.
+
+## Ordem
+
+Desde o **Python 3.7** a ordem de inserção é garantia da linguagem, não detalhe de implementação:
+
+```python
+d = {"zebra": 1, "abacaxi": 2, "maca": 3}
+print("ordem de insercao:", list(d))
+print("sorted por chave: ", sorted(d))
+print("sorted por valor: ", sorted(d.items(), key=lambda par: par[1], reverse=True))
+print("reversed 3.8:     ", list(reversed(d)))
+```
+
+```text
+ordem de insercao: ['zebra', 'abacaxi', 'maca']
+sorted por chave:  ['abacaxi', 'maca', 'zebra']
+sorted por valor:  [('maca', 3), ('abacaxi', 2), ('zebra', 1)]
+reversed 3.8:      ['maca', 'abacaxi', 'zebra']
+```
+
+`sorted(d)` ordena as **chaves** e devolve lista; ordenar por valor é `sorted(d.items(), key=...)` do @sec-cap021. Um dicionário nunca se mantém ordenado sozinho — se você precisa de ordem por valor o tempo todo, o que você quer é outra estrutura.
+
+Com a ordem garantida, `collections.OrderedDict` ficou restrito a dois casos: quando a **igualdade** precisa levar a ordem em conta (`OrderedDict` compara ordem, `dict` não) e quando você precisa de `move_to_end`.
+
+## Agrupar e contar
+
+É o uso mais frequente de dicionário em código real, e há quatro maneiras de escrevê-lo:
+
+```python
+from collections import Counter, defaultdict
+
+LEITURAS = [
+    ("onu-01", "norte", -19.5),
+    ("onu-02", "norte", -31.2),
+    ("onu-03", "sul", -26.4),
+    ("onu-04", "sul", -8.0),
+    ("onu-05", "norte", -33.1),
+]
+
+por_olt = {}
+for onu, olt, _ in LEITURAS:
+    por_olt.setdefault(olt, []).append(onu)
+print("setdefault:", por_olt)
+
+grupos = defaultdict(list)
+for onu, olt, _ in LEITURAS:
+    grupos[olt].append(onu)
+print("defaultdict:", dict(grupos))
+
+contagem = {}
+for _, olt, _ in LEITURAS:
+    contagem[olt] = contagem.get(olt, 0) + 1
+print("get + 1:", contagem)
+print("Counter:", Counter(olt for _, olt, _ in LEITURAS))
+print("mais comum:", Counter(olt for _, olt, _ in LEITURAS).most_common(1))
+```
+
+```text
+setdefault: {'norte': ['onu-01', 'onu-02', 'onu-05'], 'sul': ['onu-03', 'onu-04']}
+defaultdict: {'norte': ['onu-01', 'onu-02', 'onu-05'], 'sul': ['onu-03', 'onu-04']}
+get + 1: {'norte': 3, 'sul': 2}
+Counter: Counter({'norte': 3, 'sul': 2})
+mais comum: [('norte', 3)]
+```
+
+Uma advertência sobre `defaultdict`: ele cria a chave também quando você só **lê**.
+
+```python
+d = defaultdict(list)
+if d["chave-que-nao-existe"]:
+    ...
+# a chave agora existe, com []
+```
+
+Quando isso importa, use `d.get(k, [])` para consultar e reserve o acesso por colchetes para quando você realmente vai acumular. E converta para `dict` antes de devolver: `dict(grupos)` evita que quem recebeu crie chaves sem querer.
+
+## Memória e velocidade
+
+```python
+import sys
+
+d = {}
+anterior = 0
+for i in range(12):
+    d[i] = i
+    atual = sys.getsizeof(d)
+    if atual != anterior:
+        print(f"  len={len(d):>3}  {atual} bytes  <- realocou")
+        anterior = atual
+```
+
+```text
+  len=  1  224 bytes  <- realocou
+  len=  6  352 bytes  <- realocou
+  len= 11  632 bytes  <- realocou
+```
+
+Cresce em saltos, como a lista, mas com mais folga: o dicionário é reconstruído quando passa de dois terços da capacidade, para manter as colisões raras.
+
+O que ele compra com essa memória:
+
+```python
+import timeit
+
+setup = (
+    'chaves = [f"onu-{i:05d}" for i in range(20000)]; '
+    "lista = list(chaves); d = {k: 1 for k in chaves}; "
+    'alvo = "onu-19999"'
+)
+tl = timeit.timeit("alvo in lista", setup=setup, number=2000)
+td = timeit.timeit("alvo in d", setup=setup, number=2000)
+print(f"in lista  {tl * 1000:9.2f} ms")
+print(f"in dict   {td * 1000:9.2f} ms")
+print(f"razao     {tl / td:9.0f}x")
+```
+
+```text
+in lista     243.02 ms
+in dict        0.05 ms
+razao          5212x
+```
+
+Três mil vezes. E a diferença **cresce com o tamanho**, porque a lista varre e o dicionário calcula. Sempre que um `in` aparece dentro de um laço, a estrutura provavelmente está errada.
+
+## 🐍 Jeito Pythônico
+
+**`dict.fromkeys` só com valor imutável.** Para valor mutável, compreensão ou `defaultdict`.
+
+**Escolha o acesso pela intenção.** `[]` quando faltar é erro; `.get` quando faltar é normal; `setdefault`/`defaultdict` quando vai acumular; `Counter` quando é contagem.
+
+```python
+# antipadrão
+if olt in grupos:
+    grupos[olt].append(onu)
+else:
+    grupos[olt] = [onu]
+```
+
+```python
+# pythônico
+grupos.setdefault(olt, []).append(onu)
+```
+
+**Itere direto, e sobre `.items()` quando precisar dos dois.** `for k in d:` dá as chaves; `for k, v in d.items():` dá o par. Escrever `for k in d.keys():` é redundante, e `for k in d: v = d[k]` faz duas buscas.
+
+**Não use `list(d.keys())` só para percorrer** — a view já é iterável. Materialize apenas quando for modificar o dicionário durante o laço.
+
+**Compare dicionários com operações de view.** `a.keys() - b.keys()` dá as chaves que só existem em `a`, sem laço nenhum.
+
+**Chave composta é tupla**, nunca string concatenada — a regra do @sec-cap023.
+
+**`in` numa lista dentro de um laço é o sinal.** Troque a lista por `dict` ou `set` e o programa muda de categoria de desempenho.
+
+**`|` para mesclar (3.9+).** `{**a, **b}` continua funcionando e é o que se usa em código que precisa rodar em versões antigas.
+
+Sobre versões:
+
+- **Python 3.7** — ordem de inserção vira **garantia da linguagem** (era detalhe de implementação no 3.6).
+- **Python 3.8** — `reversed(d)` passou a funcionar em dicionários.
+- **Python 3.9** — operadores `|` e `|=` para dicionários (PEP 584).
+- **Python 3.12** — dicionários usados como `__dict__` de instância ficaram mais econômicos, e as compreensões de dicionário ganharam a mesma otimização das de lista (PEP 709).
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o `fromkeys` compartilhado, ver o `hash` unificar `1`, `1.0` e `True`, comparar as cinco formas de acesso e medir a diferença entre procurar numa lista e num dicionário.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab24 && cd ~/lab24
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O `fromkeys` compartilhado.**
+
+```bash
+python -c "
+INDICE = dict.fromkeys(['norte', 'sul', 'leste'], [])
+INDICE['norte'].append('onu-01')
+print(INDICE)
+print(len({id(v) for v in INDICE.values()}), 'listas distintas')
+"
+```
+
+```text
+{'norte': ['onu-01'], 'sul': ['onu-01'], 'leste': ['onu-01']}
+1 listas distintas
+```
+
+**3. As duas correções.**
+
+```bash
+python -c "
+from collections import defaultdict
+INDICE = {olt: [] for olt in ('norte', 'sul', 'leste')}
+INDICE['norte'].append('onu-01')
+print(INDICE)
+print(len({id(v) for v in INDICE.values()}), 'listas distintas')
+d = defaultdict(list)
+d['norte'].append('onu-01')
+d['sul'].append('onu-04')
+print(dict(d))
+"
+```
+
+```text
+{'norte': ['onu-01'], 'sul': [], 'leste': []}
+3 listas distintas
+{'norte': ['onu-01'], 'sul': ['onu-04']}
+```
+
+**4. Construir e modificar.**
+
+```bash
+python -c "
+d = {'onu': 'onu-01', 'nivel': -19.5, 'ativa': True}
+print(d, len(d))
+print(d['onu'], 'nivel' in d, 'olt' in d)
+d['olt'] = 'norte'
+d['nivel'] = -20.1
+print(d)
+print(dict(a=1, b=2))
+print(dict([('a', 1), ('b', 2)]))
+print(dict(zip('abc', range(3))))
+"
+```
+
+```text
+{'onu': 'onu-01', 'nivel': -19.5, 'ativa': True} 3
+onu-01 True False
+{'onu': 'onu-01', 'nivel': -20.1, 'ativa': True, 'olt': 'norte'}
+{'a': 1, 'b': 2}
+{'a': 1, 'b': 2}
+{'a': 0, 'b': 1, 'c': 2}
+```
+
+O `nivel` mudou de valor e **não** mudou de posição.
+
+**5. O que serve de chave.** Crie `chaves.py`:
+
+```python
+d = {}
+d[("olt", 1, 3)] = "tupla serve"
+d[3.0] = "float serve"
+d[True] = "bool serve"
+print(d)
+try:
+    d[["olt", 1]] = "lista nao"
+except TypeError as e:
+    print("TypeError:", e)
+
+colisao = {1: "int um", 1.0: "float um", True: "bool um"}
+print("chaves iguais por hash e igualdade:", colisao)
+print(hash(1), hash(1.0), hash(True))
+```
+
+```bash
+python chaves.py
+```
+
+```text
+{('olt', 1, 3): 'tupla serve', 3.0: 'float serve', True: 'bool serve'}
+TypeError: unhashable type: 'list'
+chaves iguais por hash e igualdade: {1: 'bool um'}
+1 1 1
+```
+
+Três pares escritos, um par guardado — e a chave impressa é `1`, não `True`.
+
+**6. As formas de acesso.** Crie `acesso.py`:
+
+```python
+NIVEIS = {"onu-01": -19.5, "onu-02": -31.2}
+
+try:
+    print(NIVEIS["onu-99"])
+except KeyError as e:
+    print("KeyError:", e)
+
+print("get sem padrao: ", NIVEIS.get("onu-99"))
+print("get com padrao: ", NIVEIS.get("onu-99", float("-inf")))
+print("setdefault novo:", NIVEIS.setdefault("onu-03", -25.0))
+print("setdefault velho:", NIVEIS.setdefault("onu-01", 0.0))
+print("dicionario agora:", NIVEIS)
+```
+
+```bash
+python acesso.py
+```
+
+```text
+KeyError: 'onu-99'
+get sem padrao:  None
+get com padrao:  -inf
+setdefault novo: -25.0
+setdefault velho: -19.5
+dicionario agora: {'onu-01': -19.5, 'onu-02': -31.2, 'onu-03': -25.0}
+```
+
+O `setdefault("onu-01", 0.0)` não sobrescreveu nada, e o `setdefault("onu-03", -25.0)` inseriu — a última linha prova as duas coisas.
+
+**7. As views são janelas.**
+
+```bash
+python -c "
+d = {'a': 1, 'b': 2, 'c': 3}
+print(d.keys())
+print(d.values())
+print(d.items())
+chaves = d.keys()
+d['e'] = 5
+print('a view acompanhou:', chaves)
+print('view e conjunto:', d.keys() & {'a', 'e', 'z'})
+print(list(d.items())[0], type(list(d.items())[0]))
+"
+```
+
+```text
+dict_keys(['a', 'b', 'c'])
+dict_values([1, 2, 3])
+dict_items([('a', 1), ('b', 2), ('c', 3)])
+a view acompanhou: dict_keys(['a', 'b', 'c', 'e'])
+view e conjunto: {'e', 'a'}
+('a', 1) <class 'tuple'>
+```
+
+A ordem do resultado de `&` não é a de inserção: o resultado é um `set`, e conjunto não tem ordem.
+
+**8. Modificar e mesclar.**
+
+```bash
+python -c "
+d = {'a': 1, 'b': 2}
+d.update({'b': 20, 'c': 3})
+print('update  ', d)
+print('pop     ', d.pop('a'), d)
+print('pop pad ', d.pop('zzz', 'ausente'))
+print('popitem ', d.popitem(), d)
+del d['b']
+print('del     ', d)
+e = {'x': 1} | {'y': 2}
+print('uniao 3.9', e)
+e |= {'z': 3}
+print('|=       ', e)
+print('fusao com **:', {**{'x': 0}, **{'y': 2}})
+"
+```
+
+```text
+update   {'a': 1, 'b': 20, 'c': 3}
+pop      1 {'b': 20, 'c': 3}
+pop pad  ausente
+popitem  ('c', 3) {'b': 20}
+del      {}
+uniao 3.9 {'x': 1, 'y': 2}
+|=        {'x': 1, 'y': 2, 'z': 3}
+fusao com **: {'x': 0, 'y': 2}
+```
+
+**9. Ordem.**
+
+```bash
+python -c "
+d = {'zebra': 1, 'abacaxi': 2, 'maca': 3}
+print('ordem de insercao:', list(d))
+print('sorted por chave: ', sorted(d))
+print('sorted por valor: ', sorted(d.items(), key=lambda par: par[1], reverse=True))
+print('reversed 3.8:     ', list(reversed(d)))
+"
+```
+
+```text
+ordem de insercao: ['zebra', 'abacaxi', 'maca']
+sorted por chave:  ['abacaxi', 'maca', 'zebra']
+sorted por valor:  [('maca', 3), ('abacaxi', 2), ('zebra', 1)]
+reversed 3.8:      ['maca', 'abacaxi', 'zebra']
+```
+
+**10. As quatro formas de agrupar e contar.** Crie `agrupa.py`:
+
+```python
+from collections import Counter, defaultdict
+
+LEITURAS = [
+    ("onu-01", "norte", -19.5),
+    ("onu-02", "norte", -31.2),
+    ("onu-03", "sul", -26.4),
+    ("onu-04", "sul", -8.0),
+    ("onu-05", "norte", -33.1),
+]
+
+# na mao, com setdefault
+por_olt = {}
+for onu, olt, _ in LEITURAS:
+    por_olt.setdefault(olt, []).append(onu)
+print("setdefault:", por_olt)
+
+# com defaultdict
+grupos = defaultdict(list)
+for onu, olt, _ in LEITURAS:
+    grupos[olt].append(onu)
+print("defaultdict:", dict(grupos))
+
+# contagem na mao e com Counter
+contagem = {}
+for _, olt, _ in LEITURAS:
+    contagem[olt] = contagem.get(olt, 0) + 1
+print("get + 1:", contagem)
+print("Counter:", Counter(olt for _, olt, _ in LEITURAS))
+print("mais comum:", Counter(olt for _, olt, _ in LEITURAS).most_common(1))
+```
+
+```bash
+python agrupa.py
+```
+
+```text
+setdefault: {'norte': ['onu-01', 'onu-02', 'onu-05'], 'sul': ['onu-03', 'onu-04']}
+defaultdict: {'norte': ['onu-01', 'onu-02', 'onu-05'], 'sul': ['onu-03', 'onu-04']}
+get + 1: {'norte': 3, 'sul': 2}
+Counter: Counter({'norte': 3, 'sul': 2})
+mais comum: [('norte', 3)]
+```
+
+**11. A memória em saltos.**
+
+```bash
+python -c "
+import sys
+d = {}
+anterior = 0
+for i in range(12):
+    d[i] = i
+    atual = sys.getsizeof(d)
+    if atual != anterior:
+        print(f'  len={len(d):>3}  {atual} bytes  <- realocou')
+        anterior = atual
+print('dict de 5:', sys.getsizeof({i: i for i in range(5)}), 'bytes')
+"
+```
+
+```text
+  len=  1  224 bytes  <- realocou
+  len=  6  352 bytes  <- realocou
+  len= 11  632 bytes  <- realocou
+dict de 5: 224 bytes
+```
+
+**12. `in` na lista contra `in` no dicionário.** Crie `medir.py`:
+
+```python
+import timeit
+
+setup = (
+    'chaves = [f"onu-{i:05d}" for i in range(20000)]; '
+    "lista = list(chaves); d = {k: 1 for k in chaves}; "
+    'alvo = "onu-19999"'
+)
+tl = timeit.timeit("alvo in lista", setup=setup, number=2000)
+td = timeit.timeit("alvo in d", setup=setup, number=2000)
+print(f"in lista  {tl * 1000:9.2f} ms")
+print(f"in dict   {td * 1000:9.2f} ms")
+print(f"razao     {tl / td:9.0f}x")
+```
+
+```bash
+python medir.py
+```
+
+```text
+in lista     243.02 ms
+in dict        0.05 ms
+razao          5212x
+```
+
+O alvo é o **último** elemento, que é o pior caso da lista e um caso qualquer do dicionário. É essa a diferença entre percorrer e calcular. A razão exata oscila bastante entre execuções — o tempo do dicionário é tão pequeno que o ruído de medição domina —, mas a ordem de grandeza é sempre a mesma.
+
+**13. O inventário indexado.** Crie `inventario.py`:
+
+```python
+"""Indice de ONUs por OLT: agrupamento, contagem e consulta segura."""
+
+from collections import Counter, defaultdict
+
+LEITURAS = [
+    {"onu": "onu-01", "olt": "norte", "nivel": -19.5},
+    {"onu": "onu-02", "olt": "norte", "nivel": -31.2},
+    {"onu": "onu-03", "olt": "sul", "nivel": -26.4},
+    {"onu": "onu-04", "olt": "sul", "nivel": None},
+    {"onu": "onu-05", "olt": "norte", "nivel": -33.1},
+]
+
+CRITICO = -28.0
+
+
+def indexar(leituras):
+    """onu -> registro, para consulta em tempo constante."""
+    return {r["onu"]: r for r in leituras}
+
+
+def agrupar(leituras):
+    """olt -> lista de registros, na ordem em que apareceram."""
+    grupos = defaultdict(list)
+    for r in leituras:
+        grupos[r["olt"]].append(r)
+    return dict(grupos)
+
+
+def faixa(nivel):
+    if nivel is None:
+        return "sem leitura"
+    return "critico" if nivel < CRITICO else "normal"
+
+
+def resumo(leituras):
+    return Counter(faixa(r["nivel"]) for r in leituras)
+
+
+if __name__ == "__main__":
+    indice = indexar(LEITURAS)
+    print("consulta direta:", indice["onu-03"]["nivel"])
+    print("consulta segura:", indice.get("onu-99", {}).get("nivel", "nao cadastrada"))
+
+    for olt, registros in agrupar(LEITURAS).items():
+        medidos = [r["nivel"] for r in registros if r["nivel"] is not None]
+        media = sum(medidos) / len(medidos)
+        print(f"{olt}: {len(registros)} ONUs, media {media:>7.2f} dBm")
+        for r in sorted(registros, key=lambda x: (x["nivel"] is None, x["nivel"])):
+            print(f"   {r['onu']}  {str(r['nivel']):>6}  {faixa(r['nivel'])}")
+
+    print("resumo:", dict(resumo(LEITURAS)))
+    piores = dict(sorted(
+        ((r["onu"], r["nivel"]) for r in LEITURAS if r["nivel"] is not None),
+        key=lambda par: par[1],
+    )[:2])
+    print("dois piores:", piores)
+```
+
+```bash
+python inventario.py
+```
+
+```text
+consulta direta: -26.4
+consulta segura: nao cadastrada
+norte: 3 ONUs, media  -27.93 dBm
+   onu-05   -33.1  critico
+   onu-02   -31.2  critico
+   onu-01   -19.5  normal
+sul: 2 ONUs, media  -26.40 dBm
+   onu-03   -26.4  normal
+   onu-04    None  sem leitura
+resumo: {'normal': 2, 'critico': 2, 'sem leitura': 1}
+dois piores: {'onu-05': -33.1, 'onu-02': -31.2}
+```
+
+Três detalhes valem a leitura. A **consulta segura** encadeia dois `get` — `indice.get("onu-99", {})` devolve um dicionário vazio, e o `.get` seguinte encontra nele o padrão; é o idioma para navegar em estrutura aninhada sem `KeyError`.
+
+A **chave de ordenação** `(x["nivel"] is None, x["nivel"])` resolve o problema de ordenar com `None` no meio: o primeiro campo é `False` para quem tem leitura e `True` para quem não tem, então os `None` vão todos para o fim — e o `None` nunca chega a ser comparado com um `float`, porque a comparação de tuplas para no primeiro campo que difere. Sem esse truque, seria `TypeError`.
+
+E o `dict(sorted(...)[:2])` no fim mostra o caminho de ida e volta: `items` viram lista de tuplas, são ordenadas e fatiadas, e voltam a dicionário.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- `dict.fromkeys(chaves, [])` dá **uma** lista para todas as chaves. Para valor mutável, use compreensão ou `defaultdict`.
+- O dicionário acha a chave calculando `hash` e indo direto ao slot — tempo constante, sem varredura. Por isso a chave precisa ser hashável (imutável na prática).
+- `1`, `1.0` e `True` são a mesma chave; a chave guardada é a primeira inserida, o valor é o último atribuído.
+- `[]` quando faltar é erro, `.get` quando faltar é normal, `setdefault`/`defaultdict` quando vai acumular, `Counter` quando é contagem.
+- `keys()`, `values()` e `items()` são **views** dinâmicas, não cópias; `keys()` e `items()` aceitam operações de conjunto.
+- Atribuir a chave existente troca o valor e mantém a posição; a ordem de inserção é garantida desde o 3.7; `popitem` remove o último.
+- `|` e `|=` (3.9) mesclam dicionários, com o da direita vencendo em conflito.
+- Procurar num dicionário é milhares de vezes mais rápido do que num `list`, e a diferença cresce com o tamanho: `in` numa lista dentro de um laço é sinal de estrutura errada.
