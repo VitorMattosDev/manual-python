@@ -45,7 +45,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 024** - Dicionários: chaves, ordem e os métodos essenciais - `vol04/cap024-dicionarios-chaves-ordem-e-os-metodos.qmd`
 - [x] **cap 025** - Conjuntos e operações de conjunto - `vol04/cap025-conjuntos-e-operacoes-de-conjunto.qmd`
 - [x] **cap 026** - Compreensões de lista, dicionário e conjunto - `vol04/cap026-compreensoes-de-lista-dicionario-e-conjunto.qmd`
-- [ ] **cap 027** - Ordenação, chaves de ordenação e comparação de objetos - `vol04/cap027-ordenacao-chaves-de-ordenacao-e-comparacao-de.qmd`
+- [x] **cap 027** - Ordenação, chaves de ordenação e comparação de objetos - `vol04/cap027-ordenacao-chaves-de-ordenacao-e-comparacao-de.qmd`
 - [ ] **cap 028** - Escolhendo a estrutura certa: custo das operações - `vol04/cap028-escolhendo-a-estrutura-certa-custo-das.qmd`
 
 ## Fase 2 — Python Estruturado
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (26 concluidos).
+**Total:** 104 capitulos em 16 volumes (27 concluidos).
 
