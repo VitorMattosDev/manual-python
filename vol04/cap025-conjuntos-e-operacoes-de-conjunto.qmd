@@ -1,3 +1,802 @@
 # Conjuntos e operações de conjunto {#sec-cap025}
 
-*(em elaboracao)*
+O coletor precisa ignorar as ONUs que estão na lista de bloqueio. A constante fica no topo do arquivo, vazia por enquanto — a equipe preenche conforme os chamados aparecem:
+
+```python
+BLOQUEADAS = {}
+
+LEITURAS = ["onu-01", "onu-02", "onu-03", "onu-05"]
+
+print("tipo de BLOQUEADAS:", type(BLOQUEADAS))
+for onu in LEITURAS:
+    if onu in BLOQUEADAS:
+        print(f"  {onu}: bloqueada, ignorando")
+        continue
+    print(f"  {onu}: processando")
+```
+
+```text
+tipo de BLOQUEADAS: <class 'dict'>
+  onu-01: processando
+  onu-02: processando
+  onu-03: processando
+  onu-05: processando
+```
+
+Enquanto a constante estiver vazia, tudo funciona — e é essa a parte perigosa. `{}` **não é um conjunto vazio: é um dicionário vazio**. No dia em que alguém escrever `BLOQUEADAS = {"onu-02", "onu-05"}` o código passa a funcionar, e ninguém nunca descobre que a versão anterior nunca teria bloqueado nada, porque `in` num dicionário testa **chaves** — e o dicionário estava vazio.
+
+Pior: se alguém "corrigir" acrescentando com `BLOQUEADAS["onu-02"] = True`, o filtro passa a funcionar por acidente, e a estrutura errada fica no código.
+
+O conjunto vazio se escreve `set()`:
+
+```python
+print(type({}), type(set()), type({1, 2}), type({"a": 1}))
+print(set(), len(set()))
+```
+
+```text
+<class 'dict'> <class 'set'> <class 'set'> <class 'dict'>
+set() 0
+```
+
+As chaves servem aos dois tipos, e o desempate é o conteúdo: com `:` é dicionário, sem `:` é conjunto, e vazio é dicionário — porque o dicionário chegou primeiro na linguagem.
+
+Este capítulo é sobre a estrutura que responde a duas perguntas muito frequentes em tempo constante: *este item já apareceu?* e *o que estes dois grupos têm em comum?*
+
+## Um conjunto é um dicionário sem valores
+
+Por dentro é a mesma tabela hash do @sec-cap024, guardando só as chaves. Daí vêm as três propriedades:
+
+- **Elementos únicos.** Inserir de novo não faz nada.
+- **Elementos hasháveis.** Vale a mesma regra da chave de dicionário.
+- **Sem ordem.** Não há índice, não há fatiamento, e a ordem de iteração não é a de inserção.
+
+```python
+print(set("abracadabra"))
+print(set([1, 2, 2, 3]), set(("a", "a")))
+print(bool(set()), bool({0}))
+```
+
+```text
+{'r', 'c', 'd', 'a', 'b'}
+{1, 2, 3} {'a'}
+False True
+```
+
+A primeira linha sai **em outra ordem a cada execução**: o Python aleatoriza o hash de strings entre processos, justamente para que ninguém escreva código que dependa dessa ordem. O conjunto vazio é falso e `{0}` é verdadeiro — a regra de valor-verdade do @sec-cap011 aplicada a contêiner.
+
+A unicidade usa igualdade e hash, então a armadilha do @sec-cap024 reaparece:
+
+```python
+print({1, 1.0, True, "um"})
+print(len({1, 1.0, True}))
+{[1, 2]}
+```
+
+```text
+{1, 'um'}
+1
+TypeError: unhashable type: 'list'
+```
+
+Três formas de escrever o número um contam como **um** elemento. E lista não entra em conjunto, pelo mesmo motivo pelo qual não é chave.
+
+## As quatro operações
+
+```python
+norte = {"onu-01", "onu-02", "onu-03"}
+criticas = {"onu-02", "onu-05"}
+print("uniao        |  ", sorted(norte | criticas))
+print("intersecao   &  ", sorted(norte & criticas))
+print("diferenca    -  ", sorted(norte - criticas))
+print("dif. simet.  ^  ", sorted(norte ^ criticas))
+```
+
+```text
+uniao        |   ['onu-01', 'onu-02', 'onu-03', 'onu-05']
+intersecao   &   ['onu-02']
+diferenca    -   ['onu-01', 'onu-03']
+dif. simet.  ^   ['onu-01', 'onu-03', 'onu-05']
+```
+
+O `sorted` está aí só para a saída ser estável na página — sem ele, a ordem varia.
+
+::: {#fig-operacoes-conjunto}
+```{.tikz}
+%%| filename: operacoes-conjunto
+%%| alt: Quatro diagramas de Venn mostrando uniao, intersecao, diferenca e diferenca simetrica entre dois conjuntos, com o operador e o metodo equivalente de cada uma
+\begin{tikzpicture}[
+  ct/.style={draw=manualgray, very thick},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  op/.style={font=\ttfamily\small, align=center},
+  nm/.style={font=\scriptsize\bfseries, text=manualgray, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.9, 2.4) rectangle (14.4,-4.4);
+
+  % 1. uniao
+  \begin{scope}[shift={(0,0)}]
+    \fill[manualblue!35] (-0.45,0) circle (0.85);
+    \fill[manualblue!35] (0.45,0) circle (0.85);
+    \draw[ct] (-0.45,0) circle (0.85);
+    \draw[ct] (0.45,0) circle (0.85);
+    \node[op] at (0,-1.5) {a | b};
+    \node[nm] at (0,-2.0) {união};
+    \node[lb] at (0,-2.5) {\texttt{a.union(b)}};
+    \node[lb, text width=3.2cm] at (0,-3.3) {tudo que está em pelo menos um};
+  \end{scope}
+
+  % 2. intersecao
+  \begin{scope}[shift={(3.9,0)}]
+    \begin{scope}
+      \clip (-0.45,0) circle (0.85);
+      \fill[manualgreen!40] (0.45,0) circle (0.85);
+    \end{scope}
+    \draw[ct] (-0.45,0) circle (0.85);
+    \draw[ct] (0.45,0) circle (0.85);
+    \node[op] at (0,-1.5) {a \& b};
+    \node[nm] at (0,-2.0) {interseção};
+    \node[lb] at (0,-2.5) {\texttt{a.intersection(b)}};
+    \node[lb, text width=3.2cm] at (0,-3.3) {só o que está nos dois};
+  \end{scope}
+
+  % 3. diferenca
+  \begin{scope}[shift={(7.8,0)}]
+    \fill[manualyellow!55] (-0.45,0) circle (0.85);
+    \fill[white] (0.45,0) circle (0.85);
+    \draw[ct] (-0.45,0) circle (0.85);
+    \draw[ct] (0.45,0) circle (0.85);
+    \node[op] at (0,-1.5) {a - b};
+    \node[nm] at (0,-2.0) {diferença};
+    \node[lb] at (0,-2.5) {\texttt{a.difference(b)}};
+    \node[lb, text width=3.2cm] at (0,-3.3) {o que está em \texttt{a} e não em \texttt{b}};
+  \end{scope}
+
+  % 4. simetrica
+  \begin{scope}[shift={(11.7,0)}]
+    \fill[manualred!30] (-0.45,0) circle (0.85);
+    \fill[manualred!30] (0.45,0) circle (0.85);
+    \begin{scope}
+      \clip (-0.45,0) circle (0.85);
+      \fill[white] (0.45,0) circle (0.85);
+    \end{scope}
+    \draw[ct] (-0.45,0) circle (0.85);
+    \draw[ct] (0.45,0) circle (0.85);
+    \node[op] at (0,-1.5) {a \^{} b};
+    \node[nm] at (0,-2.0) {simétrica};
+    \node[lb] at (0,-2.5) {\texttt{a.symmetric\_difference(b)}};
+    \node[lb, text width=3.2cm] at (0,-3.3) {o que está em um só dos dois};
+  \end{scope}
+
+  \node[lb] at (-0.75, 1.15) {\texttt{a}};
+  \node[lb] at (0.75, 1.15) {\texttt{b}};
+
+  \node[lb, text width=14.0cm] at (5.8, 1.9)
+    {O \textbf{operador} exige que os dois lados sejam conjuntos; o
+     \textbf{método} aceita qualquer iterável. \texttt{a | ['x']} é
+     \texttt{TypeError}; \texttt{a.union(['x'])} funciona.};
+\end{tikzpicture}
+```
+As quatro operações, com o operador e o método equivalente de cada uma.
+:::
+
+A diferença entre operador e método não é estética:
+
+```python
+print("so metodo aceita lista:", sorted(norte.union(["onu-09"])))
+norte | ["onu-09"]
+```
+
+```text
+so metodo aceita lista: ['onu-01', 'onu-02', 'onu-03', 'onu-09']
+TypeError: unsupported operand type(s) for |: 'set' and 'list'
+```
+
+Use o operador quando os dois lados já forem conjuntos (é mais legível) e o método quando o outro lado for uma lista ou um gerador (evita um `set()` a mais).
+
+## Comparar conjuntos
+
+```python
+a = {1, 2}
+b = {1, 2, 3}
+print("a <= b subconjunto  :", a <= b, a.issubset(b))
+print("a <  b proprio      :", a < b)
+print("b >= a superconjunto:", b >= a)
+print("disjuntos           :", a.isdisjoint({9}), a.isdisjoint(b))
+print("iguais              :", {1, 2} == {2, 1})
+print("nao comparaveis     :", {1, 9} <= {1, 2}, {1, 2} <= {1, 9})
+```
+
+```text
+a <= b subconjunto  : True True
+a <  b proprio      : True
+b >= a superconjunto: True
+disjuntos           : True False
+iguais              : True
+nao comparaveis     : False False
+```
+
+A última linha é a que merece cuidado: `<=` entre conjuntos é **ordem parcial**, não total. `{1, 9}` não é subconjunto de `{1, 2}` **e** `{1, 2}` não é subconjunto de `{1, 9}` — os dois testes dão `False` sem que os conjuntos sejam iguais. Não dá para ordenar conjuntos com `sorted` esperando o comportamento de números.
+
+## Modificar
+
+```python
+s = {"onu-01"}
+s.add("onu-02")
+s.add("onu-02")
+print("add (idempotente):", sorted(s))
+s.update(["onu-03", "onu-04"], {"onu-05"})
+print("update           :", sorted(s))
+s.discard("onu-99")
+print("discard ausente  : sem erro")
+s.remove("onu-99")
+```
+
+```text
+add (idempotente): ['onu-01', 'onu-02']
+update           : ['onu-01', 'onu-02', 'onu-03', 'onu-04', 'onu-05']
+discard ausente  : sem erro
+remove ausente   : KeyError 'onu-99'
+```
+
+`add` de item existente não é erro nem duplica — é a idempotência que torna o conjunto tão conveniente para acumular. A diferença entre `discard` e `remove` é a mesma do `.get` e do `[]` no dicionário: um perdoa a ausência, o outro não.
+
+`pop()` remove **um item arbitrário** (não há "primeiro"), e os operadores in-place `|=`, `&=`, `-=` e `^=` existem todos.
+
+## `frozenset`
+
+A versão imutável e, portanto, hashável:
+
+```python
+chaveavel = frozenset({"onu-01", "onu-02"})
+grupos = {frozenset({"onu-01", "onu-02"}): "placa 1", frozenset({"onu-03"}): "placa 2"}
+print(grupos[frozenset({"onu-02", "onu-01"})])
+print("conjunto de conjuntos:", {frozenset({1, 2}), frozenset({1, 2}), frozenset({3})})
+{{1, 2}}
+```
+
+```text
+placa 1
+conjunto de conjuntos: {frozenset({3}), frozenset({1, 2})}
+TypeError: unhashable type: 'set'
+```
+
+Repare na consulta: a chave foi criada com os elementos em outra ordem e encontrou o mesmo grupo — conjunto não tem ordem, e o hash dele também não depende dela. É por isso que `frozenset` é a chave certa quando o identificador é "este conjunto de coisas", independentemente da ordem em que foram escritas.
+
+## Deduplicar
+
+O uso mais comum de conjunto é tirar repetidos, e a escolha tem uma consequência que costuma passar batida:
+
+```python
+leituras = ["onu-03", "onu-01", "onu-03", "onu-02", "onu-01"]
+print("set (perde ordem):     ", list(set(leituras)))
+print("dict.fromkeys (mantem):", list(dict.fromkeys(leituras)))
+```
+
+```text
+set (perde ordem):      ['onu-03', 'onu-02', 'onu-01']
+dict.fromkeys (mantem): ['onu-03', 'onu-01', 'onu-02']
+```
+
+A primeira linha muda de execução para execução; a segunda, nunca. `dict.fromkeys` preserva a ordem de primeira aparição porque o dicionário preserva ordem de inserção desde o **Python 3.7** — é o mesmo `fromkeys` que causou o problema do @sec-cap024, aqui usado do jeito certo, com valor imutável e descartado.
+
+::: {#fig-deduplicar}
+```{.tikz}
+%%| filename: deduplicar
+%%| alt: Tres formas de remover duplicatas comparadas por ordem preservada, custo e resultado: laco com in numa lista, set e dict fromkeys
+\begin{tikzpicture}[
+  cod/.style={draw=manualgray, very thick, rounded corners=1pt, fill=white,
+              text width=5.0cm, align=left, minimum height=0.95cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  bom/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!12,
+              text width=5.0cm, align=left, minimum height=0.95cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  ruim/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!10,
+               text width=5.0cm, align=left, minimum height=0.95cm,
+               font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.8, 2.3) rectangle (14.8,-4.9);
+
+  \node[hd] at (0.0, 1.8) {como};
+  \node[hd] at (6.0, 1.8) {ordem};
+  \node[hd] at (8.4, 1.8) {custo};
+  \node[hd] at (10.8, 1.8) {quando usar};
+
+  \node[ruim] at (0.0, 0.9)
+    {vistos = []\\ if x not in vistos:\\ ~~~~vistos.append(x)};
+  \node[lb, text=manualgreen] at (6.0, 0.9) {mantém};
+  \node[lb, text=manualred] at (8.4, 0.9) {O(n\textsuperscript{2})};
+  \node[lb, text width=3.6cm, text=manualred] at (10.8, 0.9)
+    {nunca --- 300x mais lento em 8 mil itens};
+
+  \node[cod] at (0.0,-0.7) {set(itens)};
+  \node[lb, text=manualred] at (6.0,-0.7) {perde};
+  \node[lb, text=manualgreen] at (8.4,-0.7) {O(n)};
+  \node[lb, text width=3.6cm] at (10.8,-0.7)
+    {quando a ordem não importa, ou o destino é um conjunto mesmo};
+
+  \node[bom] at (0.0,-2.3) {list(dict.fromkeys(itens))};
+  \node[lb, text=manualgreen] at (6.0,-2.3) {mantém};
+  \node[lb, text=manualgreen] at (8.4,-2.3) {O(n)};
+  \node[lb, text width=3.6cm, text=manualgreen] at (10.8,-2.3)
+    {o padrão para deduplicar lista preservando a ordem};
+
+  \node[lb, text width=14.0cm] at (-0.6,-3.9)
+    {Nos três casos os itens precisam ser hasháveis. Para elementos que não são
+     (dicionários, listas), a saída é converter para uma forma hashável ---
+     \texttt{tuple(sorted(d.items()))} --- ou deduplicar por uma chave extraída
+     de cada item.};
+\end{tikzpicture}
+```
+Três formas de deduplicar, e a única que preserva a ordem sem ser quadrática.
+:::
+
+A diferença de custo é grande:
+
+```python
+import timeit
+
+setup = 'itens = [f"onu-{i:05d}" for i in range(4000)] * 2'
+a = timeit.timeit(
+    """
+vistos = []
+for x in itens:
+    if x not in vistos:
+        vistos.append(x)
+""",
+    setup=setup,
+    number=3,
+)
+b = timeit.timeit("list(dict.fromkeys(itens))", setup=setup, number=3)
+c = timeit.timeit("set(itens)", setup=setup, number=3)
+print(f"lista + in    {a * 1000:9.2f} ms")
+print(f"dict.fromkeys {b * 1000:9.2f} ms")
+print(f"set           {c * 1000:9.2f} ms")
+print(f"razao lista/dict {a / b:6.0f}x")
+```
+
+```text
+lista + in       318.68 ms
+dict.fromkeys      1.06 ms
+set                0.66 ms
+razao lista/dict    301x
+```
+
+O laço com `in` é quadrático: cada item novo é comparado com todos os anteriores. Com o dobro dos dados, ele fica quatro vezes mais lento, enquanto os outros dois só dobram.
+
+## Comparar dois estados
+
+As views do @sec-cap024 se comportam como conjuntos, e é isso que torna a comparação de dois dicionários um exercício de uma linha por pergunta:
+
+```python
+antes = {"onu-01": -19.5, "onu-02": -31.2, "onu-03": -26.4}
+depois = {"onu-02": -31.2, "onu-03": -20.0, "onu-04": -8.0}
+print("sumiram :", sorted(antes.keys() - depois.keys()))
+print("novas   :", sorted(depois.keys() - antes.keys()))
+print("comuns  :", sorted(antes.keys() & depois.keys()))
+mudaram = {k for k in antes.keys() & depois.keys() if antes[k] != depois[k]}
+print("mudaram :", sorted(mudaram))
+print("inalterados:", sorted(antes.items() & depois.items()))
+```
+
+```text
+sumiram : ['onu-01']
+novas   : ['onu-04']
+comuns  : ['onu-02', 'onu-03']
+mudaram : ['onu-03']
+inalterados: [('onu-02', -31.2)]
+```
+
+A última linha usa `items()` como conjunto de pares — funciona porque os valores aqui são hasháveis. Com valores mutáveis (listas, dicionários), `items()` deixa de suportar operações de conjunto e é preciso comparar chave a chave.
+
+A sintaxe `{k for k in ... if ...}` da penúltima linha é uma compreensão de conjunto, tema do próximo capítulo.
+
+## 🐍 Jeito Pythônico
+
+**`set()` para o conjunto vazio.** `{}` é dicionário, sempre.
+
+**Conjunto quando a pergunta é "pertence?" ou "é único?".** Se um `in` aparece dentro de um laço, a coleção do lado direito quase sempre deveria ser um conjunto.
+
+```python
+# antipadrão
+bloqueadas = ["onu-02", "onu-05"]
+ativas = [o for o in leituras if o not in bloqueadas]
+```
+
+```python
+# pythônico
+BLOQUEADAS = frozenset({"onu-02", "onu-05"})
+ativas = [o for o in leituras if o not in BLOQUEADAS]
+```
+
+**Constante de pertencimento é `frozenset`.** Deixa claro que ninguém deve mexer, e é hashável de brinde.
+
+**Operações de conjunto no lugar de laços com `if`.** `cadastradas - responderam` diz "silenciosas" numa expressão; o laço equivalente tem quatro linhas e uma chance de errar o sentido.
+
+**Não conte com a ordem.** Nem a de inserção, nem a de execução anterior. Para saída estável, `sorted(conjunto)`.
+
+**Para deduplicar preservando ordem, `dict.fromkeys`.** `set` só quando a ordem não importa.
+
+**Cuidado ao mutar durante a iteração** — vale a mesma regra do @sec-cap016: `RuntimeError: Set changed size during iteration`.
+
+Sobre versões:
+
+- **Python 3.0** — literal de conjunto `{1, 2}` e compreensão de conjunto passaram a existir (antes, só `set([1, 2])`).
+- **Python 3.7** — `dict.fromkeys` virou o idioma oficial de deduplicação com ordem, quando a ordem do dicionário virou garantia.
+- **Python 3.9** — as views de dicionário ganharam `mapping`, e os operadores de conjunto sobre elas continuam sendo a forma canônica de comparar dicionários.
+- **Python 3.10** — `set` e `frozenset` como padrões no `match` funcionam por igualdade, não por estrutura: conjunto não é padrão de sequência.
+
+## 🧪 Laboratório
+
+Objetivo: ver o filtro que não filtrava, exercitar as quatro operações, medir a deduplicação quadrática e terminar comparando dois inventários inteiros com cinco expressões.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab25 && cd ~/lab25
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O filtro que não filtra.** Crie `filtro.py`:
+
+```python
+BLOQUEADAS = {}
+
+LEITURAS = ["onu-01", "onu-02", "onu-03", "onu-05"]
+
+print("tipo de BLOQUEADAS:", type(BLOQUEADAS))
+for onu in LEITURAS:
+    if onu in BLOQUEADAS:
+        print(f"  {onu}: bloqueada, ignorando")
+        continue
+    print(f"  {onu}: processando")
+```
+
+```bash
+python filtro.py
+```
+
+```text
+tipo de BLOQUEADAS: <class 'dict'>
+  onu-01: processando
+  onu-02: processando
+  onu-03: processando
+  onu-05: processando
+```
+
+**3. Troque uma linha.** Em `filtro2.py`, só a primeira linha muda:
+
+```python
+BLOQUEADAS = {"onu-02", "onu-05"}
+```
+
+```bash
+python filtro2.py
+```
+
+```text
+tipo de BLOQUEADAS: <class 'set'>
+  onu-01: processando
+  onu-02: bloqueada, ignorando
+  onu-03: processando
+  onu-05: bloqueada, ignorando
+```
+
+**4. Chaves, com e sem dois-pontos.**
+
+```bash
+python -c "
+print(type({}), type(set()), type({1, 2}), type({'a': 1}))
+print(set(), len(set()))
+print(set('abracadabra'))
+print(set([1, 2, 2, 3]), set(('a', 'a')))
+print(bool(set()), bool({0}))
+"
+```
+
+```text
+<class 'dict'> <class 'set'> <class 'set'> <class 'dict'>
+set() 0
+{'r', 'c', 'd', 'a', 'b'}
+{1, 2, 3} {'a'}
+False True
+```
+
+Rode duas vezes: a terceira linha sai em ordem diferente. É a aleatorização de hash de strings, e é de propósito.
+
+**5. Unicidade por igualdade.**
+
+```bash
+python -c "
+print({1, 1.0, True, 'um'})
+print(len({1, 1.0, True}))
+try:
+    {[1, 2]}
+except TypeError as e:
+    print('TypeError:', e)
+print({(1, 2), (1, 2), (3, 4)})
+"
+```
+
+```text
+{1, 'um'}
+1
+TypeError: unhashable type: 'list'
+{(1, 2), (3, 4)}
+```
+
+**6. As quatro operações.**
+
+```bash
+python -c "
+norte = {'onu-01', 'onu-02', 'onu-03'}
+criticas = {'onu-02', 'onu-05'}
+print('uniao        |  ', sorted(norte | criticas))
+print('intersecao   &  ', sorted(norte & criticas))
+print('diferenca    -  ', sorted(norte - criticas))
+print('dif. simet.  ^  ', sorted(norte ^ criticas))
+print('metodos:', sorted(norte.union(criticas)) == sorted(norte | criticas))
+print('so metodo aceita lista:', sorted(norte.union(['onu-09'])))
+try:
+    norte | ['onu-09']
+except TypeError as e:
+    print('TypeError:', e)
+"
+```
+
+```text
+uniao        |   ['onu-01', 'onu-02', 'onu-03', 'onu-05']
+intersecao   &   ['onu-02']
+diferenca    -   ['onu-01', 'onu-03']
+dif. simet.  ^   ['onu-01', 'onu-03', 'onu-05']
+metodos: True
+so metodo aceita lista: ['onu-01', 'onu-02', 'onu-03', 'onu-09']
+TypeError: unsupported operand type(s) for |: 'set' and 'list'
+```
+
+**7. Subconjunto, superconjunto, disjunto.**
+
+```bash
+python -c "
+a = {1, 2}
+b = {1, 2, 3}
+print('a <= b subconjunto  :', a <= b, a.issubset(b))
+print('a <  b proprio      :', a < b)
+print('b >= a superconjunto:', b >= a)
+print('disjuntos           :', a.isdisjoint({9}), a.isdisjoint(b))
+print('iguais              :', {1, 2} == {2, 1})
+print('nao comparaveis     :', {1, 9} <= {1, 2}, {1, 2} <= {1, 9})
+"
+```
+
+```text
+a <= b subconjunto  : True True
+a <  b proprio      : True
+b >= a superconjunto: True
+disjuntos           : True False
+iguais              : True
+nao comparaveis     : False False
+```
+
+**8. Modificar.** Crie `mutacao.py`:
+
+```python
+s = {"onu-01"}
+s.add("onu-02")
+s.add("onu-02")
+print("add (idempotente):", sorted(s))
+s.update(["onu-03", "onu-04"], {"onu-05"})
+print("update           :", sorted(s))
+s.discard("onu-99")
+print("discard ausente  : sem erro")
+try:
+    s.remove("onu-99")
+except KeyError as e:
+    print("remove ausente   : KeyError", e)
+item = s.pop()
+print("pop devolveu um item arbitrario:", item)
+s -= {"onu-01", "onu-02"}
+print("-=               :", sorted(s))
+s.clear()
+print("clear            :", s)
+```
+
+```bash
+python mutacao.py
+```
+
+```text
+add (idempotente): ['onu-01', 'onu-02']
+update           : ['onu-01', 'onu-02', 'onu-03', 'onu-04', 'onu-05']
+discard ausente  : sem erro
+remove ausente   : KeyError 'onu-99'
+pop devolveu um item arbitrario: onu-01
+-=               : ['onu-03', 'onu-04', 'onu-05']
+clear            : set()
+```
+
+Qual item o `pop` devolve muda entre execuções — não existe "primeiro".
+
+**9. `frozenset`.**
+
+```bash
+python -c "
+chaveavel = frozenset({'onu-01', 'onu-02'})
+print(type(chaveavel), sorted(chaveavel))
+grupos = {frozenset({'onu-01', 'onu-02'}): 'placa 1', frozenset({'onu-03'}): 'placa 2'}
+print(grupos[frozenset({'onu-02', 'onu-01'})])
+print('conjunto de conjuntos:', {frozenset({1, 2}), frozenset({1, 2}), frozenset({3})})
+try:
+    {{1, 2}}
+except TypeError as e:
+    print('TypeError:', e)
+"
+```
+
+```text
+<class 'frozenset'> ['onu-01', 'onu-02']
+placa 1
+conjunto de conjuntos: {frozenset({3}), frozenset({1, 2})}
+TypeError: unhashable type: 'set'
+```
+
+**10. Deduplicar.**
+
+```bash
+python -c "
+leituras = ['onu-03', 'onu-01', 'onu-03', 'onu-02', 'onu-01']
+print('set (perde ordem):     ', list(set(leituras)))
+print('dict.fromkeys (mantem):', list(dict.fromkeys(leituras)))
+vistos = []
+for x in leituras:
+    if x not in vistos:
+        vistos.append(x)
+print('na mao (mantem, lento):', vistos)
+"
+```
+
+```text
+set (perde ordem):      ['onu-03', 'onu-02', 'onu-01']
+dict.fromkeys (mantem): ['onu-03', 'onu-01', 'onu-02']
+na mao (mantem, lento): ['onu-03', 'onu-01', 'onu-02']
+```
+
+As duas últimas linhas são iguais e sempre serão; a primeira muda a cada execução.
+
+**11. Meça as três.**
+
+```bash
+python -c "
+import timeit
+setup = 'itens = [f\"onu-{i:05d}\" for i in range(4000)] * 2'
+a = timeit.timeit('''
+vistos = []
+for x in itens:
+    if x not in vistos:
+        vistos.append(x)
+''', setup=setup, number=3)
+b = timeit.timeit('list(dict.fromkeys(itens))', setup=setup, number=3)
+c = timeit.timeit('set(itens)', setup=setup, number=3)
+print(f'lista + in    {a * 1000:9.2f} ms')
+print(f'dict.fromkeys {b * 1000:9.2f} ms')
+print(f'set           {c * 1000:9.2f} ms')
+print(f'razao lista/dict {a / b:6.0f}x')
+"
+```
+
+```text
+lista + in       318.68 ms
+dict.fromkeys      1.06 ms
+set                0.66 ms
+razao lista/dict    301x
+```
+
+Dobre o `4000` para `8000` e repita: os dois últimos dobram, o primeiro quadruplica.
+
+**12. Comparar dois dicionários.**
+
+```bash
+python -c "
+antes = {'onu-01': -19.5, 'onu-02': -31.2, 'onu-03': -26.4}
+depois = {'onu-02': -31.2, 'onu-03': -20.0, 'onu-04': -8.0}
+print('sumiram :', sorted(antes.keys() - depois.keys()))
+print('novas   :', sorted(depois.keys() - antes.keys()))
+print('comuns  :', sorted(antes.keys() & depois.keys()))
+mudaram = {k for k in antes.keys() & depois.keys() if antes[k] != depois[k]}
+print('mudaram :', sorted(mudaram))
+print('inalterados:', sorted(antes.items() & depois.items()))
+"
+```
+
+```text
+sumiram : ['onu-01']
+novas   : ['onu-04']
+comuns  : ['onu-02', 'onu-03']
+mudaram : ['onu-03']
+inalterados: [('onu-02', -31.2)]
+```
+
+**13. O relatório de cobertura.** Crie `cobertura.py`:
+
+```python
+"""Comparacao de inventarios com operacoes de conjunto."""
+
+CADASTRADAS = {
+    "onu-01", "onu-02", "onu-03", "onu-04", "onu-05", "onu-06",
+}
+RESPONDERAM = {
+    "onu-01", "onu-03", "onu-05", "onu-07",
+}
+EM_MANUTENCAO = frozenset({"onu-04", "onu-06"})
+
+
+def relatorio(cadastradas, responderam, manutencao):
+    """Devolve um dicionario com cada categoria da varredura."""
+    silenciosas = cadastradas - responderam - manutencao
+    return {
+        "responderam": cadastradas & responderam,
+        "silenciosas": silenciosas,
+        "fantasmas": responderam - cadastradas,
+        "em manutencao": cadastradas & manutencao,
+        "divergencia": cadastradas ^ responderam,
+    }
+
+
+if __name__ == "__main__":
+    r = relatorio(CADASTRADAS, RESPONDERAM, EM_MANUTENCAO)
+    for rotulo, conjunto in r.items():
+        print(f"{rotulo:<14} {len(conjunto):>2}  {sorted(conjunto)}")
+
+    cobertura = len(r["responderam"]) / len(CADASTRADAS)
+    print(f"\ncobertura: {cobertura:.0%}")
+    print("tudo que respondeu esta cadastrado?", RESPONDERAM <= CADASTRADAS)
+    print("manutencao e cadastro sao disjuntos?", EM_MANUTENCAO.isdisjoint(RESPONDERAM))
+
+    urgentes = r["silenciosas"] | r["fantasmas"]
+    print("exigem acao:", sorted(urgentes))
+```
+
+```bash
+python cobertura.py
+```
+
+```text
+responderam     3  ['onu-01', 'onu-03', 'onu-05']
+silenciosas     1  ['onu-02']
+fantasmas       1  ['onu-07']
+em manutencao   2  ['onu-04', 'onu-06']
+divergencia     4  ['onu-02', 'onu-04', 'onu-06', 'onu-07']
+
+cobertura: 50%
+tudo que respondeu esta cadastrado? False
+manutencao e cadastro sao disjuntos? True
+exigem acao: ['onu-02', 'onu-07']
+```
+
+Cinco perguntas de negócio, cinco expressões de uma linha. A `silenciosas` encadeia duas diferenças — "está no cadastro, não respondeu **e** não está em manutenção" —, e a `fantasmas` é a pergunta inversa, que quase ninguém pensa em fazer com um laço: quem respondeu **sem** estar cadastrado. O `False` na penúltima linha é o alarme correspondente.
+
+Repare também que `EM_MANUTENCAO` é `frozenset` e funcionou em todas as operações: para leitura, `frozenset` e `set` são intercambiáveis, e o `frozenset` documenta que aquela constante não muda.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- `{}` é dicionário vazio; conjunto vazio é `set()`. Com dois-pontos é dicionário, sem dois-pontos é conjunto.
+- Conjunto é a tabela hash do dicionário sem os valores: elementos únicos, hasháveis e **sem ordem**. A ordem de iteração de strings muda entre execuções, de propósito.
+- `1`, `1.0` e `True` são o mesmo elemento; lista e conjunto não entram em conjunto, `tuple` e `frozenset` entram.
+- `|`, `&`, `-` e `^` exigem conjuntos dos dois lados; `union`, `intersection`, `difference` e `symmetric_difference` aceitam qualquer iterável.
+- `<=`, `<`, `>=` são ordem **parcial**: dois conjuntos podem não ser comparáveis, e os dois testes darem `False`.
+- `add` é idempotente; `discard` perdoa a ausência e `remove` levanta `KeyError`; `pop` tira um item arbitrário.
+- `frozenset` é imutável e hashável: serve de chave, de elemento de outro conjunto e de constante de pertencimento.
+- Deduplicar: `set` quando a ordem não importa, `list(dict.fromkeys(x))` quando importa. O laço com `in` numa lista é quadrático — centenas de vezes mais lento já em alguns milhares de itens.
+- As views `keys()` e `items()` funcionam como conjuntos, o que transforma a comparação de dois dicionários em uma expressão por pergunta.
