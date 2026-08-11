@@ -1,3 +1,983 @@
-# break, continue, else em laços e o casamento de padrões {#sec-cap017}
+# `break`, `continue`, `else` em laços e o casamento de padrões {#sec-cap017}
 
-*(em elaboracao)*
+O inventário da rede é um dicionário de OLTs, cada uma com as suas ONUs. A função procura a **primeira** ONU com nível crítico:
+
+```python
+REDE = {
+    "olt-norte": {"onu-01": -19.5, "onu-02": -31.2, "onu-03": -20.1},
+    "olt-sul": {"onu-04": -18.0, "onu-05": -29.8},
+    "olt-leste": {"onu-06": -21.4},
+}
+
+
+def primeira_critica(rede):
+    achada = None
+    for olt, onus in rede.items():
+        for onu, nivel in onus.items():
+            if nivel < -28:
+                achada = (olt, onu, nivel)
+                break
+    return achada
+
+
+print(primeira_critica(REDE))
+```
+
+```text
+('olt-sul', 'onu-05', -29.8)
+```
+
+A primeira crítica é a `onu-02`, com −31,2 dBm, na `olt-norte`. A função devolveu a `onu-05`, com −29,8 — que é a **última**, e a menos grave das duas. O chamado foi aberto para o cliente errado.
+
+O `break` fez exatamente o que ele faz: saiu do laço **mais interno**. O laço externo continuou percorrendo as outras OLTs, encontrou outra crítica e sobrescreveu `achada`. Em Python não existe `break` com rótulo, então o `break` de dentro nunca sai de dois níveis.
+
+A correção mais limpa não é um `break` melhor — é não precisar de `break`:
+
+```python
+def primeira_critica(rede):
+    for olt, onus in rede.items():
+        for onu, nivel in onus.items():
+            if nivel < -28:
+                return olt, onu, nivel
+    return None
+
+
+print(primeira_critica(REDE))
+```
+
+```text
+('olt-norte', 'onu-02', -31.2)
+```
+
+`return` sai de **todos** os laços de uma vez, porque sai da função inteira. É por isso que "extraia a busca para uma função" é a resposta padrão para `break` aninhado.
+
+Este capítulo trata das três instruções que alteram o curso de um laço — `break`, `continue` e a cláusula `else` que quase ninguém conhece — e do `match`, que desde o Python 3.10 substitui escadas inteiras de condicionais quando a decisão é sobre a **forma** do dado.
+
+## `break`: abandonar o laço
+
+`break` encerra o laço imediatamente, sem terminar a volta atual e sem avaliar a condição de novo. Vale para `for` e para `while`, e afeta **um** nível.
+
+Quando o `break` aninhado não pode virar função, a saída é uma bandeira explícita:
+
+```python
+achada = None
+for olt, onus in REDE.items():
+    for onu, nivel in onus.items():
+        if nivel < -28:
+            achada = (olt, onu, nivel)
+            break
+    if achada is not None:
+        break
+print(achada)
+```
+
+```text
+('olt-norte', 'onu-02', -31.2)
+```
+
+Funciona, e é feio: dois `break` e um teste extra para fazer o trabalho de um `return`. Prefira a função.
+
+## `continue`: pular para a próxima volta
+
+`continue` abandona o resto do bloco e vai direto para a próxima iteração — no `while`, isso significa reavaliar a condição; no `for`, pedir o próximo item.
+
+O uso que se paga é o de filtro na entrada, que é a cláusula de guarda do @sec-cap015 aplicada a laço:
+
+```python
+soma, lidos, descartados = 0.0, 0, 0
+for linha in linhas:
+    if not linha.strip():
+        descartados += 1
+        continue
+    if linha.startswith("#"):
+        descartados += 1
+        continue
+    try:
+        valor = float(linha)
+    except ValueError:
+        descartados += 1
+        continue
+    soma += valor
+    lidos += 1
+```
+
+Cada caso ruim é tratado e descartado na hora, e o corpo útil do laço fica no fim, sem indentação nenhuma. A alternativa com `if` aninhado empurraria as duas últimas linhas para quatro níveis de profundidade.
+
+Um cuidado no `while`: um `continue` que pula o incremento é laço infinito.
+
+```python
+# antipadrão: se a linha for vazia, i nunca cresce
+i = 0
+while i < len(linhas):
+    if not linhas[i]:
+        continue
+    processa(linhas[i])
+    i += 1
+```
+
+É mais um argumento para não usar `while` com contador.
+
+## `else` em laço: "terminou sem `break`"
+
+Esta é a construção mais mal-batizada do Python. O `else` de um laço executa quando o laço **termina naturalmente** — sem `break`. Se tivesse sido chamado `nobreak`, ninguém teria dificuldade.
+
+```python
+for i in range(3):
+    print(i, end=" ")
+else:
+    print("| else rodou")
+
+for i in range(3):
+    if i == 1:
+        break
+    print(i, end=" ")
+else:
+    print("| else rodou")
+print("| else nao rodou")
+```
+
+```text
+0 1 2 | else rodou
+0 | else nao rodou
+```
+
+::: {#fig-break-continue-else}
+```{.tikz}
+%%| filename: break-continue-else
+%%| alt: Fluxo de um laco for mostrando para onde cada instrucao desvia: continue volta ao proximo item, break sai do laco pulando o else, e o fim natural do iteravel passa pelo bloco else
+\begin{tikzpicture}[
+  nd/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=3.6cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\small},
+  corpo/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!7,
+                text width=3.6cm, align=center, minimum height=1.5cm,
+                font=\small},
+  els/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+              text width=3.6cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\small},
+  saida/.style={draw=manualgray, very thick, rounded corners, fill=white,
+                text width=3.6cm, align=center, minimum height=0.7cm,
+                font=\small},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  fr/.style={->,>=stealth, very thick, manualred},
+  fy/.style={->,>=stealth, very thick, manualyellow!70!black}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-5.6, 2.6) rectangle (13.4,-7.6);
+
+  \node[nd]    (prox)  at (0, 1.7) {próximo item?};
+  \node[corpo] (corpo) at (0,-0.3) {\textbf{corpo do laço}\\[2pt]
+                                    \scriptsize\ttfamily continue\\
+                                    \scriptsize\ttfamily break};
+  \node[els]   (els)   at (0,-2.5) {else:};
+  \node[saida] (fim)   at (0,-4.3) {depois do laço};
+
+  \draw[fl] (prox) -- (corpo) node[lb, midway, right=3pt] {sim};
+  \draw[fl] (prox.west) -- ++(-2.2,0) |- (els.west)
+        node[lb, pos=0.25, left=2pt, align=right] {não\\(esgotou)};
+  \draw[fl] (els) -- (fim);
+
+  \draw[fy] (corpo.east) -- ++(1.6,0) |- (prox.east)
+        node[lb, pos=0.25, right=2pt, text=manualyellow!60!black]
+        {\texttt{continue}\\volta ao topo};
+  \draw[fr] (corpo.south east) -- ++(3.6,0) |- (fim.east)
+        node[lb, pos=0.25, right=2pt, text=manualred]
+        {\texttt{break}\\sai \textbf{pulando o else}};
+
+  \node[lb, text width=4.6cm, anchor=west] at (7.9, 1.4)
+    {\textbf{else de laço = ``nobreak''}\\[3pt]
+     roda quando o iterável se esgota; \textbf{não} roda quando um
+     \texttt{break} interrompeu.};
+
+  \node[lb, text width=5.2cm, anchor=north west] at (-5.4,-6.0)
+    {\textbf{o par break/else} é o idioma da busca: o \texttt{break} é
+     ``achei'', o \texttt{else} é ``varri tudo e não achei''.};
+  \node[lb, text width=5.2cm, anchor=north west] at (0.6,-6.0)
+    {\textbf{no while}, troque ``próximo item?'' pela condição: o \texttt{else}
+     roda quando ela fica falsa.};
+  \node[lb, text width=5.2cm, anchor=north west] at (6.6,-6.0)
+    {\textbf{laço vazio} conta como fim natural --- zero voltas, nenhum
+     \texttt{break}, o \texttt{else} roda.};
+\end{tikzpicture}
+```
+`continue` volta ao topo, `break` sai pulando o `else`, e o `else` só roda no fim natural.
+:::
+
+O par `break`/`else` existe para um caso específico: a busca que precisa distinguir "achei" de "varri tudo e não achei", sem bandeira nenhuma.
+
+```python
+alvo = "onu-99"
+for onu in REDE["olt-norte"]:
+    if onu == alvo:
+        print("encontrada")
+        break
+else:
+    print(f"{alvo} nao esta na olt-norte")
+```
+
+```text
+onu-99 nao esta na olt-norte
+```
+
+O exemplo canônico é o teste de primalidade, onde o `else` significa "nenhum divisor foi encontrado":
+
+```python
+for n in (91, 97, 2):
+    for divisor in range(2, int(n**0.5) + 1):
+        if n % divisor == 0:
+            print(f"{n} = {divisor} x {n // divisor}")
+            break
+    else:
+        print(f"{n} e primo")
+```
+
+```text
+91 = 7 x 13
+97 e primo
+2 e primo
+```
+
+O caso do `2` mostra o comportamento com laço que não dá volta nenhuma: `range(2, 2)` é vazio, o `for` termina sem `break`, e o `else` roda. **Laço vazio conta como "terminou sem `break`"** — é o detalhe que mais surpreende.
+
+O `while` tem a mesma cláusula, com o mesmo significado:
+
+```python
+tentativas = 0
+while tentativas < 3:
+    tentativas += 1
+    if tentativas == 5:
+        print("conectou")
+        break
+else:
+    print("desistiu depois de", tentativas, "tentativas")
+```
+
+```text
+desistiu depois de 3 tentativas
+```
+
+Este é o idioma da retentativa: o `break` é o sucesso, o `else` é o esgotamento das tentativas. Sem ele, seria preciso uma variável `sucesso = False` e um `if` depois do laço.
+
+Dito isso: o `else` de laço divide opiniões, e com razão — a palavra sugere a coisa errada. A recomendação honesta é usá-lo quando ele elimina uma bandeira, sempre com um comentário ou um nome de função que deixe claro o que "sem `break`" significa ali; e não usá-lo em código que passa por muita gente diferente.
+
+## `match`: casar com a forma do dado
+
+Desde o **Python 3.10** (PEP 634 a 636), o `match` compara um valor contra **padrões estruturais**. Ele não é o `switch` de C: não é uma cadeia de igualdades, é desestruturação com teste embutido.
+
+O caso que justifica a instrução é o de dados que chegam de fora — JSON de uma API, evento de fila, linha de comando:
+
+```python
+def descrever(evento):
+    match evento:
+        case {"tipo": "alarme", "onu": onu, "nivel": nivel} if nivel < -28:
+            return f"CRITICO {onu} em {nivel} dBm"
+        case {"tipo": "alarme", "onu": onu}:
+            return f"alarme comum em {onu}"
+        case {"tipo": "reboot", "onu": onu, **resto}:
+            return f"reboot de {onu} (extras: {resto})"
+        case {"tipo": tipo}:
+            return f"evento desconhecido: {tipo}"
+        case _:
+            return "sem tipo"
+
+
+eventos = [
+    {"tipo": "alarme", "onu": "onu-02", "nivel": -31.2},
+    {"tipo": "alarme", "onu": "onu-01", "nivel": -19.5},
+    {"tipo": "reboot", "onu": "onu-05", "causa": "queda de energia"},
+    {"tipo": "sync"},
+    {"origem": "olt"},
+]
+for e in eventos:
+    print(descrever(e))
+```
+
+```text
+CRITICO onu-02 em -31.2 dBm
+alarme comum em onu-01
+reboot de onu-05 (extras: {'causa': 'queda de energia'})
+evento desconhecido: sync
+sem tipo
+```
+
+Em cinco `case` estão: teste de valor literal (`"alarme"`), extração de campos para variáveis (`onu`, `nivel`), guarda (`if nivel < -28`), captura do resto do dicionário (`**resto`) e curinga (`_`). Escrever isso com `if` e `.get()` daria três vezes mais linhas, e cada acesso teria que ser defendido contra chave ausente.
+
+Dois pontos importantes sobre padrão de mapeamento: ele casa por **subconjunto** — `{"tipo": "alarme"}` casa com um dicionário que tenha outras chaves além dessa —, e a ordem dos `case` importa como na cadeia de `elif`, então o padrão mais específico vem primeiro. Foi por isso que a guarda `if nivel < -28` ficou no topo.
+
+### Padrões de sequência
+
+```python
+def roteia(comando):
+    match comando.split():
+        case ["listar"]:
+            return "lista tudo"
+        case ["listar", olt]:
+            return f"lista a {olt}"
+        case ["reiniciar", *onus] if onus:
+            return f"reinicia {len(onus)}: " + ", ".join(onus)
+        case ["sair" | "quit" | "exit"]:
+            return "tchau"
+        case []:
+            return "comando vazio"
+        case _:
+            return "nao entendi"
+
+
+for c in ["listar", "listar olt-sul", "reiniciar onu-01 onu-02", "quit", "", "voar"]:
+    print(f"{c!r:<28} -> {roteia(c)}")
+```
+
+```text
+'listar'                     -> lista tudo
+'listar olt-sul'             -> lista a olt-sul
+'reiniciar onu-01 onu-02'    -> reinicia 2: onu-01, onu-02
+'quit'                       -> tchau
+''                           -> comando vazio
+'voar'                       -> nao entendi
+```
+
+O padrão de sequência casa por **tamanho e posição**: `["listar"]` só casa com lista de um elemento. O `*onus` absorve o resto, `|` é alternativa, e a guarda `if onus` rejeita `reiniciar` sem argumento.
+
+Uma armadilha específica: `str` e `bytes` **não** casam como sequência, mesmo sendo sequências.
+
+```python
+match "abc":
+    case [a, b, c]:
+        print("string casou como sequencia?", a, b, c)
+    case str() as s:
+        print("string nao e sequencia para o match:", s)
+```
+
+```text
+string nao e sequencia para o match: abc
+```
+
+A exceção é deliberada: sem ela, `case [x]` casaria com qualquer string de um caractere, e ninguém quer isso.
+
+### Padrões de classe
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class Ponto:
+    x: float
+    y: float
+
+
+def onde(p):
+    match p:
+        case Ponto(x=0, y=0):
+            return "origem"
+        case Ponto(x=0, y=y):
+            return f"eixo vertical em y={y}"
+        case Ponto(x=x, y=0):
+            return f"eixo horizontal em x={x}"
+        case Ponto():
+            return "fora dos eixos"
+        case _:
+            return "nao e um ponto"
+
+
+for p in [Ponto(0, 0), Ponto(0, 3), Ponto(2, 0), Ponto(1, 1), "abc"]:
+    print(onde(p))
+```
+
+```text
+origem
+eixo vertical em y=3
+eixo horizontal em x=2
+fora dos eixos
+nao e um ponto
+```
+
+`Ponto(x=0, y=0)` **não** é uma chamada: é um padrão que testa o tipo e os atributos. `Ponto()` testa só o tipo, e é o `isinstance` escrito como padrão. Também funciona com os tipos embutidos, o que dá validação de tipo de graça:
+
+```python
+match (200, "ok"):
+    case (int(codigo), str(texto)):
+        print("codigo", codigo, "texto", texto)
+```
+
+```text
+codigo 200 texto ok
+```
+
+::: {#fig-padroes-match}
+```{.tikz}
+%%| filename: padroes-match
+%%| alt: Os tipos de padrao do match: literal, captura por nome, curinga, sequencia, mapeamento, classe, alternativa com barra vertical, guarda e valor com nome pontilhado
+\begin{tikzpicture}[
+  pat/.style={draw=manualblue, thick, rounded corners=1pt, fill=manualblue!9,
+              text width=4.6cm, align=left, minimum height=0.62cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=5pt},
+  perigo/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!10,
+                 text width=4.6cm, align=left, minimum height=0.62cm,
+                 font=\ttfamily\scriptsize, anchor=west, inner xsep=5pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 1.6) rectangle (14.9,-6.0);
+
+  \node[hd] at (0.0, 1.15) {padrão};
+  \node[hd] at (5.4, 1.15) {casa com};
+
+  \node[pat] at (0.0, 0.5) {case -28.0:};
+  \node[lb, text width=9.0cm] at (5.4, 0.5)
+    {\textbf{literal} --- só o valor igual (\texttt{==}, mas \texttt{is} para
+     \texttt{None}, \texttt{True} e \texttt{False})};
+
+  \node[pat] at (0.0,-0.25) {case Limiar.CRITICO:};
+  \node[lb, text width=9.0cm] at (5.4,-0.25)
+    {\textbf{valor com nome pontilhado} --- compara com a constante; a forma
+     correta de usar constantes};
+
+  \node[perigo] at (0.0,-1.0) {case CRITICO:};
+  \node[lb, text width=9.0cm, text=manualred] at (5.4,-1.0)
+    {\textbf{captura!} nome simples nunca compara: casa com \textbf{tudo} e
+     rebatiza o valor};
+
+  \node[pat] at (0.0,-1.75) {case [\_, segundo, *resto]:};
+  \node[lb, text width=9.0cm] at (5.4,-1.75)
+    {\textbf{sequência} --- lista/tupla com 2 ou mais itens
+     (\texttt{str} e \texttt{bytes} \textbf{não} entram)};
+
+  \node[pat] at (0.0,-2.5) {case \{"tipo": t, **extra\}:};
+  \node[lb, text width=9.0cm] at (5.4,-2.5)
+    {\textbf{mapeamento} --- casa por \textbf{subconjunto}: outras chaves podem
+     existir};
+
+  \node[pat] at (0.0,-3.25) {case Ponto(x=0, y=y):};
+  \node[lb, text width=9.0cm] at (5.4,-3.25)
+    {\textbf{classe} --- testa o tipo e os atributos; \texttt{Ponto()} sozinho é
+     um \texttt{isinstance}};
+
+  \node[pat] at (0.0,-4.0) {case "sair" | "quit":};
+  \node[lb, text width=9.0cm] at (5.4,-4.0)
+    {\textbf{alternativa} --- qualquer um dos lados};
+
+  \node[pat] at (0.0,-4.75) {case [x] if x > 0:};
+  \node[lb, text width=9.0cm] at (5.4,-4.75)
+    {\textbf{guarda} --- o padrão casa \textbf{e} a condição é verdadeira};
+
+  \node[pat] at (0.0,-5.5) {case \_:};
+  \node[lb, text width=9.0cm] at (5.4,-5.5)
+    {\textbf{curinga} --- casa com tudo sem ligar nome nenhum};
+\end{tikzpicture}
+```
+Os padrões do `match`, e o único que quase todo mundo escreve errado na primeira vez.
+:::
+
+### O erro que todo mundo comete uma vez
+
+Um nome simples num padrão **nunca** é uma comparação: é uma captura.
+
+```python
+CRITICO = -28.0
+
+
+def faixa(nivel):
+    match nivel:
+        case CRITICO:
+            return f"casou com o limite? CRITICO agora vale {CRITICO}"
+
+
+print(faixa(-19.5))
+print("CRITICO no modulo:", CRITICO)
+```
+
+```text
+casou com o limite? CRITICO agora vale -19.5
+CRITICO no modulo: -28.0
+```
+
+O `case CRITICO:` casou com −19,5 — casaria com qualquer coisa — e ligou o nome `CRITICO` ao valor recebido, como variável local. A constante do módulo continua intacta, o que torna o bug ainda mais difícil de ver: o teste "a constante mudou?" não acusa nada.
+
+Quando há um `case` depois, o Python detecta e recusa o programa:
+
+```python
+CRITICO = -28.0
+
+
+def faixa(nivel):
+    match nivel:
+        case CRITICO:
+            return "no limite"
+        case _:
+            return "outro"
+```
+
+```text
+  File "/home/vitor/lab17/captura2.py", line 6
+    case CRITICO:
+         ^^^^^^^
+SyntaxError: name capture 'CRITICO' makes remaining patterns unreachable
+```
+
+A mensagem é excelente e diz o nome do problema: *name capture*. A correção é usar um **nome pontilhado**, que o `match` trata como valor:
+
+```python
+class Limiar:
+    CRITICO = -28.0
+    SATURACAO = -8.0
+
+
+def faixa(nivel):
+    match nivel:
+        case Limiar.CRITICO:
+            return "exatamente no limite critico"
+        case Limiar.SATURACAO:
+            return "exatamente no limite de saturacao"
+        case _:
+            return "entre os limites"
+
+
+for n in (-28.0, -8.0, -19.5):
+    print(f"{n:>7}  {faixa(n)}")
+```
+
+```text
+  -28.0  exatamente no limite critico
+   -8.0  exatamente no limite de saturacao
+  -19.5  entre os limites
+```
+
+Uma classe simples, um `Enum` ou um módulo importado — qualquer coisa com ponto no meio serve. É a razão de o `match` combinar tão bem com `enum.Enum`.
+
+## 🐍 Jeito Pythônico
+
+**`break` aninhado quer virar função.** Extraia a busca e use `return`; ele sai de todos os níveis e ainda dá um nome ao que o laço faz.
+
+**`continue` como guarda no topo do laço.** Trate e descarte o caso ruim na primeira linha, deixe o trabalho útil sem indentação.
+
+**`else` de laço só para eliminar bandeira.** É o par de `break` numa busca ou numa retentativa. Se você precisou explicar o `else` em comentário longo, uma função com `return` é mais clara.
+
+**Não use `match` como `switch`.** Para comparar uma variável contra constantes, o dicionário do @sec-cap015 continua melhor. `match` se paga quando há **estrutura**: sequência de tamanho variável, dicionário aninhado, tipos diferentes no mesmo canal.
+
+```python
+# antipadrão: match usado como escada de igualdades
+match plano:
+    case "basico":
+        preco = 79.90
+    case "turbo":
+        preco = 129.90
+```
+
+```python
+# pythônico
+TARIFAS = {"basico": 79.90, "turbo": 129.90}
+preco = TARIFAS[plano]
+```
+
+**Constante em `case` sempre com ponto.** `case Limiar.CRITICO:`, `case Status.ATIVO:`. Nome simples é captura, e captura silenciosa.
+
+**Termine o `match` com `case _:`** quando a entrada vem de fora. Sem curinga, um valor não previsto simplesmente não faz nada — e "não faz nada" é o pior desfecho possível para dado malformado.
+
+**Nada de `for ... else` combinado com `continue` para simular fluxo.** O bloco `for/else/continue/break` da busca aninhada existe, funciona e é ilegível; a função com `return` faz o mesmo em metade das linhas.
+
+Sobre versões:
+
+- **Python 3.10** — `match`/`case` (PEP 634, 635 e 636). É a mudança de sintaxe mais visível da série 3.x recente.
+- **Python 3.11** — mensagens de erro do `match` mais precisas, incluindo o `name capture` acima.
+- **Python 3.12** — o compilador passou a otimizar melhor o despacho de `match` sobre literais.
+- `break`, `continue` e o `else` de laço existem desde sempre e não mudaram.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o `break` que sai só de um nível, usar o par `break`/`else` numa busca, ver o `case CONSTANTE` capturar em silêncio, e terminar com um console de operação que despacha comandos com `match`.
+
+**1. Ambiente e dados.**
+
+```bash
+mkdir -p ~/lab17 && cd ~/lab17
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+
+cat > rede.py <<'PY'
+REDE = {
+    "olt-norte": {"onu-01": -19.5, "onu-02": -31.2, "onu-03": -20.1},
+    "olt-sul": {"onu-04": -18.0, "onu-05": -29.8},
+    "olt-leste": {"onu-06": -21.4},
+}
+PY
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza o `break` de um nível só.**
+
+```bash
+python -c "
+from rede import REDE
+achada = None
+for olt, onus in REDE.items():
+    for onu, nivel in onus.items():
+        if nivel < -28:
+            achada = (olt, onu, nivel)
+            break
+print('achada:', achada)
+"
+```
+
+```text
+achada: ('olt-sul', 'onu-05', -29.8)
+```
+
+A `onu-02`, com −31,2, foi encontrada primeiro e depois sobrescrita.
+
+**3. Corrija com `return`.**
+
+```bash
+python -c "
+from rede import REDE
+def primeira_critica(rede):
+    for olt, onus in rede.items():
+        for onu, nivel in onus.items():
+            if nivel < -28:
+                return olt, onu, nivel
+    return None
+print(primeira_critica(REDE))
+"
+```
+
+```text
+('olt-norte', 'onu-02', -31.2)
+```
+
+**4. `for`/`else` numa busca.**
+
+```bash
+python -c "
+from rede import REDE
+alvo = 'onu-99'
+for onu in REDE['olt-norte']:
+    if onu == alvo:
+        print('encontrada')
+        break
+else:
+    print(f'{alvo} nao esta na olt-norte')
+"
+```
+
+```text
+onu-99 nao esta na olt-norte
+```
+
+**5. `for`/`else` e o laço vazio.**
+
+```bash
+python -c "
+for n in (91, 97, 2):
+    for divisor in range(2, int(n**0.5) + 1):
+        if n % divisor == 0:
+            print(f'{n} = {divisor} x {n // divisor}')
+            break
+    else:
+        print(f'{n} e primo')
+"
+```
+
+```text
+91 = 7 x 13
+97 e primo
+2 e primo
+```
+
+Para `n = 2`, o `range(2, 2)` é vazio: zero voltas, nenhum `break`, e o `else` roda mesmo assim.
+
+**6. `continue` como filtro.**
+
+```bash
+cat > enlace.log <<'LOG'
+-19.5
+# leitura suspensa
+-31.0
+
+erro
+-8.0
+LOG
+
+python -c "
+from pathlib import Path
+soma, lidos, descartados = 0.0, 0, 0
+for linha in Path('enlace.log').read_text(encoding='utf-8').splitlines():
+    if not linha.strip() or linha.startswith('#'):
+        descartados += 1
+        continue
+    try:
+        valor = float(linha)
+    except ValueError:
+        descartados += 1
+        continue
+    soma += valor
+    lidos += 1
+print(f'{lidos} lidos, {descartados} descartados, media {soma / lidos:.2f}')
+"
+```
+
+```text
+3 lidos, 3 descartados, media -19.50
+```
+
+**7. `while`/`else` como retentativa.**
+
+```bash
+python -c "
+tentativas = 0
+while tentativas < 3:
+    tentativas += 1
+    if tentativas == 5:
+        print('conectou')
+        break
+else:
+    print('desistiu depois de', tentativas, 'tentativas')
+"
+```
+
+```text
+desistiu depois de 3 tentativas
+```
+
+**8. `match` sobre sequência.**
+
+```bash
+python -c "
+def roteia(comando):
+    match comando.split():
+        case ['listar']:
+            return 'lista tudo'
+        case ['listar', olt]:
+            return f'lista a {olt}'
+        case ['reiniciar', *onus] if onus:
+            return f'reinicia {len(onus)}: ' + ', '.join(onus)
+        case ['sair' | 'quit' | 'exit']:
+            return 'tchau'
+        case []:
+            return 'comando vazio'
+        case _:
+            return 'nao entendi'
+for c in ['listar', 'listar olt-sul', 'reiniciar onu-01 onu-02', 'quit', '', 'voar']:
+    print(f'{c!r:<28} -> {roteia(c)}')
+"
+```
+
+```text
+'listar'                     -> lista tudo
+'listar olt-sul'             -> lista a olt-sul
+'reiniciar onu-01 onu-02'    -> reinicia 2: onu-01, onu-02
+'quit'                       -> tchau
+''                           -> comando vazio
+'voar'                       -> nao entendi
+```
+
+**9. Veja a captura silenciosa.** Crie `captura.py`:
+
+```python
+CRITICO = -28.0
+
+
+def faixa(nivel):
+    match nivel:
+        case CRITICO:
+            return f"casou com o limite? CRITICO agora vale {CRITICO}"
+
+
+print(faixa(-19.5))
+print("CRITICO no modulo:", CRITICO)
+```
+
+```bash
+python captura.py
+```
+
+```text
+casou com o limite? CRITICO agora vale -19.5
+CRITICO no modulo: -28.0
+```
+
+**10. Agora com um `case` depois.** Crie `captura2.py`:
+
+```python
+CRITICO = -28.0
+
+
+def faixa(nivel):
+    match nivel:
+        case CRITICO:
+            return "no limite"
+        case _:
+            return "outro"
+```
+
+```bash
+python captura2.py
+```
+
+```text
+  File "/home/vitor/lab17/captura2.py", line 6
+    case CRITICO:
+         ^^^^^^^
+SyntaxError: name capture 'CRITICO' makes remaining patterns unreachable
+```
+
+O mesmo erro nos dois arquivos; só o segundo é detectado. Isso é o argumento inteiro a favor de sempre terminar o `match` com `case _:`.
+
+**11. A forma correta.** Crie `limiar.py`:
+
+```python
+class Limiar:
+    CRITICO = -28.0
+    SATURACAO = -8.0
+
+
+def faixa(nivel):
+    match nivel:
+        case Limiar.CRITICO:
+            return "exatamente no limite critico"
+        case Limiar.SATURACAO:
+            return "exatamente no limite de saturacao"
+        case _:
+            return "entre os limites"
+
+
+for n in (-28.0, -8.0, -19.5):
+    print(f"{n:>7}  {faixa(n)}")
+```
+
+```bash
+python limiar.py
+```
+
+```text
+  -28.0  exatamente no limite critico
+   -8.0  exatamente no limite de saturacao
+  -19.5  entre os limites
+```
+
+**12. Monte o console de operação.** Crie `console.py`:
+
+```python
+"""Console de operacao: le comandos de um arquivo e despacha com match."""
+
+from pathlib import Path
+
+from rede import REDE
+
+
+def executar(comando):
+    """Devolve (mensagem, encerrar)."""
+    match comando.split():
+        case [] | ["#", *_]:
+            return None, False
+        case ["listar"]:
+            return " ".join(REDE), False
+        case ["listar", olt] if olt in REDE:
+            onus = REDE[olt]
+            return f"{olt}: " + ", ".join(f"{k}={v}" for k, v in onus.items()), False
+        case ["listar", olt]:
+            return f"OLT desconhecida: {olt}", False
+        case ["nivel", onu]:
+            for olt, onus in REDE.items():
+                if onu in onus:
+                    return f"{onu} em {olt}: {onus[onu]} dBm", False
+            return f"{onu} nao encontrada", False
+        case ["criticas", *_]:
+            achadas = [
+                f"{olt}/{onu}"
+                for olt, onus in REDE.items()
+                for onu, nivel in onus.items()
+                if nivel < -28
+            ]
+            return ("criticas: " + ", ".join(achadas)) if achadas else "nenhuma", False
+        case ["sair" | "quit"]:
+            return "encerrando", True
+        case _:
+            return f"comando invalido: {comando!r}", False
+
+
+if __name__ == "__main__":
+    linhas = Path("comandos.txt").read_text(encoding="utf-8").splitlines()
+    for numero, linha in enumerate(linhas, start=1):
+        mensagem, encerrar = executar(linha)
+        if mensagem is None:
+            continue
+        print(f"{numero:>2}| {mensagem}")
+        if encerrar:
+            break
+    else:
+        print("fim do arquivo sem comando de saida")
+```
+
+E o arquivo de comandos:
+
+```bash
+cat > comandos.txt <<'TXT'
+listar
+
+# so um comentario
+listar olt-sul
+listar olt-oeste
+nivel onu-05
+nivel onu-99
+criticas
+voar
+sair
+listar
+TXT
+
+python console.py
+```
+
+```text
+ 1| olt-norte olt-sul olt-leste
+ 4| olt-sul: onu-04=-18.0, onu-05=-29.8
+ 5| OLT desconhecida: olt-oeste
+ 6| onu-05 em olt-sul: -29.8 dBm
+ 7| onu-99 nao encontrada
+ 8| criticas: olt-norte/onu-02, olt-sul/onu-05
+ 9| comando invalido: 'voar'
+10| encerrando
+```
+
+As linhas 2 e 3 sumiram do relatório: são a linha em branco e o comentário, tratados pelo `case [] | ["#", *_]` que devolve `None` e aciona o `continue`. A numeração continua sendo a do arquivo porque vem do `enumerate`, não de um contador de linhas processadas. E o `break` da linha 10 impediu que o `listar` da 11 rodasse.
+
+**13. Tire o `sair` e veja o `else` do laço.**
+
+```bash
+sed -i '/^sair$/d' comandos.txt
+python console.py
+```
+
+```text
+ 1| olt-norte olt-sul olt-leste
+ 4| olt-sul: onu-04=-18.0, onu-05=-29.8
+ 5| OLT desconhecida: olt-oeste
+ 6| onu-05 em olt-sul: -29.8 dBm
+ 7| onu-99 nao encontrada
+ 8| criticas: olt-norte/onu-02, olt-sul/onu-05
+ 9| comando invalido: 'voar'
+10| olt-norte olt-sul olt-leste
+fim do arquivo sem comando de saida
+```
+
+A última linha é o `else` do `for` fazendo o seu único trabalho: dizer que o arquivo acabou sem que ninguém tenha dado `break`.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- `break` sai do laço **mais interno** — não existe `break` com rótulo. Para sair de laços aninhados, extraia uma função e use `return`.
+- `continue` pula para a próxima volta e é a forma idiomática de filtrar entrada no topo do laço; no `while` com contador, é gerador de laço infinito.
+- O `else` de laço deveria chamar-se `nobreak`: roda quando o laço termina naturalmente, inclusive quando ele não dá volta nenhuma, e não roda depois de um `break`.
+- O par `break`/`else` elimina a variável-bandeira em buscas e retentativas.
+- `match` (3.10+) casa **estrutura**, não valor: literais, sequências por tamanho e posição, mapeamentos por subconjunto, classes por tipo e atributos, alternativas com `|`, guardas com `if` e o curinga `_`.
+- `str` e `bytes` não casam como sequência, por decisão de projeto.
+- Nome simples em `case` é **captura**, não comparação: casa com tudo e rebatiza o valor. Constante só com nome pontilhado (`Limiar.CRITICO`, `Status.ATIVO`).
+- Terminar o `match` com `case _:` transforma "não fez nada" em erro visível, e faz o compilador detectar capturas acidentais.
