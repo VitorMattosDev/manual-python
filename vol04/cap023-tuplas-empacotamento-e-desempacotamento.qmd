@@ -1,3 +1,817 @@
 # Tuplas, empacotamento e desempacotamento {#sec-cap023}
 
-*(em elaboracao)*
+O script de sincronização tem uma constante no topo com a lista de OLTs a visitar. Hoje só existe uma, e o autor deixou os parênteses ali para não esquecer de acrescentar as outras depois:
+
+```python
+DESTINOS = ("olt-norte")
+
+print(type(DESTINOS), len(DESTINOS))
+for d in DESTINOS:
+    print("  sincronizando", d)
+```
+
+```text
+<class 'str'> 9
+  sincronizando o
+  sincronizando l
+  sincronizando t
+  sincronizando -
+  sincronizando n
+  sincronizando o
+  sincronizando r
+  sincronizando t
+  sincronizando e
+```
+
+Nove sincronizações, uma para cada letra. `DESTINOS` não é uma tupla de um elemento: é uma **string**, e os parênteses ali eram só agrupamento de expressão, como em `(2 + 3) * 4`.
+
+A correção é uma vírgula:
+
+```python
+print(type(("olt-norte")), type(("olt-norte",)), type(()))
+print(len(("olt-norte",)))
+```
+
+```text
+<class 'str'> <class 'tuple'> <class 'tuple'>
+1
+```
+
+**O que cria a tupla é a vírgula, não o parêntese.** Essa é a frase que o capítulo inteiro desdobra — e a exceção é a tupla vazia, `()`, que não tem onde pôr vírgula.
+
+## A vírgula é a construtora
+
+```python
+sem_parenteses = "onu-01", -19.5, "ativa"
+print(sem_parenteses, type(sem_parenteses))
+
+
+def devolve():
+    return 1, 2
+
+
+print(devolve(), type(devolve()))
+print(divmod(17, 5))
+```
+
+```text
+('onu-01', -19.5, 'ativa') <class 'tuple'>
+(1, 2) <class 'tuple'>
+(3, 2)
+```
+
+Nenhuma dessas três linhas tem parênteses de tupla, e as três produzem tuplas. É por isso que o "devolver vários valores" do @sec-cap018 funciona: `return 1, 2` empacota numa tupla antes de sair.
+
+::: {#fig-virgula-tupla}
+```{.tikz}
+%%| filename: virgula-tupla
+%%| alt: Quatro literais comparados: parenteses sem virgula sao agrupamento, parenteses com virgula formam tupla de um elemento, virgulas sem parenteses formam tupla e parenteses vazios formam a tupla vazia
+\begin{tikzpicture}[
+  cod/.style={draw=manualgray, very thick, rounded corners=1pt, fill=white,
+              text width=4.4cm, align=left, minimum height=0.66cm,
+              font=\ttfamily\small, anchor=west, inner xsep=6pt},
+  errado/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!10,
+                 text width=4.4cm, align=left, minimum height=0.66cm,
+                 font=\ttfamily\small, anchor=west, inner xsep=6pt},
+  certo/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!12,
+                text width=4.4cm, align=left, minimum height=0.66cm,
+                font=\ttfamily\small, anchor=west, inner xsep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.8, 2.0) rectangle (14.6,-5.4);
+
+  \node[hd] at (0.0, 1.5) {o que você escreve};
+  \node[hd] at (5.4, 1.5) {o que o Python entende};
+
+  \node[errado] at (0.0, 0.7) {("olt-norte")};
+  \node[lb, text width=8.8cm, text=manualred] at (5.4, 0.7)
+    {\textbf{str} --- parêntese aqui é só agrupamento de expressão, como em
+     \texttt{(2 + 3) * 4}};
+
+  \node[certo] at (0.0,-0.3) {("olt-norte",)};
+  \node[lb, text width=8.8cm, text=manualgreen] at (5.4,-0.3)
+    {\textbf{tuple} de 1 elemento --- a vírgula final é obrigatória};
+
+  \node[cod] at (0.0,-1.3) {"a", "b", "c"};
+  \node[lb, text width=8.8cm] at (5.4,-1.3)
+    {\textbf{tuple} de 3 --- sem parêntese nenhum: quem cria é a vírgula};
+
+  \node[cod] at (0.0,-2.3) {5,};
+  \node[lb, text width=8.8cm] at (5.4,-2.3)
+    {\textbf{tuple} \texttt{(5,)} --- uma vírgula perdida no fim de uma
+     atribuição vira tupla em silêncio};
+
+  \node[cod] at (0.0,-3.3) {()};
+  \node[lb, text width=8.8cm] at (5.4,-3.3)
+    {\textbf{tuple} vazia --- a única que se escreve sem vírgula, porque não há
+     onde pô-la};
+
+  \node[lb, text width=13.6cm] at (-0.6,-4.7)
+    {Os parênteses só são \textbf{obrigatórios} onde a vírgula já tem outro
+     significado: dentro de uma chamada (\texttt{f((1, 2))} passa uma tupla;
+     \texttt{f(1, 2)} passa dois argumentos), num literal de lista ou de
+     dicionário, e em compreensões.};
+\end{tikzpicture}
+```
+A vírgula é que constrói a tupla; o parêntese só agrupa.
+:::
+
+## Imutável — e só na superfície
+
+```python
+t = ("onu-01", -19.5)
+t[1] = -20.0
+```
+
+```text
+TypeError: 'tuple' object does not support item assignment
+```
+
+Não há `append`, `remove`, `sort` nem atribuição por índice. O que existe é o que não modifica: indexação, fatiamento, `in`, `len`, `count`, `index`, `+` e `*` (que criam tuplas novas).
+
+Mas a imutabilidade é **rasa**, exatamente como a cópia do @sec-cap022:
+
+```python
+com_lista = ("onu-01", [1, 2])
+com_lista[1].append(3)
+print("a tupla nao mudou, a lista sim:", com_lista)
+```
+
+```text
+a tupla nao mudou, a lista sim: ('onu-01', [1, 2, 3])
+```
+
+A tupla continua guardando exatamente as mesmas duas referências. O que mudou foi o objeto do outro lado da segunda referência.
+
+Isso tem uma consequência prática imediata: **hashabilidade**.
+
+```python
+print("hash de tupla simples:", hash(("onu-01", -19.5)))
+hash(com_lista)
+```
+
+```text
+hash de tupla simples: -8596631426215206173
+TypeError: unhashable type: 'list'
+```
+
+Uma tupla é hashável **se e somente se** todos os elementos dela forem. É a razão de a tupla poder ser chave de dicionário e a lista não — e de uma tupla com lista dentro também não poder.
+
+## Empacotar e desempacotar
+
+Empacotamento é o que a vírgula faz; desempacotamento é o inverso, do lado esquerdo da atribuição:
+
+```python
+onu, nivel, estado = ("onu-01", -19.5, "ativa")
+print(onu, nivel, estado)
+
+a, b = 1, 2
+a, b = b, a
+print("troca:", a, b)
+
+(nome, (x, y)) = ("ponto", (3, 4))
+print("aninhado:", nome, x, y)
+
+_, nivel, _ = ("onu-01", -19.5, "ativa")
+print("so o que interessa:", nivel)
+```
+
+```text
+onu-01 -19.5 ativa
+troca: 2 1
+aninhado: ponto 3 4
+so o que interessa: -19.5
+```
+
+A troca `a, b = b, a` funciona porque o lado direito é avaliado **inteiro** antes de qualquer atribuição: monta-se a tupla `(2, 1)` e só depois ela é desmontada. Não há variável temporária, e não há ordem que atrapalhe.
+
+O `_` é convenção, não sintaxe: é um nome comum, que a comunidade usa para "não me interessa". Ele pode se repetir, e fica valendo o último valor atribuído.
+
+O desempacotamento exige quantidade exata:
+
+```python
+registros = [("onu-01", -19.5), ("onu-02", -31.2, "critica")]
+for r in registros:
+    try:
+        onu, nivel = r
+        print(f"{onu}: {nivel}")
+    except ValueError as e:
+        print("ValueError:", e)
+
+try:
+    a, b, c = (1, 2)
+except ValueError as e:
+    print("ValueError:", e)
+```
+
+```text
+onu-01: -19.5
+ValueError: too many values to unpack (expected 2)
+ValueError: not enough values to unpack (expected 3, got 2)
+```
+
+As duas mensagens são precisas e dizem os dois números. Quando os registros têm tamanho variável — o caso do CSV com coluna opcional —, a saída é o desempacotamento estendido.
+
+## Desempacotamento estendido
+
+Desde o **Python 3.0** (PEP 3132), um alvo pode levar `*` e absorver o resto:
+
+```python
+primeiro, *resto = [10, 20, 30, 40]
+print(primeiro, resto, type(resto))
+
+*inicio, ultimo = [10, 20, 30, 40]
+print(inicio, ultimo)
+
+a, *meio, z = "abcdef"
+print(a, meio, z)
+
+so_um, *nada = [7]
+print(so_um, nada)
+```
+
+```text
+10 [20, 30, 40] <class 'list'>
+[10, 20, 30] 40
+a ['b', 'c', 'd', 'e'] f
+7 []
+```
+
+Três coisas importantes: o alvo com `*` recebe sempre uma **lista** (mesmo desempacotando uma tupla ou uma string), pode ficar **vazio** sem erro, e só pode haver **um** por alvo.
+
+::: {#fig-desempacotamento}
+```{.tikz}
+%%| filename: desempacotamento
+%%| alt: Como o desempacotamento estendido distribui os elementos: os alvos fixos sao preenchidos primeiro, das duas pontas, e o alvo com asterisco recebe a lista do que sobrou no meio
+\begin{tikzpicture}[
+  el/.style={draw=manualgray, thick, rounded corners=1pt, fill=white,
+             minimum width=1.15cm, minimum height=0.58cm,
+             font=\ttfamily\scriptsize},
+  fix/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!14,
+              minimum width=1.15cm, minimum height=0.58cm,
+              font=\ttfamily\scriptsize},
+  est/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+              minimum width=1.15cm, minimum height=0.58cm,
+              font=\ttfamily\scriptsize},
+  alvo/.style={font=\ttfamily\small, text=manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-2.8, 2.9) rectangle (14.2,-4.6);
+
+  \node[alvo] at (2.9, 2.4) {a, *meio, z = "abcdef"};
+
+  \node[lb, anchor=east] at (-1.0, 1.2) {a sequência};
+  \node[fix] (s0) at (0.0, 1.2) {'a'};
+  \node[est] (s1) at (1.3, 1.2) {'b'};
+  \node[est] (s2) at (2.6, 1.2) {'c'};
+  \node[est] (s3) at (3.9, 1.2) {'d'};
+  \node[est] (s4) at (5.2, 1.2) {'e'};
+  \node[fix] (s5) at (6.5, 1.2) {'f'};
+
+  \node[lb, anchor=east] at (-1.0,-1.1) {os alvos};
+  \node[fix] (t0) at (0.0,-1.1) {a};
+  \node[est, minimum width=3.9cm] (t1) at (3.25,-1.1) {meio};
+  \node[fix] (t2) at (6.5,-1.1) {z};
+
+  \draw[fl, manualblue] (s0) -- (t0);
+  \draw[fl, manualblue] (s5) -- (t2);
+  \draw[fl, manualgreen] (s1) -- ([xshift=-1.5cm]t1.north);
+  \draw[fl, manualgreen] (s2) -- ([xshift=-0.5cm]t1.north);
+  \draw[fl, manualgreen] (s3) -- ([xshift=0.5cm]t1.north);
+  \draw[fl, manualgreen] (s4) -- ([xshift=1.5cm]t1.north);
+
+  \node[lb, anchor=west, text width=5.2cm, text=manualblue] at (8.0, 1.2)
+    {\textbf{1º:} os alvos fixos são servidos, contando das \textbf{duas pontas}};
+  \node[lb, anchor=west, text width=5.2cm, text=manualgreen] at (8.0,-1.1)
+    {\textbf{2º:} o alvo com \texttt{*} fica com o que sobrou --- sempre numa
+     \texttt{list}, e pode ficar vazia};
+
+  \node[lb, text width=13.8cm] at (5.6,-3.6)
+    {Só pode haver \textbf{um} alvo com \texttt{*} por atribuição, e ele nunca
+     falha por falta de itens: com menos elementos do que alvos fixos, o erro é
+     \texttt{ValueError}; com exatamente o número de alvos fixos, o
+     \texttt{*} recebe \texttt{[]}.};
+\end{tikzpicture}
+```
+Os alvos fixos são preenchidos primeiro, das duas pontas; o `*` fica com o meio.
+:::
+
+O uso mais frequente é separar cabeçalho de corpo:
+
+```python
+cabecalho, *linhas = "onu;nivel\nonu-01;-19.5\nonu-02;-31.2".splitlines()
+print(cabecalho, "|", linhas)
+```
+
+```text
+onu;nivel | ['onu-01;-19.5', 'onu-02;-31.2']
+```
+
+## Desempacotar no laço
+
+Combinado com o `for` do @sec-cap016, o desempacotamento elimina índices:
+
+```python
+LEITURAS = [("onu-01", -19.5, "norte"), ("onu-02", -31.2, "sul")]
+for onu, nivel, olt in LEITURAS:
+    print(f"{onu:<8} {nivel:>7.1f} {olt}")
+for i, (onu, nivel, olt) in enumerate(LEITURAS, start=1):
+    print(i, onu, olt)
+```
+
+```text
+onu-01     -19.5 norte
+onu-02     -31.2 sul
+1 onu-01 norte
+2 onu-02 sul
+```
+
+O `i, (onu, nivel, olt)` é desempacotamento aninhado: o `enumerate` produz `(índice, item)` e o item é desmontado no mesmo passo.
+
+## Tupla como chave
+
+Como tuplas de imutáveis são hasháveis, elas são a chave composta natural:
+
+```python
+CACHE = {}
+CACHE[("olt-norte", 1, 3)] = -19.5
+CACHE[("olt-sul", 2, 1)] = -31.2
+print(CACHE[("olt-norte", 1, 3)])
+print(sorted(CACHE))
+CACHE[["olt-norte", 1, 3]] = 0
+```
+
+```text
+-19.5
+[('olt-norte', 1, 3), ('olt-sul', 2, 1)]
+TypeError: unhashable type: 'list'
+```
+
+Isso é o que permite indexar por (OLT, placa, porta), por (linha, coluna), por (data, produto) — sem inventar uma string concatenada com separador, que sempre acaba encontrando um separador dentro do dado.
+
+## Tupla ou lista?
+
+Tecnicamente, a diferença é a mutabilidade. Na prática, a convenção é **semântica**:
+
+- **Tupla é registro**: posições com significados **diferentes**, quantidade fixa. `(onu, nivel, olt)`, `(x, y)`, `(host, porta)`. Desempacotar faz sentido.
+- **Lista é coleção**: itens com o mesmo significado, quantidade variável. `[onu1, onu2, onu3]`. Percorrer faz sentido.
+
+Quando o registro tem mais de três campos, ou quando você se pega contando posições para lembrar o que é `r[3]`, a tupla já passou do ponto: a resposta é `NamedTuple` ou `dataclass`, do Volume 7.
+
+Há um ganho de desempenho, e ele é secundário:
+
+```python
+import sys
+import timeit
+
+lista = [1, 2, 3, 4, 5]
+tupla = (1, 2, 3, 4, 5)
+print("lista:", sys.getsizeof(lista), "bytes | tupla:", sys.getsizeof(tupla), "bytes")
+tl = timeit.timeit("[1, 2, 3, 4, 5]", number=2_000_000)
+tt = timeit.timeit("(1, 2, 3, 4, 5)", number=2_000_000)
+print(f"criar lista {tl:.3f}s | criar tupla {tt:.3f}s")
+```
+
+```text
+lista: 104 bytes | tupla: 80 bytes
+criar lista 0.053s | criar tupla 0.019s
+```
+
+Menor porque não precisa reservar espaço para crescer, e quase três vezes mais rápida de criar por um motivo específico:
+
+```python
+import dis
+
+dis.dis("x = (1, 2, 3)")
+```
+
+```text
+  0           RESUME                   0
+
+  1           LOAD_CONST               0 ((1, 2, 3))
+              STORE_NAME               0 (x)
+              RETURN_CONST             1 (None)
+```
+
+A tupla de constantes é montada **na compilação** e vira uma constante única no bytecode. Uma lista precisa ser construída em tempo de execução, elemento a elemento, toda vez — porque alguém pode modificá-la depois.
+
+## 🐍 Jeito Pythônico
+
+**Vírgula final em tupla de um elemento**, e de preferência com parênteses: `("olt-norte",)`. Sem eles, `x = "olt-norte",` é fácil de ler como um erro de digitação.
+
+**Desempacote em vez de indexar.** `onu, nivel = registro` diz o que cada posição é; `registro[0]` e `registro[1]` não dizem nada.
+
+```python
+# antipadrão
+for r in leituras:
+    print(r[0], r[1] * 2)
+```
+
+```python
+# pythônico
+for onu, nivel in leituras:
+    print(onu, nivel * 2)
+```
+
+**Troque com `a, b = b, a`.** Sem temporária, e é o idioma que todo mundo reconhece.
+
+**`*resto` no lugar de fatiar.** `primeiro, *resto = seq` é mais claro que `seq[0]` e `seq[1:]`, e falha alto se a sequência estiver vazia.
+
+**Tupla para chave composta e para retorno de função.** Não concatene strings com separador para formar chave — o separador sempre aparece dentro de um dado real.
+
+**Tupla como padrão de parâmetro é seguro** — é imutável, então não sofre o problema do @sec-cap019. `def f(destinos=())` é legítimo.
+
+**A partir de três campos, considere `NamedTuple`.** Uma `NamedTuple` continua sendo tupla (desempacota, é hashável, é imutável) e ganha nomes:
+
+```python
+# ilegível na segunda leitura
+def alerta(r):
+    return f"{r[0]} em {r[3]}"
+```
+
+**Anote como `tuple[str, float]` para registro e `tuple[str, ...]` para coleção.** As duas formas dizem coisas diferentes ao verificador de tipos: a primeira é "exatamente dois campos", a segunda é "qualquer quantidade, todos `str`".
+
+Sobre versões:
+
+- **Python 3.0** — desempacotamento estendido com `*` no alvo (PEP 3132).
+- **Python 3.5** — `*` e `**` em literais e chamadas: `(*a, *b)`, `f(*a, **b)` (PEP 448).
+- **Python 3.8** — `f"{x=}"`, que imprime nome e valor e é muito usado com tupla desempacotada.
+- **Python 3.9** — `tuple[str, float]` na anotação, sem `typing.Tuple` (PEP 585).
+- **Python 3.10** — o `match` do @sec-cap017 casa tuplas por tamanho e posição, o que é desempacotamento com teste embutido.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir a tupla que não era tupla, ver a imutabilidade rasa e o `unhashable type`, exercitar o desempacotamento estendido e terminar com um índice de enlaces em que a chave é uma tupla de três campos.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab23 && cd ~/lab23
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. A tupla que era string.** Crie `destinos.py`:
+
+```python
+DESTINOS = ("olt-norte")
+
+print(type(DESTINOS), len(DESTINOS))
+for d in DESTINOS:
+    print("  sincronizando", d)
+```
+
+```bash
+python destinos.py
+```
+
+```text
+<class 'str'> 9
+  sincronizando o
+  sincronizando l
+  sincronizando t
+  sincronizando -
+  sincronizando n
+  sincronizando o
+  sincronizando r
+  sincronizando t
+  sincronizando e
+```
+
+**3. A vírgula.**
+
+```bash
+python -c "
+print(type(('olt-norte')), type(('olt-norte',)), type(()))
+print(len(('olt-norte',)))
+um = 5,
+print(um, type(um))
+print(tuple('abc'), tuple([1, 2]), tuple())
+"
+```
+
+```text
+<class 'str'> <class 'tuple'> <class 'tuple'>
+1
+(5,) <class 'tuple'>
+('a', 'b', 'c') (1, 2) ()
+```
+
+A linha `um = 5,` é o acidente na direção contrária: uma vírgula sobrando no fim de uma atribuição transforma o valor em tupla, e o erro só aparece na primeira operação aritmética.
+
+**4. Tupla sem parênteses.**
+
+```bash
+python -c "
+sem_parenteses = 'onu-01', -19.5, 'ativa'
+print(sem_parenteses, type(sem_parenteses))
+def devolve():
+    return 1, 2
+print(devolve(), type(devolve()))
+print(divmod(17, 5))
+"
+```
+
+```text
+('onu-01', -19.5, 'ativa') <class 'tuple'>
+(1, 2) <class 'tuple'>
+(3, 2)
+```
+
+**5. Imutabilidade rasa e hash.** Crie `imutavel.py`:
+
+```python
+t = ("onu-01", -19.5)
+try:
+    t[1] = -20.0
+except TypeError as e:
+    print("TypeError:", e)
+
+com_lista = ("onu-01", [1, 2])
+com_lista[1].append(3)
+print("a tupla nao mudou, a lista sim:", com_lista)
+
+print("hash de tupla simples:", hash(("onu-01", -19.5)))
+try:
+    hash(com_lista)
+except TypeError as e:
+    print("TypeError:", e)
+```
+
+```bash
+python imutavel.py
+```
+
+```text
+TypeError: 'tuple' object does not support item assignment
+a tupla nao mudou, a lista sim: ('onu-01', [1, 2, 3])
+hash de tupla simples: -8596631426215206173
+TypeError: unhashable type: 'list'
+```
+
+O valor do `hash` muda entre execuções quando há string envolvida, por causa da aleatorização de hash; o que não muda é a última linha.
+
+**6. Desempacotar.**
+
+```bash
+python -c "
+onu, nivel, estado = ('onu-01', -19.5, 'ativa')
+print(onu, nivel, estado)
+a, b = 1, 2
+a, b = b, a
+print('troca:', a, b)
+(nome, (x, y)) = ('ponto', (3, 4))
+print('aninhado:', nome, x, y)
+_, nivel, _ = ('onu-01', -19.5, 'ativa')
+print('so o que interessa:', nivel)
+"
+```
+
+```text
+onu-01 -19.5 ativa
+troca: 2 1
+aninhado: ponto 3 4
+so o que interessa: -19.5
+```
+
+**7. Os dois `ValueError`.** Crie `desempacota_erro.py`:
+
+```python
+registros = [("onu-01", -19.5), ("onu-02", -31.2, "critica")]
+for r in registros:
+    try:
+        onu, nivel = r
+        print(f"{onu}: {nivel}")
+    except ValueError as e:
+        print("ValueError:", e)
+
+try:
+    a, b, c = (1, 2)
+except ValueError as e:
+    print("ValueError:", e)
+```
+
+```bash
+python desempacota_erro.py
+```
+
+```text
+onu-01: -19.5
+ValueError: too many values to unpack (expected 2)
+ValueError: not enough values to unpack (expected 3, got 2)
+```
+
+**8. Desempacotamento estendido.**
+
+```bash
+python -c "
+primeiro, *resto = [10, 20, 30, 40]
+print(primeiro, resto, type(resto))
+*inicio, ultimo = [10, 20, 30, 40]
+print(inicio, ultimo)
+a, *meio, z = 'abcdef'
+print(a, meio, z)
+so_um, *nada = [7]
+print(so_um, nada)
+cabecalho, *linhas = 'onu;nivel\nonu-01;-19.5\nonu-02;-31.2'.splitlines()
+print(cabecalho, '|', linhas)
+"
+```
+
+```text
+10 [20, 30, 40] <class 'list'>
+[10, 20, 30] 40
+a ['b', 'c', 'd', 'e'] f
+7 []
+onu;nivel | ['onu-01;-19.5', 'onu-02;-31.2']
+```
+
+A quarta linha é a que surpreende: `*nada` recebeu `[]` em vez de dar erro.
+
+**9. Desempacotar no laço.**
+
+```bash
+python -c "
+LEITURAS = [('onu-01', -19.5, 'norte'), ('onu-02', -31.2, 'sul')]
+for onu, nivel, olt in LEITURAS:
+    print(f'{onu:<8} {nivel:>7.1f} {olt}')
+for i, (onu, nivel, olt) in enumerate(LEITURAS, start=1):
+    print(i, onu, olt)
+"
+```
+
+```text
+onu-01     -19.5 norte
+onu-02     -31.2 sul
+1 onu-01 norte
+2 onu-02 sul
+```
+
+**10. Chave composta.**
+
+```bash
+python -c "
+CACHE = {}
+CACHE[('olt-norte', 1, 3)] = -19.5
+CACHE[('olt-sul', 2, 1)] = -31.2
+print(CACHE[('olt-norte', 1, 3)])
+print(sorted(CACHE))
+try:
+    CACHE[['olt-norte', 1, 3]] = 0
+except TypeError as e:
+    print('TypeError:', e)
+"
+```
+
+```text
+-19.5
+[('olt-norte', 1, 3), ('olt-sul', 2, 1)]
+TypeError: unhashable type: 'list'
+```
+
+Note que `sorted` ordenou as tuplas elemento a elemento, sem `key` nenhuma.
+
+**11. Tamanho, velocidade e a constante do bytecode.**
+
+```bash
+python -c "
+import sys, timeit
+lista = [1, 2, 3, 4, 5]
+tupla = (1, 2, 3, 4, 5)
+print('lista:', sys.getsizeof(lista), 'bytes | tupla:', sys.getsizeof(tupla), 'bytes')
+tl = timeit.timeit('[1, 2, 3, 4, 5]', number=2_000_000)
+tt = timeit.timeit('(1, 2, 3, 4, 5)', number=2_000_000)
+print(f'criar lista {tl:.3f}s | criar tupla {tt:.3f}s')
+import dis
+dis.dis('x = (1, 2, 3)')
+"
+```
+
+```text
+lista: 104 bytes | tupla: 80 bytes
+criar lista 0.053s | criar tupla 0.019s
+  0           RESUME                   0
+
+  1           LOAD_CONST               0 ((1, 2, 3))
+              STORE_NAME               0 (x)
+              RETURN_CONST             1 (None)
+```
+
+Um único `LOAD_CONST` para a tupla inteira: ela já estava pronta antes de o programa rodar.
+
+**12. Retorno múltiplo.**
+
+```bash
+python -c "
+def estatisticas(niveis):
+    return min(niveis), max(niveis), sum(niveis) / len(niveis)
+pior, melhor, media = estatisticas([-19.5, -31.2, -8.0])
+print(f'{pior=} {melhor=} {media=:.2f}')
+resultado = estatisticas([-19.5, -31.2, -8.0])
+print(resultado[0], len(resultado))
+"
+```
+
+```text
+pior=-31.2 melhor=-8.0 media=-19.57
+-31.2 3
+```
+
+**13. O índice de enlaces.** Crie `enlace.py`:
+
+```python
+"""Leituras como tuplas: registro fixo, chave composta e desempacotamento."""
+
+from collections import defaultdict
+
+# (olt, placa, porta) -> (onu, nivel_dbm)
+ENLACES = {
+    ("olt-norte", 1, 1): ("onu-01", -19.5),
+    ("olt-norte", 1, 3): ("onu-02", -31.2),
+    ("olt-norte", 2, 1): ("onu-03", -26.4),
+    ("olt-sul", 1, 1): ("onu-04", -8.0),
+    ("olt-sul", 1, 2): ("onu-05", -33.1),
+}
+
+CRITICO = -28.0
+
+
+def por_olt(enlaces):
+    """Agrupa os enlaces por OLT, preservando a chave completa."""
+    grupos = defaultdict(list)
+    for (olt, placa, porta), (onu, nivel) in enlaces.items():
+        grupos[olt].append((placa, porta, onu, nivel))
+    return grupos
+
+
+def criticos(enlaces):
+    return [
+        (olt, placa, porta, onu, nivel)
+        for (olt, placa, porta), (onu, nivel) in enlaces.items()
+        if nivel < CRITICO
+    ]
+
+
+if __name__ == "__main__":
+    for olt, itens in por_olt(ENLACES).items():
+        print(f"{olt}:")
+        for placa, porta, onu, nivel in sorted(itens):
+            marca = "  <-- critico" if nivel < CRITICO else ""
+            print(f"  placa {placa} porta {porta}  {onu}  {nivel:>7.1f}{marca}")
+
+    achados = criticos(ENLACES)
+    print(f"\n{len(achados)} criticos")
+    pior, *outros = sorted(achados, key=lambda r: r[4])
+    print("pior:", pior)
+    print("demais:", [r[3] for r in outros])
+
+    chave = ("olt-norte", 1, 3)
+    onu, nivel = ENLACES[chave]
+    print(f"consulta por chave composta {chave}: {onu} em {nivel} dBm")
+```
+
+```bash
+python enlace.py
+```
+
+```text
+olt-norte:
+  placa 1 porta 1  onu-01    -19.5
+  placa 1 porta 3  onu-02    -31.2  <-- critico
+  placa 2 porta 1  onu-03    -26.4
+olt-sul:
+  placa 1 porta 1  onu-04     -8.0
+  placa 1 porta 2  onu-05    -33.1  <-- critico
+
+2 criticos
+pior: ('olt-sul', 1, 2, 'onu-05', -33.1)
+demais: ['onu-02']
+consulta por chave composta ('olt-norte', 1, 3): onu-02 em -31.2 dBm
+```
+
+Três usos de tupla numa tela só: chave composta no dicionário, registro no valor, e o desempacotamento aninhado `for (olt, placa, porta), (onu, nivel) in enlaces.items()`, que desmonta chave e valor no mesmo cabeçalho de laço. O `sorted(itens)` também é tupla trabalhando: ordenou por placa e, dentro dela, por porta, sem `key` nenhuma.
+
+E repare no `r[4]` do `key=`: cinco campos posicionais já é demais para memorizar. É exatamente aqui que a tupla pede para virar `NamedTuple`.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- **A vírgula cria a tupla**, não o parêntese. `("x")` é string; `("x",)` é tupla de um; `()` é a tupla vazia.
+- Tupla é imutável **na superfície**: as referências são fixas, os objetos apontados podem mudar. Uma tupla é hashável só se todos os elementos forem.
+- Empacotar é a vírgula; desempacotar é o alvo múltiplo. `a, b = b, a` troca sem temporária porque o lado direito é avaliado inteiro antes.
+- Quantidade errada dá `ValueError` com mensagem precisa; `*alvo` absorve o resto numa **lista**, pode ficar vazio e só pode aparecer uma vez.
+- Desempacotamento aninhado funciona em cabeçalho de `for` e com `enumerate`, eliminando índices.
+- Tupla de imutáveis é a chave composta natural de dicionário — melhor que string concatenada com separador.
+- Convenção: tupla é registro de campos heterogêneos e fixos; lista é coleção homogênea e variável. A partir de três campos, `NamedTuple`.
+- Tupla ocupa menos memória e é mais rápida de criar, porque tuplas de constantes são montadas na compilação e viram uma constante do bytecode.

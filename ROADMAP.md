@@ -41,7 +41,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 ### Volume 4 — Estruturas de Dados Nativas
 
 - [x] **cap 022** - Listas: operações, mutabilidade e cópia - `vol04/cap022-listas-operacoes-mutabilidade-e-copia.qmd`
-- [ ] **cap 023** - Tuplas, empacotamento e desempacotamento - `vol04/cap023-tuplas-empacotamento-e-desempacotamento.qmd`
+- [x] **cap 023** - Tuplas, empacotamento e desempacotamento - `vol04/cap023-tuplas-empacotamento-e-desempacotamento.qmd`
 - [ ] **cap 024** - Dicionários: chaves, ordem e os métodos essenciais - `vol04/cap024-dicionarios-chaves-ordem-e-os-metodos.qmd`
 - [ ] **cap 025** - Conjuntos e operações de conjunto - `vol04/cap025-conjuntos-e-operacoes-de-conjunto.qmd`
 - [ ] **cap 026** - Compreensões de lista, dicionário e conjunto - `vol04/cap026-compreensoes-de-lista-dicionario-e-conjunto.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (22 concluidos).
+**Total:** 104 capitulos em 16 volumes (23 concluidos).
 
