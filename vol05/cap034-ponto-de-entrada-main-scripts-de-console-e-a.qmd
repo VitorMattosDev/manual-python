@@ -1,3 +1,1069 @@
 # Ponto de entrada: `__main__`, scripts de console e a linha de comando {#sec-cap034}
 
-*(em elaboracao)*
+O script da madrugada funcionava:
+
+```python
+"""Relatorio da madrugada."""
+
+LEITURAS = [("onu-00042", -21.4), ("onu-00043", -29.8)]
+
+
+def classificar(nivel):
+    return "critico" if nivel <= -28.0 else "normal"
+
+
+print("=== relatorio da madrugada ===")
+for onu, nivel in LEITURAS:
+    print(f"{onu}  {nivel:6.1f} dBm  {classificar(nivel)}")
+print("=== enviado para a lista de plantao ===")
+```
+
+```text
+=== relatorio da madrugada ===
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+=== enviado para a lista de plantao ===
+```
+
+Até que alguém do time quis reaproveitar só a função de classificação:
+
+```python
+from relatorio import classificar
+
+print("usei so a funcao:", classificar(-31.0))
+```
+
+```text
+=== relatorio da madrugada ===
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+=== enviado para a lista de plantao ===
+usei so a funcao: critico
+```
+
+O relatório inteiro rodou — e, num script de verdade, teria mandado o e-mail para a lista de plantão. É o @sec-cap029 cobrando a fatura: **importar executa o corpo do módulo**, e tudo que estava solto no nível do arquivo rodou junto.
+
+Este capítulo fecha o Volume 5 resolvendo isso e o que vem depois: como um mesmo pacote vira, ao mesmo tempo, biblioteca importável, módulo executável por `python3 -m` e comando de terminal com nome próprio.
+
+## `__name__` e os modos de execução
+
+O Python dá a todo módulo um atributo `__name__`, e ele vale coisas diferentes conforme o módulo tenha sido importado ou executado:
+
+```python
+import sys
+
+print(f"__name__   = {__name__!r}")
+print(f"sys.argv[0]= {sys.argv[0]!r}")
+```
+
+```bash
+python3 quemsou.py
+```
+
+```text
+__name__   = '__main__'
+sys.argv[0]= 'quemsou.py'
+```
+
+```bash
+python3 -m quemsou
+```
+
+```text
+__name__   = '__main__'
+sys.argv[0]= '/home/vitor/lab34/solto/quemsou.py'
+```
+
+```bash
+python3 -c "import quemsou"
+```
+
+```text
+__name__   = 'quemsou'
+sys.argv[0]= '-c'
+```
+
+**O módulo que o Python executa se chama `__main__`; todos os outros se chamam pelo próprio nome.** Daí a linha mais reconhecível da linguagem:
+
+```python
+if __name__ == "__main__":
+    ...
+```
+
+Note também `sys.argv[0]`: com o caminho do arquivo, ele é o que você digitou; com `-m`, é o caminho absoluto resolvido. Isso importa quando o programa monta a mensagem de uso a partir do próprio nome — motivo pelo qual o `argparse` aceita `prog=` explícito, mais adiante.
+
+## O guarda e a função `main`
+
+A mesma lógica, reorganizada:
+
+```python
+"""Relatorio da madrugada."""
+
+LEITURAS = [("onu-00042", -21.4), ("onu-00043", -29.8)]
+
+
+def classificar(nivel):
+    return "critico" if nivel <= -28.0 else "normal"
+
+
+def main():
+    print("=== relatorio da madrugada ===")
+    for onu, nivel in LEITURAS:
+        print(f"{onu}  {nivel:6.1f} dBm  {classificar(nivel)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+```bash
+python3 relatorio2.py
+python3 -c "from relatorio2 import classificar; print('importei em silencio:', classificar(-31.0))"
+```
+
+```text
+=== relatorio da madrugada ===
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+importei em silencio: critico
+```
+
+Três decisões nessas seis linhas, e cada uma tem motivo:
+
+**O trabalho vira uma função `main`.** Não é enfeite: código dentro de função é testável (`main()` pode ser chamada de um teste), tem escopo próprio (@sec-cap020) e não vaza variável de laço para o módulo.
+
+**`main` devolve o código de saída** em vez de imprimir e morrer. Assim ela pode ser chamada de outro código Python sem derrubar o processo.
+
+**`raise SystemExit(main())`** em vez de `sys.exit(main())`. As duas fazem o mesmo — `sys.exit` levanta exatamente essa exceção —, mas a forma com `raise` deixa explícito que ali está uma exceção, e não uma chamada mágica que "para tudo". É o estilo que a documentação da biblioteca padrão usa.
+
+## Código de saída
+
+Todo processo devolve um número ao terminá-lo. Em Unix, `0` é sucesso e qualquer outro valor é falha, e o shell decide o que fazer com base nisso:
+
+```python
+import sys
+
+
+def main():
+    nivel = float(sys.argv[1])
+    if nivel <= -28.0:
+        print(f"CRITICO: {nivel} dBm", file=sys.stderr)
+        return 1
+    print(f"ok: {nivel} dBm")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+```bash
+python3 checa.py -21.4 && echo "  (o shell seguiu: && funcionou)"
+python3 checa.py -31.0 || echo "  (o shell viu a falha: || disparou)"
+```
+
+```text
+ok: -21.4 dBm
+  (o shell seguiu: && funcionou)
+CRITICO: -31.0 dBm
+  (o shell viu a falha: || disparou)
+```
+
+Esse número é a única coisa que o `cron`, o `systemd`, o `make` e o CI conseguem ler do seu programa sem interpretar texto. Um script de verificação que **imprime** "erro" mas **devolve** `0` é um script que nunca vai falhar um *pipeline* — e a falha só será notada quando o cliente ligar.
+
+As convenções que valem a pena respeitar:
+
+| código | significa | quem produz |
+|---|---|---|
+| `0` | sucesso | `return 0`, ou simplesmente terminar |
+| `1` | falha genérica | `return 1`, exceção não tratada |
+| `2` | erro de uso (argumento inválido) | o próprio `argparse` |
+| `130` | interrompido com Ctrl-C | `KeyboardInterrupt` |
+
+Três comportamentos vale ver de perto. `SystemExit` com uma string imprime a mensagem em `stderr` e sai com `1` — é o atalho para erro fatal com explicação:
+
+```bash
+python3 -c "raise SystemExit('faltou o arquivo de configuracao')"
+echo "codigo: $?"
+```
+
+```text
+faltou o arquivo de configuracao
+codigo: 1
+```
+
+`KeyboardInterrupt` não tratado dá `130`, e não `1`:
+
+```bash
+python3 -c "raise KeyboardInterrupt"
+echo "codigo: $?"
+```
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    raise KeyboardInterrupt
+KeyboardInterrupt
+codigo: 130
+```
+
+Programa de terminal bem-educado captura isso e sai limpo — traceback de Ctrl-C assusta usuário à toa:
+
+```python
+def main():
+    print("trabalhando...", flush=True)
+    try:
+        trabalho_longo()
+    except KeyboardInterrupt:
+        print("interrompido pelo usuario", file=sys.stderr)
+        return 130
+    return 0
+```
+
+```text
+trabalhando...
+interrompido pelo usuario
+codigo: 130
+```
+
+## `sys.argv` e o limite dele
+
+Argumentos chegam como lista de strings:
+
+```python
+import sys
+
+print(sys.argv)
+```
+
+```bash
+python3 argv.py --olt olt-borda-01 -v leituras.csv "com espaco"
+```
+
+```text
+['argv.py', '--olt', 'olt-borda-01', '-v', 'leituras.csv', 'com espaco']
+```
+
+O shell já separou os argumentos e resolveu as aspas; a posição zero é o programa. Para um script de duas opções, `sys.argv` basta. A partir daí, você começa a escrever à mão o que já existe pronto: validação de tipo, valor padrão, mensagem de uso, `--help`, mensagem de erro decente, subcomandos. É onde entra o `argparse`.
+
+## `argparse`
+
+O CLI completo da telemetria, com dois subcomandos:
+
+```python
+"""Interface de linha de comando da telemetria."""
+
+import argparse
+import sys
+
+from telemetria import __version__
+from telemetria.coletor import classificar, ler
+
+
+def construir_parser():
+    p = argparse.ArgumentParser(
+        prog="telemetria",
+        description="Coleta e classifica leituras de potencia optica.",
+        epilog="Exemplo: telemetria listar --olt olt-borda-01 --formato csv",
+    )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("-v", "--verboso", action="store_true", help="detalhar o que faz")
+
+    sub = p.add_subparsers(dest="comando", required=True, metavar="COMANDO")
+
+    listar = sub.add_parser("listar", help="listar leituras")
+    listar.add_argument("--olt", help="filtrar por OLT")
+    listar.add_argument(
+        "--formato",
+        choices=("texto", "csv"),
+        default="texto",
+        help="formato de saida (padrao: %(default)s)",
+    )
+    listar.set_defaults(func=cmd_listar)
+
+    checar = sub.add_parser("checar", help="falhar se houver leitura critica")
+    checar.add_argument("nivel", type=float, nargs="*", help="niveis em dBm")
+    checar.add_argument(
+        "--limite", type=float, default=-28.0,
+        help="limite critico (padrao: %(default)s)",
+    )
+    checar.set_defaults(func=cmd_checar)
+
+    return p
+
+
+def main(argv=None):
+    args = construir_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+E as duas funções de comando:
+
+```python
+def cmd_listar(args):
+    linhas = list(ler(args.olt))
+    if args.verboso:
+        print(f"[info] {len(linhas)} leituras", file=sys.stderr)
+    if args.formato == "csv":
+        print("onu,nivel,estado")
+        for onu, nivel in linhas:
+            print(f"{onu},{nivel},{classificar(nivel)}")
+    else:
+        for onu, nivel in linhas:
+            print(f"{onu}  {nivel:6.1f} dBm  {classificar(nivel)}")
+    return 0
+
+
+def cmd_checar(args):
+    niveis = args.nivel or [float(x) for x in sys.stdin.read().split()]
+    criticos = [n for n in niveis if n <= args.limite]
+    for n in criticos:
+        print(f"CRITICO: {n} dBm", file=sys.stderr)
+    print(f"{len(niveis)} leituras, {len(criticos)} criticas")
+    return 1 if criticos else 0
+```
+
+O `--help` sai pronto, e é o que o usuário vai ler antes de qualquer documentação:
+
+```text
+usage: telemetria [-h] [--version] [-v] COMANDO ...
+
+Coleta e classifica leituras de potencia optica.
+
+positional arguments:
+  COMANDO
+    listar       listar leituras
+    checar       falhar se houver leitura critica
+
+options:
+  -h, --help     show this help message and exit
+  --version      show program's version number and exit
+  -v, --verboso  detalhar o que faz
+
+Exemplo: telemetria listar --olt olt-borda-01 --formato csv
+```
+
+```bash
+telemetria listar --help
+```
+
+```text
+usage: telemetria listar [-h] [--olt OLT] [--formato {texto,csv}]
+
+options:
+  -h, --help            show this help message and exit
+  --olt OLT             filtrar por OLT
+  --formato {texto,csv}
+                        formato de saida (padrao: texto)
+```
+
+Repare que `%(default)s` no texto de ajuda foi substituído pelo valor real. É pequeno e evita a documentação que mente depois que alguém muda o padrão no código.
+
+Usando:
+
+```bash
+telemetria listar --olt olt-borda-01 --formato csv
+```
+
+```text
+onu,nivel,estado
+onu-00042,-21.4,normal
+onu-00043,-29.8,critico
+```
+
+### O que o `argparse` faz de graça
+
+**Validação de tipo e de valor.** `type=float` converte e recusa o que não converte; `choices` limita o conjunto. Os erros saem no formato que o usuário de terminal espera — e com **código 2**:
+
+```bash
+telemetria listar --formato pdf; echo "codigo: $?"
+telemetria; echo "codigo: $?"
+telemetria checar abc; echo "codigo: $?"
+```
+
+```text
+usage: telemetria listar [-h] [--olt OLT] [--formato {texto,csv}]
+telemetria listar: error: argument --formato: invalid choice: 'pdf' (choose from texto, csv)
+codigo: 2
+usage: telemetria [-h] [--version] [-v] COMANDO ...
+telemetria: error: the following arguments are required: COMANDO
+codigo: 2
+usage: telemetria checar [-h] [--limite LIMITE] [nivel ...]
+telemetria checar: error: argument nivel: invalid float value: 'abc'
+codigo: 2
+```
+
+**Subcomandos com despacho por função.** O par `set_defaults(func=...)` mais `args.func(args)` é o padrão idiomático: cada subcomando registra a função que o implementa, e o `main` não precisa de nenhum `if` para escolher. É o despacho por dicionário do @sec-cap021, embutido no parser.
+
+**`--version` num argumento.** `action="version"` imprime e sai com `0`, sem passar pelo resto do programa:
+
+```text
+telemetria 0.3.0
+```
+
+Duas armadilhas para conhecer:
+
+- **Abreviação automática.** `telemetria listar --form csv` funciona: o `argparse` aceita qualquer prefixo não ambíguo. É conveniente na mão e perigoso em script, porque acrescentar uma opção nova no futuro pode tornar ambíguo um prefixo que alguém já usava. `ArgumentParser(allow_abbrev=False)` desliga.
+- **`nargs="*"` com `type=float`** devolve lista vazia, não `None`, quando nada é passado — daí o `args.nivel or ...` no `cmd_checar`, que cai para a leitura da entrada padrão.
+
+### `stdout`, `stderr` e a entrada padrão
+
+O `cmd_listar` imprime o resultado em `stdout` e o diagnóstico em `stderr`. Isso não é preciosismo: é o que permite encanar o resultado sem sujeira no meio:
+
+```bash
+telemetria -v listar --olt olt-borda-02 2>/dev/null
+telemetria -v listar --olt olt-borda-02 2>&1 >/dev/null
+```
+
+```text
+onu-00101   -25.9 dBm  atencao
+onu-00102   -18.2 dBm  normal
+[info] 2 leituras
+```
+
+A primeira linha de comando descartou o diagnóstico; a segunda descartou o resultado e ficou só com ele. **Dado vai para `stdout`; conversa com o humano vai para `stderr`.**
+
+Do outro lado, `cmd_checar` aceita os números por argumento ou pela entrada padrão:
+
+```bash
+telemetria checar -21.4 -19.8; echo "codigo: $?"
+telemetria checar -21.4 -31.0; echo "codigo: $?"
+echo "-30.1 -21.0" | telemetria checar; echo "codigo: $?"
+```
+
+```text
+2 leituras, 0 criticas
+codigo: 0
+CRITICO: -31.0 dBm
+2 leituras, 1 criticas
+codigo: 1
+CRITICO: -30.1 dBm
+2 leituras, 1 criticas
+codigo: 1
+```
+
+Um programa que lê de `stdin` quando não recebe argumento é um programa que se encaixa num `|`, e é isso que o torna útil em cima de ferramentas que você nem conhece.
+
+Há um detalhe de encanamento que quase todo programa que imprime muito acaba encontrando:
+
+```bash
+python3 muitas.py | head -2
+```
+
+```text
+onu-00000  -21.4 dBm  normal
+onu-00001  -21.4 dBm  normal
+Traceback (most recent call last):
+  File "/home/vitor/lab34/muitas.py", line 2, in <module>
+    print(f"onu-{i:05d}  -21.4 dBm  normal")
+BrokenPipeError: [Errno 32] Broken pipe
+```
+
+O `head` fechou o cano depois de duas linhas e o `print` seguinte estourou. Não é bug do seu programa — é o comportamento normal do Unix, que o Python transforma em exceção. Capturar `BrokenPipeError` e sair em silêncio é o que os utilitários fazem:
+
+```python
+def main():
+    try:
+        for i in range(50000):
+            print(f"onu-{i:05d}  -21.4 dBm  normal")
+    except BrokenPipeError:
+        sys.stderr.close()
+        return 141
+    return 0
+```
+
+```text
+onu-00000  -21.4 dBm  normal
+onu-00001  -21.4 dBm  normal
+```
+
+### Além do `argparse`
+
+`argparse` está na biblioteca padrão, não tem dependência e resolve praticamente tudo. Fora dela, `click` (decoradores) e `typer` (anotações de tipo viram a interface) produzem CLIs mais bonitas com menos código, ao custo de uma dependência. Para um programa que você distribui, a escolha é de gosto; para um script interno, `argparse` evita a conversa inteira. Os dois são assunto da fase de aplicações, mais adiante no manual.
+
+## Os quatro modos de execução
+
+::: {#fig-modos-execucao}
+```{.tikz}
+%%| filename: modos-execucao
+%%| alt: Os quatro modos de executar codigo Python - arquivo pelo caminho, modulo com -m, pacote com -m e comando instalado - e o que muda em cada um
+\begin{tikzpicture}[
+  md/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.4cm, align=left, minimum height=0.75cm,
+             font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  ok/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!13,
+             text width=4.4cm, align=left, minimum height=0.75cm,
+             font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.7, 1.9) rectangle (14.7,-5.4);
+
+  \node[hd] at (0.0, 1.4) {como se chama};
+  \node[hd] at (5.2, 1.4) {\texttt{sys.path[0]}};
+  \node[hd] at (9.6, 1.4) {quando usar};
+
+  \node[md] at (0.0, 0.6) {python3 arquivo.py};
+  \node[lb, text width=4.2cm] at (5.2, 0.6) {a pasta \textbf{do arquivo} ---
+    import do projeto quebra};
+  \node[lb, text width=4.9cm] at (9.6, 0.6) {script solto, sem pacote em volta};
+
+  \node[md] at (0.0,-0.6) {python3 -m pacote.modulo};
+  \node[lb, text width=4.2cm] at (5.2,-0.6) {o diretório \textbf{atual}};
+  \node[lb, text width=4.9cm] at (9.6,-0.6) {rodar um módulo de dentro do
+    projeto, em desenvolvimento};
+
+  \node[md] at (0.0,-1.8) {python3 -m pacote};
+  \node[lb, text width=4.2cm] at (5.2,-1.8) {o diretório \textbf{atual};
+    executa \texttt{\_\_main\_\_.py}};
+  \node[lb, text width=4.9cm] at (9.6,-1.8) {o pacote inteiro como programa ---
+    \texttt{python3 -m venv}, \texttt{-m http.server}};
+
+  \node[ok] at (0.0,-3.0) {telemetria};
+  \node[lb, text width=4.2cm] at (5.2,-3.0) {irrelevante --- o pacote está
+    \textbf{instalado}};
+  \node[lb, text width=4.9cm] at (9.6,-3.0) {o que o usuário digita; vem de
+    \texttt{[project.scripts]}};
+
+  \node[lb, text width=14.0cm, anchor=north west] at (-0.3,-3.9)
+    {Nos quatro, \texttt{\_\_name\_\_} do módulo executado vale
+     \texttt{'\_\_main\_\_'} --- é por isso que o mesmo guarda serve a todos. O
+     que muda é \textbf{quem} está no caminho de busca, e é aí que mora o
+     \texttt{ModuleNotFoundError} do primeiro modo.};
+\end{tikzpicture}
+```
+Quatro maneiras de executar o mesmo código, e o que muda entre elas.
+:::
+
+A diferença fica visível com um módulo que só se descreve:
+
+```bash
+python3 -m telemetria.eu
+python3 src/telemetria/eu.py
+```
+
+```text
+__name__    = '__main__'
+sys.argv[0] = '/home/vitor/lab34/projeto/src/telemetria/eu.py'
+sys.path[0] = '/home/vitor/lab34/projeto'
+
+__name__    = '__main__'
+sys.argv[0] = 'src/telemetria/eu.py'
+sys.path[0] = '/home/vitor/lab34/projeto/src/telemetria'
+```
+
+Mesmo arquivo, mesmo `__name__`, caminhos de busca diferentes — o do @sec-cap029, agora com consequência prática: no segundo modo, `from telemetria.coletor import ler` só funciona se o pacote estiver instalado.
+
+## Os dois pontos de entrada instaláveis
+
+**`__main__.py`** faz o pacote responder a `python3 -m telemetria`, e o conteúdo dele deve ser mínimo:
+
+```python
+"""python -m telemetria."""
+
+from telemetria.cli import main
+
+raise SystemExit(main())
+```
+
+Três linhas, nenhuma lógica. Toda a inteligência está em `cli.py`, que é importável e testável; o `__main__.py` só liga o fio.
+
+**`[project.scripts]`** dá ao programa um nome de comando:
+
+```toml
+[project.scripts]
+telemetria = "telemetria.cli:main"
+```
+
+O formato é `nome = "modulo:funcao"`. Depois de `pip install -e .`, o comando existe:
+
+```bash
+telemetria listar --olt olt-borda-01
+```
+
+E o que o instalador criou não tem nada de mágico:
+
+```bash
+cat .venv/bin/telemetria
+```
+
+```text
+#!/home/vitor/lab34/.venv/bin/python3
+import sys
+from telemetria.cli import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())
+```
+
+Seis linhas geradas na hora da instalação: shebang apontando para o Python do ambiente (o mesmo do @sec-cap031, que é por que venv não é portátil), import do seu módulo, chamada da sua função. A linha do `.exe` é para o Windows, onde o comando vira um executável pequeno em `Scripts\`.
+
+O registro fica nos metadados, como visto no @sec-cap032:
+
+```bash
+cat .venv/lib/python3.13/site-packages/telemetria-0.3.0.dist-info/entry_points.txt
+```
+
+```text
+[console_scripts]
+telemetria = telemetria.cli:main
+```
+
+::: {#fig-caminho-comando}
+```{.tikz}
+%%| filename: caminho-comando
+%%| alt: O caminho de um comando instalado - da declaracao no pyproject ao script gerado no bin do ambiente, a chamada de main e o codigo de saida devolvido ao shell
+\begin{tikzpicture}[
+  et/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.3cm, align=center, minimum height=0.9cm,
+             font=\ttfamily\scriptsize},
+  fn/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.3cm, align=center, minimum height=0.9cm,
+             font=\ttfamily\scriptsize},
+  sh/.style={draw=manualgray, thick, rounded corners, fill=manualgray!8,
+             text width=3.0cm, align=center, minimum height=0.9cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.7, 2.2) rectangle (14.7,-3.6);
+
+  \node[et] at (2.0, 1.5) {[project.scripts]\\telemetria =\\"telemetria.cli:main"};
+  \node[lb, text width=3.6cm] at (2.0, 0.1) {você declara, no
+    \texttt{pyproject.toml}};
+
+  \node[et] at (6.7, 1.5) {.venv/bin/telemetria};
+  \node[lb, text width=3.6cm] at (6.7, 0.1) {o instalador gera, com o shebang
+    do ambiente};
+
+  \node[fn] at (11.3, 1.5) {main(argv=None)};
+  \node[lb, text width=3.6cm] at (11.3, 0.1) {a sua função --- a mesma que o
+    \texttt{\_\_main\_\_.py} chama};
+
+  \node[sh] at (11.3,-1.8) {echo \$?};
+  \node[lb, text width=4.6cm] at (11.3,-2.9) {o \texttt{return} vira o código de
+    saída, e o shell decide o que fazer};
+
+  \draw[fl] (3.7, 1.5) -- (5.0, 1.5) node[lb, midway, above] {pip install};
+  \draw[fl] (8.4, 1.5) -- (9.6, 1.5) node[lb, midway, above] {import};
+  \draw[fl] (11.3, 1.0) -- (11.3,-1.3) node[lb, midway, right=3pt]
+       {SystemExit};
+\end{tikzpicture}
+```
+Do `pyproject.toml` ao `$?` do shell: quatro etapas, nenhuma mágica.
+:::
+
+Qual dos dois oferecer? **Os dois**, e ambos chamando a mesma `main`:
+
+- o **comando** é o que o usuário quer digitar;
+- o **`-m`** funciona mesmo quando o `PATH` não está configurado, quando há vários ambientes na máquina ou quando você quer ter certeza de qual interpretador está rodando (`python3.12 -m telemetria`).
+
+Escrever `main(argv=None)` recebendo os argumentos por parâmetro é o que torna tudo isso testável sem subprocesso:
+
+```python
+from telemetria.cli import main
+
+assert main(["checar", "-21.4"]) == 0
+assert main(["checar", "-31.0"]) == 1
+```
+
+Quando `argv` é `None`, o `argparse` usa `sys.argv[1:]` sozinho; quando não é, ele usa a lista que você passou. O Volume 9 aproveita isso à exaustão.
+
+## Um arquivo só: `zipapp`
+
+Para fechar, uma ferramenta pouco conhecida da biblioteca padrão. Um diretório com `__main__.py` pode virar um único arquivo executável:
+
+```bash
+python3 -m zipapp app -p "/usr/bin/env python3" -o telemetria.pyz
+ls -l telemetria.pyz
+./telemetria.pyz listar --olt olt-borda-01
+```
+
+```text
+-rwxr--r-- 1 vitor vitor 3937 Aug 11 19:53 telemetria.pyz
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+```
+
+Quatro quilobytes, executável, sem instalação — o Python sabe rodar um `.zip` que contenha `__main__.py`, e é assim que o próprio `pip` se distribui internamente. Serve para ferramenta interna que precisa ser copiada para uma máquina sem `pip`; não serve para dependência com código C, e não substitui um pacote de verdade.
+
+E o clássico que sempre vale: shebang mais permissão de execução.
+
+```python
+#!/usr/bin/env python3
+"""Script executavel direto."""
+
+print("rodei sem digitar python3")
+```
+
+```bash
+chmod +x direto.py && ./direto.py
+```
+
+```text
+rodei sem digitar python3
+```
+
+`/usr/bin/env python3` procura o Python no `PATH` — o que faz o script respeitar o ambiente virtual ativo, ao contrário de `#!/usr/bin/python3`, que crava o do sistema.
+
+## 🐍 Jeito Pythônico
+
+**Nada de trabalho no nível do módulo.** Constantes e definições ficam soltas; execução vai para uma função atrás do guarda.
+
+```python
+# antipadrão
+dados = carregar()          # roda ao importar
+print(relatorio(dados))     # e ao autocompletar, e ao coletar testes
+```
+
+```python
+# pythônico
+def main(argv=None):
+    args = construir_parser().parse_args(argv)
+    print(relatorio(carregar()))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+**`main(argv=None)` que devolve `int`.** Testável, reutilizável, e o código de saída sai de graça.
+
+**`raise SystemExit(main())`** no guarda.
+
+**Devolva código de saída honesto.** `0` só quando deu certo; `2` para erro de uso (o `argparse` já faz); `130` para Ctrl-C.
+
+**Dado em `stdout`, conversa em `stderr`.** E aceite `stdin` quando fizer sentido — é o que põe o seu programa dentro de um `|`.
+
+**`argparse` em vez de ler `sys.argv` na mão**, a partir do segundo argumento. E `prog=` explícito, para a mensagem de uso não depender de como o programa foi chamado.
+
+**Ofereça `[project.scripts]` e `__main__.py`**, os dois chamando a mesma função.
+
+**`python3 -m pacote` em vez de caminho de arquivo** quando o código faz parte de um projeto.
+
+Sobre versões:
+
+- **Python 3.4** — `zipapp` na biblioteca padrão.
+- **Python 3.7** — `importlib.metadata` (via *backport*) começa a substituir `pkg_resources` na leitura de *entry points*; `argparse` ganha melhorias de subcomando.
+- **Python 3.9** — `entry_points()` estabiliza na biblioteca padrão; `python3 -m` fica mais rápido para pacotes grandes.
+- **Python 3.11** — mensagens de erro com marcação de coluna melhoram muito o diagnóstico de falha em script de linha de comando (@sec-cap007).
+- **Python 3.13** — `argparse` passou a aceitar `deprecated=True` em argumentos e subcomandos, para marcar opção em vias de sair sem quebrar quem ainda usa.
+
+## 🧪 Laboratório
+
+Objetivo: ver o efeito colateral do código solto, adotar o guarda, medir códigos de saída, construir um CLI com subcomandos, instalar o comando e comparar os quatro modos de execução.
+
+**1. O efeito colateral.**
+
+```bash
+mkdir -p ~/lab34/solto && cd ~/lab34/solto
+```
+
+Crie `relatorio.py` com os `print` no nível do módulo (o primeiro bloco deste capítulo) e depois:
+
+```bash
+python3 relatorio.py
+python3 -c "from relatorio import classificar; print('usei so a funcao:', classificar(-31.0))"
+```
+
+```text
+=== relatorio da madrugada ===
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+=== enviado para a lista de plantao ===
+=== relatorio da madrugada ===
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+=== enviado para a lista de plantao ===
+usei so a funcao: critico
+```
+
+O relatório saiu duas vezes: uma porque você pediu, outra porque alguém importou.
+
+**2. Quem sou eu.** Crie `quemsou.py`:
+
+```python
+import sys
+
+print(f"__name__   = {__name__!r}")
+print(f"sys.argv[0]= {sys.argv[0]!r}")
+```
+
+```bash
+python3 quemsou.py
+python3 -m quemsou
+python3 -c "import quemsou"
+```
+
+```text
+__name__   = '__main__'
+sys.argv[0]= 'quemsou.py'
+__name__   = '__main__'
+sys.argv[0]= '/home/vitor/lab34/solto/quemsou.py'
+__name__   = 'quemsou'
+sys.argv[0]= '-c'
+```
+
+**3. O guarda.** Reescreva como `relatorio2.py`, com `main()` e `if __name__ == "__main__":`, e repita o passo 1. O import agora é silencioso.
+
+**4. Código de saída.** Crie `checa.py` (o do capítulo) e teste os dois caminhos:
+
+```bash
+python3 checa.py -21.4 && echo "  (&& seguiu)"
+python3 checa.py -31.0 || echo "  (|| disparou)"
+python3 -c "raise SystemExit('faltou o arquivo de configuracao')"; echo "codigo: $?"
+python3 -c "raise KeyboardInterrupt" 2>/dev/null; echo "codigo: $?"
+```
+
+```text
+ok: -21.4 dBm
+  (&& seguiu)
+CRITICO: -31.0 dBm
+  (|| disparou)
+faltou o arquivo de configuracao
+codigo: 1
+codigo: 130
+```
+
+**5. O projeto com CLI.**
+
+```bash
+mkdir -p ~/lab34/projeto/src/telemetria && cd ~/lab34/projeto
+```
+
+`src/telemetria/__init__.py`:
+
+```python
+"""Telemetria de rede optica."""
+
+__version__ = "0.3.0"
+```
+
+`src/telemetria/coletor.py`:
+
+```python
+"""Coleta e classificacao de leituras."""
+
+LEITURAS = {
+    "olt-borda-01": [("onu-00042", -21.4), ("onu-00043", -29.8)],
+    "olt-borda-02": [("onu-00101", -25.9), ("onu-00102", -18.2)],
+}
+LIMIARES = {"critico": -28.0, "atencao": -25.0}
+
+
+def classificar(nivel):
+    if nivel <= LIMIARES["critico"]:
+        return "critico"
+    if nivel <= LIMIARES["atencao"]:
+        return "atencao"
+    return "normal"
+
+
+def ler(olt=None):
+    if olt is None:
+        for leituras in LEITURAS.values():
+            yield from leituras
+    else:
+        yield from LEITURAS.get(olt, [])
+```
+
+`src/telemetria/cli.py` com o parser e os dois comandos do capítulo, `src/telemetria/__main__.py` com as três linhas, e o `pyproject.toml`:
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telemetria"
+version = "0.3.0"
+description = "Coleta e classificacao de leituras de potencia optica"
+requires-python = ">=3.11"
+
+[project.scripts]
+telemetria = "telemetria.cli:main"
+```
+
+```bash
+python3 -m venv ~/lab34/.venv
+~/lab34/.venv/bin/pip install -q -e .
+source ~/lab34/.venv/bin/activate
+```
+
+**6. A ajuda.**
+
+```bash
+telemetria --help
+telemetria listar --help
+telemetria --version
+```
+
+```text
+usage: telemetria [-h] [--version] [-v] COMANDO ...
+...
+telemetria 0.3.0
+```
+
+**7. Os subcomandos.**
+
+```bash
+telemetria listar
+telemetria listar --olt olt-borda-01 --formato csv
+telemetria -v listar --olt olt-borda-02 2>&1 >/dev/null
+```
+
+```text
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+onu-00101   -25.9 dBm  atencao
+onu-00102   -18.2 dBm  normal
+onu,nivel,estado
+onu-00042,-21.4,normal
+onu-00043,-29.8,critico
+[info] 2 leituras
+```
+
+**8. Os códigos de saída, agora no CLI.**
+
+```bash
+telemetria checar -21.4 -19.8; echo "codigo: $?"
+telemetria checar -21.4 -31.0; echo "codigo: $?"
+echo "-30.1 -21.0" | telemetria checar; echo "codigo: $?"
+telemetria listar --formato pdf; echo "codigo: $?"
+```
+
+```text
+2 leituras, 0 criticas
+codigo: 0
+CRITICO: -31.0 dBm
+2 leituras, 1 criticas
+codigo: 1
+CRITICO: -30.1 dBm
+2 leituras, 1 criticas
+codigo: 1
+telemetria listar: error: argument --formato: invalid choice: 'pdf' (choose from texto, csv)
+codigo: 2
+```
+
+Sucesso, falha de negócio e erro de uso, cada um com seu número.
+
+**9. O script gerado.**
+
+```bash
+cat ~/lab34/.venv/bin/telemetria
+cat ~/lab34/.venv/lib/python3.13/site-packages/telemetria-0.3.0.dist-info/entry_points.txt
+```
+
+```text
+#!/home/vitor/lab34/.venv/bin/python3
+import sys
+from telemetria.cli import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())
+[console_scripts]
+telemetria = telemetria.cli:main
+```
+
+**10. Os quatro modos.**
+
+```bash
+python -m telemetria listar --olt olt-borda-01
+python -m telemetria.cli listar --olt olt-borda-01
+python src/telemetria/cli.py listar --olt olt-borda-01
+telemetria listar --olt olt-borda-01
+```
+
+Os quatro imprimem o mesmo — e todos dependem da instalação. Desinstale para ver:
+
+```bash
+pip uninstall -q -y telemetria
+python -m telemetria listar --olt olt-borda-01
+python src/telemetria/cli.py listar --olt olt-borda-01
+```
+
+```text
+/home/vitor/lab34/.venv/bin/python: No module named telemetria
+ModuleNotFoundError: No module named 'telemetria'
+```
+
+Com layout `src`, nenhum dos quatro sobrevive fora da instalação — é o @sec-cap030 cobrando de novo, e é o comportamento desejado. Reinstale com `pip install -e .`.
+
+**11. `main` chamada como função.**
+
+```bash
+python -c "
+from telemetria.cli import main
+print('checar -21.4  ->', main(['checar', '-21.4']))
+print('checar -31.0  ->', main(['checar', '-31.0']))
+"
+```
+
+```text
+1 leituras, 0 criticas
+checar -21.4  -> 0
+CRITICO: -31.0 dBm
+1 leituras, 1 criticas
+checar -31.0  -> 1
+```
+
+Nenhum subprocesso, nenhum `sys.argv`: é assim que se testa CLI.
+
+**12. Cano quebrado.**
+
+```bash
+python -c "
+for i in range(50000):
+    print(f'onu-{i:05d}  -21.4 dBm  normal')
+" | head -2
+```
+
+```text
+onu-00000  -21.4 dBm  normal
+onu-00001  -21.4 dBm  normal
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+    print(f'onu-{i:05d}  -21.4 dBm  normal')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+```
+
+**13. Um arquivo só.**
+
+```bash
+cd ~/lab34 && mkdir -p app
+cp -r projeto/src/telemetria app/
+printf 'from telemetria.cli import main\n\nraise SystemExit(main())\n' > app/__main__.py
+python -m zipapp app -p "/usr/bin/env python3" -o telemetria.pyz
+./telemetria.pyz listar --olt olt-borda-01
+```
+
+```text
+onu-00042   -21.4 dBm  normal
+onu-00043   -29.8 dBm  critico
+```
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- O módulo que o Python executa se chama `__main__`; qualquer outro se chama pelo próprio nome. É a base do `if __name__ == "__main__":`, e sem ele importar o seu script executa o seu script.
+- O padrão é `main(argv=None)` devolvendo `int`, com `raise SystemExit(main())` no guarda: testável, reutilizável e com código de saída correto.
+- Código de saída é a única coisa que `cron`, `make` e CI leem do seu programa: `0` sucesso, `1` falha, `2` erro de uso, `130` Ctrl-C.
+- `argparse` dá validação, valor padrão, `--help`, `--version`, subcomandos e erro com código `2` sem que você escreva nada disso. `set_defaults(func=...)` mais `args.func(args)` é o despacho idiomático de subcomando.
+- Dado em `stdout`, diagnóstico em `stderr`, entrada por `stdin` quando não houver argumento — é o que faz o programa caber num `|`. `BrokenPipeError` é normal, e se trata em silêncio.
+- Quatro modos de executar: arquivo pelo caminho, `-m módulo`, `-m pacote` (via `__main__.py`) e comando instalado. Todos veem `__name__ == "__main__"`; o que muda é o `sys.path[0]`.
+- `[project.scripts]` gera um script de seis linhas no `bin/` do ambiente, com shebang do próprio ambiente. Ofereça o comando **e** o `-m`, ambos chamando a mesma `main`.
+- `zipapp` empacota um diretório com `__main__.py` num único `.pyz` executável — útil para ferramenta interna, não para substituir um pacote.
+
+Com isso fecha o Volume 5. O código deixou de ser um punhado de arquivos numa pasta: virou pacote, com ambiente isolado, dependências declaradas, artefatos publicáveis e um comando com nome próprio. O que vem a seguir é o que esse programa faz com o mundo lá fora — arquivos, erros e os gerenciadores de contexto que garantem que nada fique aberto no caminho.
