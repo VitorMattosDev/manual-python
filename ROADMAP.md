@@ -31,7 +31,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 ### Volume 3 — Controle de Fluxo e Funções
 
 - [x] **cap 015** - Condicionais: if, elif, else e a expressão condicional - `vol03/cap015-condicionais-if-elif-else-e-a-expressao.qmd`
-- [ ] **cap 016** - Laços: while, for e o protocolo de iteração - `vol03/cap016-lacos-while-for-e-o-protocolo-de-iteracao.qmd`
+- [x] **cap 016** - Laços: while, for e o protocolo de iteração - `vol03/cap016-lacos-while-for-e-o-protocolo-de-iteracao.qmd`
 - [ ] **cap 017** - break, continue, else em laços e o casamento de padrões - `vol03/cap017-break-continue-else-em-lacos-e-o-casamento-de.qmd`
 - [ ] **cap 018** - Definindo funções: parâmetros, argumentos e retorno - `vol03/cap018-definindo-funcoes-parametros-argumentos-e.qmd`
 - [ ] **cap 019** - Argumentos nomeados, valores padrão, `*args` e `**kwargs` - `vol03/cap019-argumentos-nomeados-valores-padrao-args-e.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (15 concluidos).
+**Total:** 104 capitulos em 16 volumes (16 concluidos).
 

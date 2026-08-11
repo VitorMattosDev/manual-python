@@ -1,3 +1,917 @@
 # Laços: while, for e o protocolo de iteração {#sec-cap016}
 
-*(em elaboracao)*
+A rotina de limpeza do inventário tem uma linha de trabalho: tirar da lista as ONUs que estão fora do ar. O código tem quatro linhas e não parece ter onde errar.
+
+```python
+onus = ["onu-01", "onu-02", "offline", "offline", "onu-05", "offline"]
+
+for nome in onus:
+    if nome == "offline":
+        onus.remove(nome)
+
+print(onus)
+```
+
+```text
+['onu-01', 'onu-02', 'onu-05', 'offline']
+```
+
+Sobrou uma. Nenhum erro, nenhum aviso, e a lista final está errada de um jeito que passa em qualquer revisão rápida — quem lê o código vê a intenção, não o resultado.
+
+O motivo é que o `for` **não** percorre os elementos de uma lista: ele pede um item por vez a um iterador, e o iterador de lista trabalha com um índice interno que só sabe andar para frente. Cada `remove` encurta a lista sob os pés desse índice.
+
+Dá para ver o índice andando se você desmontar o `for` na mão:
+
+```python
+onus = ["onu-01", "onu-02", "offline", "offline", "onu-05", "offline"]
+it = iter(onus)
+i = 0
+while True:
+    try:
+        nome = next(it)
+    except StopIteration:
+        break
+    print(f"posicao {i}  o for ve {nome!r:<10} tamanho={len(onus)}")
+    if nome == "offline":
+        onus.remove(nome)
+    i += 1
+```
+
+```text
+posicao 0  o for ve 'onu-01'   tamanho=6
+posicao 1  o for ve 'onu-02'   tamanho=6
+posicao 2  o for ve 'offline'  tamanho=6
+posicao 3  o for ve 'onu-05'   tamanho=5
+posicao 4  o for ve 'offline'  tamanho=5
+```
+
+Na posição 2 o laço encontra o primeiro `"offline"` e o remove. A lista encolhe, tudo desliza uma casa para a esquerda, o segundo `"offline"` passa a ocupar a posição 2 — e o índice interno já está indo para a 3. O elemento nunca é visto. O laço, que deveria dar seis voltas, deu cinco.
+
+Este capítulo é sobre o mecanismo por trás disso: o que `while` e `for` realmente fazem, o que é um iterador, e por que quase todo laço escrito com índice em Python é um laço escrito errado.
+
+## `while`: repetir enquanto uma condição valer
+
+O `while` é a repetição mais crua: testa uma condição e executa o bloco enquanto ela for verdadeira, com as mesmas regras de valor-verdade do @sec-cap015.
+
+```python
+n = 0
+saldo = 100.0
+while saldo > 0:
+    saldo -= 30.0
+    n += 1
+print(n, round(saldo, 2))
+```
+
+```text
+4 -20.0
+```
+
+Quatro voltas, e o saldo terminou negativo — a condição só é testada no **começo** de cada volta, nunca no meio. Se o bloco precisa parar no meio, isso é `break`, assunto do capítulo 17.
+
+O uso natural do `while` é o caso em que você não sabe de antemão quantas iterações haverá: consumir uma fila, tentar de novo até dar certo, ler até o fim de um fluxo.
+
+```python
+fila = ["job-1", "job-2", "job-3"]
+while fila:
+    tarefa = fila.pop(0)
+    print("rodando", tarefa, "| restam", len(fila))
+```
+
+```text
+rodando job-1 | restam 2
+rodando job-2 | restam 1
+rodando job-3 | restam 0
+```
+
+Note o `while fila:` — a lista vazia é falsa, então a condição é o próprio esvaziamento. Escrever `while len(fila) > 0:` diria a mesma coisa com mais palavras.
+
+O que **não** se faz em Python é usar `while` como contador:
+
+```python
+# antipadrão: o for de C escrito em Python
+i = 0
+while i < len(linhas):
+    processa(linhas[i])
+    i += 1
+```
+
+Três oportunidades de errar (inicializar, comparar, incrementar) para fazer o que `for linha in linhas:` faz sem nenhuma. Todo laço que sabe quantas voltas vai dar é um `for`.
+
+## `for`: percorrer um iterável
+
+O `for` do Python não é o `for` de C. Não existe contador, não existe condição de parada, não existe incremento. Existe um **iterável** e um alvo:
+
+```python
+for nome, nivel in [("onu-01", -19.5), ("onu-03", -31.0)]:
+    print(f"{nome}: {nivel:>7.1f}")
+```
+
+```text
+onu-01:   -19.5
+onu-03:   -31.0
+```
+
+O alvo pode ser um desempacotamento, como acima. E o iterável pode ser qualquer coisa que saiba produzir itens: lista, tupla, string, dicionário, arquivo aberto, `range`, um objeto seu.
+
+```python
+d = {"a": 1, "b": 2}
+for chave in d:
+    print(chave, end=" ")
+print()
+for chave, valor in d.items():
+    print(chave, valor, end="  ")
+print()
+```
+
+```text
+a b
+a 1  b 2
+```
+
+Iterar um dicionário direto dá as **chaves**; `.items()` dá os pares e `.values()` dá os valores. Errar isso é o `TypeError: cannot unpack non-sequence` mais comum de quem vem de outra linguagem.
+
+## O protocolo de iteração
+
+Por baixo, o `for` faz exatamente três coisas: chama `iter()` no objeto, chama `next()` repetidamente no resultado, e para quando aparece `StopIteration`.
+
+```python
+it = iter(["a", "b", "c"])
+print(it)
+print(next(it))
+print(next(it))
+print(next(it))
+try:
+    next(it)
+except StopIteration:
+    print("StopIteration")
+```
+
+```text
+<list_iterator object at 0x7a01b33df0a0>
+a
+b
+c
+StopIteration
+```
+
+O endereço muda a cada execução; o resto não. E é assim que o `for` é implementado — o código abaixo é o `for` escrito à mão:
+
+```python
+seq = ["a", "b"]
+it = iter(seq)
+while True:
+    try:
+        item = next(it)
+    except StopIteration:
+        break
+    print("processando", item)
+```
+
+```text
+processando a
+processando b
+```
+
+::: {#fig-protocolo-iteracao}
+```{.tikz}
+%%| filename: protocolo-iteracao
+%%| alt: O protocolo de iteracao: o for chama iter() no iteravel para obter um iterador, chama next() repetidamente e encerra quando next() levanta StopIteration
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=3.5cm, align=center, minimum height=1.15cm,
+             font=\small},
+  itr/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+              text width=3.5cm, align=center, minimum height=1.15cm,
+              font=\small},
+  vl/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualyellow!25,
+             minimum width=1.05cm, minimum height=0.55cm,
+             font=\ttfamily\scriptsize},
+  stp/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!12,
+               minimum width=2.5cm, minimum height=0.55cm,
+               font=\ttfamily\scriptsize, text=manualred},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, very thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-3.2, 2.9) rectangle (14.0,-4.3);
+
+  \node[bx]  (a) at (0, 1.3) {\textbf{iterável}\\[2pt]
+                              \scriptsize lista, str, dict, arquivo,\\
+                              \scriptsize objeto com \texttt{\_\_iter\_\_}};
+  \node[itr] (b) at (6.2, 1.3) {\textbf{iterador}\\[2pt]
+                                \scriptsize guarda a posição\\
+                                \scriptsize tem \texttt{\_\_next\_\_}};
+
+  \draw[fl] (a) -- (b) node[lb, midway, above] {\texttt{iter(obj)}}
+                       node[lb, midway, below] {uma vez};
+
+  \node[vl] (v1) at (10.2, 2.35) {'a'};
+  \node[vl] (v2) at (10.2, 1.55) {'b'};
+  \node[vl] (v3) at (10.2, 0.75) {'c'};
+  \node[stp] (v4) at (10.9,-0.15) {StopIteration};
+
+  \draw[fl] (b) -- (v1);
+  \draw[fl] (b) -- (v2);
+  \draw[fl] (b) -- (v3);
+  \draw[fl, manualred] (b) -- (v4);
+
+  \node[lb, anchor=west] at (12.0, 1.55) {\texttt{next()}\\a cada volta};
+  \node[lb, anchor=west, text=manualred] at (12.5,-0.15) {fim};
+
+  \node[lb, text width=13.5cm, align=left] at (5.0,-2.6)
+    {\textbf{o que o \texttt{for} faz, em três passos:}
+     chama \texttt{iter()} no objeto \textbf{uma única vez}; chama
+     \texttt{next()} no iterador a cada volta e liga o resultado ao alvo do laço;
+     captura o \texttt{StopIteration} e encerra o bloco sem propagar a exceção.
+     O iterador é \textbf{descartável} --- depois do \texttt{StopIteration} ele
+     não volta ao começo, e é por isso que um \texttt{iter()} consumido devolve
+     lista vazia na segunda vez.};
+\end{tikzpicture}
+```
+`iter()` uma vez, `next()` a cada volta, `StopIteration` no fim.
+:::
+
+A distinção entre **iterável** e **iterador** é a que resolve metade das confusões:
+
+- Um **iterável** sabe produzir um iterador (`__iter__`). Lista, tupla, string, dicionário e `range` são iteráveis, e cada `for` sobre eles começa do zero.
+- Um **iterador** sabe produzir o próximo item (`__next__`), guarda a posição e **se esgota**. Todo iterador também é iterável — `iter(it) is it` —, o que é o truque que permite passar um iterador direto para um `for`.
+
+```python
+nums = [1, 2, 3]
+it = iter(nums)
+print(list(it))
+print(list(it))
+print(iter(it) is it)
+```
+
+```text
+[1, 2, 3]
+[]
+True
+```
+
+A segunda chamada devolve lista vazia. Isso morde de verdade quando o iterador vem de longe: `zip`, `enumerate`, `map`, `filter`, `reversed` e o objeto de arquivo aberto são **iteradores**, não sequências, e consumir duas vezes devolve nada na segunda. Quando você precisa passar mais de uma vez, materialize com `list()` antes.
+
+Cada tipo tem o seu iterador:
+
+```python
+print(type(iter("abc")), type(iter({"a": 1})), type(iter((1, 2))))
+print(type(iter(range(3))))
+```
+
+```text
+<class 'str_ascii_iterator'> <class 'dict_keyiterator'> <class 'tuple_iterator'>
+<class 'range_iterator'>
+```
+
+### Um iterável seu
+
+Implementar o protocolo é implementar dois métodos. O padrão correto separa o iterável (que pode ser percorrido muitas vezes) do iterador (que se esgota):
+
+```python
+class Rampa:
+    def __init__(self, inicio, fim):
+        self.inicio = inicio
+        self.fim = fim
+
+    def __iter__(self):
+        return RampaIterador(self.inicio, self.fim)
+
+
+class RampaIterador:
+    def __init__(self, atual, fim):
+        self.atual = atual
+        self.fim = fim
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.atual > self.fim:
+            raise StopIteration
+        valor = self.atual
+        self.atual += 1
+        return valor
+
+
+r = Rampa(1, 4)
+print(list(r))
+print(list(r))
+print(sum(r), max(r))
+```
+
+```text
+[1, 2, 3, 4]
+[1, 2, 3, 4]
+10 4
+```
+
+Duas listas iguais: cada `list(r)` pediu um iterador novo. E, de graça, o objeto passou a funcionar com `sum`, `max`, `sorted`, `in` e desempacotamento — tudo que consome iterável passa a aceitar `Rampa`. Se `__iter__` devolvesse `self`, a segunda linha sairia vazia e o `sum` veria uma rampa gasta.
+
+Na prática você quase nunca escreve essas duas classes: um gerador com `yield` faz o mesmo em quatro linhas, e é assunto do Volume 8. Mas é este o protocolo que o gerador implementa por baixo.
+
+## `range` não é uma lista
+
+```python
+r = range(0, 10, 3)
+print(r, list(r), len(r), r[2], 9 in r, 4 in r)
+```
+
+```text
+range(0, 10, 3) [0, 3, 6, 9] 4 6 True False
+```
+
+`range` é uma **sequência preguiçosa**: guarda início, fim e passo, e calcula cada valor na hora. Tem comprimento, aceita índice e responde `in` — e o `in` é calculado por aritmética, não por varredura.
+
+```python
+import sys
+
+print(sys.getsizeof(range(1_000_000)), sys.getsizeof(list(range(1_000_000))))
+```
+
+```text
+48 8000056
+```
+
+Quarenta e oito bytes contra oito megabytes. `range` é o motivo de nunca precisar materializar uma sequência de índices.
+
+O que não se faz com ele é isto:
+
+```python
+# antipadrão: índice só para poder indexar
+for i in range(len(linhas)):
+    print(i, linhas[i])
+```
+
+```python
+# pythônico
+for i, valor in enumerate(linhas, start=1):
+    print(i, valor)
+```
+
+```text
+1 -19.5
+2 -31.0
+3 -8.0
+```
+
+`enumerate` produz pares `(índice, valor)` e aceita `start`, o que resolve de uma vez a numeração começando em 1 para relatório. `range(len(...))` só se justifica quando você realmente precisa do índice para outra coisa — escrever numa posição, por exemplo.
+
+## `zip`: percorrer em paralelo
+
+```python
+nomes = ["onu-01", "onu-02", "onu-03"]
+niveis = [-19.5, -31.0]
+print(list(zip(nomes, niveis)))
+```
+
+```text
+[('onu-01', -19.5), ('onu-02', -31.0)]
+```
+
+`zip` para no **mais curto**, em silêncio. A terceira ONU sumiu do relatório e ninguém foi avisado. Desde o **Python 3.10** existe a proteção:
+
+```python
+try:
+    print(list(zip(nomes, niveis, strict=True)))
+except ValueError as e:
+    print("ValueError:", e)
+```
+
+```text
+ValueError: zip() argument 2 is shorter than argument 1
+```
+
+Sempre que as sequências **deveriam** ter o mesmo tamanho, `strict=True` transforma um bug silencioso em uma exceção. Quando o truncamento é intencional, deixe sem — e escreva no comentário que é intencional.
+
+## Mudar o que se está percorrendo
+
+De volta ao problema da abertura. A regra geral é: **não modifique um contêiner enquanto itera sobre ele**. Em lista, o resultado é silencioso e errado; em dicionário e conjunto, o Python detecta e falha alto:
+
+```python
+estoque = {"onu-01": 3, "onu-02": 0, "onu-03": 5}
+try:
+    for chave, qtd in estoque.items():
+        if qtd == 0:
+            del estoque[chave]
+except RuntimeError as e:
+    print("RuntimeError:", e)
+```
+
+```text
+RuntimeError: dictionary changed size during iteration
+```
+
+::: {#fig-remove-durante-for}
+```{.tikz}
+%%| filename: remove-durante-for
+%%| alt: Tres instantaneos da lista durante o laco: ao remover o elemento da posicao 2 tudo desliza para a esquerda enquanto o indice interno avanca, e o elemento que ocupou a posicao 2 nunca e visto
+\begin{tikzpicture}[
+  cel/.style={draw=manualgray, thick, rounded corners=1pt, fill=white,
+             minimum width=1.75cm, minimum height=0.55cm,
+             font=\ttfamily\scriptsize},
+  alvo/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!14,
+               minimum width=1.75cm, minimum height=0.55cm,
+               font=\ttfamily\scriptsize},
+  pulado/.style={draw=manualred, very thick, dashed, rounded corners=1pt,
+                 fill=manualyellow!30, minimum width=1.75cm, minimum height=0.55cm,
+                 font=\ttfamily\scriptsize},
+  fin/.style={draw=manualgreen, thick, rounded corners=1pt, fill=manualgreen!12,
+             minimum width=1.75cm, minimum height=0.55cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  et/.style={font=\scriptsize\ttfamily, text=manualgray},
+  cur/.style={->,>=stealth, very thick, manualblue}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-2.6, 2.5) rectangle (14.6,-5.6);
+
+  \node[et] at (-1.6, 1.95) {i};
+  \foreach \pos in {0,1,2,3,4,5}
+    \node[et] at ({\pos*1.85}, 1.95) {\pos};
+
+  % passo i=2
+  \node[lb, anchor=east] at (-0.95, 1.25) {\texttt{i=2}};
+  \node[cel] at (0.00, 1.25) {onu-01};
+  \node[cel] at (1.85, 1.25) {onu-02};
+  \node[alvo] at (3.70, 1.25) {offline};
+  \node[cel] at (5.55, 1.25) {offline};
+  \node[cel] at (7.40, 1.25) {onu-05};
+  \node[cel] at (9.25, 1.25) {offline};
+  \draw[cur] (3.70, 0.62) -- (3.70, 0.92);
+  \node[lb, anchor=west, text width=3.9cm, text=manualred] at (10.4, 1.25)
+    {vê \texttt{offline} e remove};
+
+  % passo i=3
+  \node[lb, anchor=east] at (-0.95,-0.55) {\texttt{i=3}};
+  \node[cel]   at (0.00,-0.55) {onu-01};
+  \node[cel]   at (1.85,-0.55) {onu-02};
+  \node[pulado] at (3.70,-0.55) {offline};
+  \node[alvo, draw=manualblue, fill=manualblue!12] at (5.55,-0.55) {onu-05};
+  \node[cel]   at (7.40,-0.55) {offline};
+  \draw[cur] (5.55,-1.18) -- (5.55,-0.88);
+  \node[lb, anchor=west, text width=3.9cm, text=manualred] at (10.4,-0.55)
+    {o segundo \texttt{offline} deslizou para a casa 2 --- e o índice já passou
+     dela};
+
+  % passo i=4
+  \node[lb, anchor=east] at (-0.95,-2.35) {\texttt{i=4}};
+  \node[cel]   at (0.00,-2.35) {onu-01};
+  \node[cel]   at (1.85,-2.35) {onu-02};
+  \node[pulado] at (3.70,-2.35) {offline};
+  \node[cel]   at (5.55,-2.35) {onu-05};
+  \node[alvo]   at (7.40,-2.35) {offline};
+  \draw[cur] (7.40,-2.98) -- (7.40,-2.68);
+  \node[lb, anchor=west, text width=3.9cm, text=manualred] at (10.4,-2.35)
+    {\texttt{remove} apaga a \textbf{primeira} ocorrência, que está na casa 2};
+
+  % resultado
+  \node[lb, anchor=east] at (-0.95,-4.15) {resultado};
+  \node[fin]   at (0.00,-4.15) {onu-01};
+  \node[fin]   at (1.85,-4.15) {onu-02};
+  \node[fin]   at (3.70,-4.15) {onu-05};
+  \node[pulado] at (5.55,-4.15) {offline};
+  \node[lb, anchor=west, text width=3.9cm] at (10.4,-4.15)
+    {sobrou uma, sem erro nenhum};
+
+  \node[lb, text width=9.5cm] at (4.2,-5.15)
+    {a lista encolhe sob o índice interno do iterador, que só sabe andar para
+     frente: cada remoção faz o laço pular exatamente um elemento};
+\end{tikzpicture}
+```
+Remover durante o laço desloca a lista e faz o índice interno pular elementos.
+:::
+
+Há três saídas corretas, em ordem de preferência:
+
+```python
+onus = ["onu-01", "onu-02", "offline", "offline", "onu-05", "offline"]
+
+# 1. construir uma lista nova (o normal)
+ativas = [n for n in onus if n != "offline"]
+
+# 2. substituir o conteúdo no lugar, quando outras referências apontam para a lista
+onus[:] = [n for n in onus if n != "offline"]
+
+print(ativas)
+print(onus)
+```
+
+```text
+['onu-01', 'onu-02', 'onu-05']
+['onu-01', 'onu-02', 'onu-05']
+```
+
+A primeira é a resposta padrão: filtrar é produzir uma coleção nova, não mutilar a antiga. A segunda usa a atribuição a fatia do @sec-cap012 para trocar o conteúdo mantendo o mesmo objeto — importa quando outra parte do programa guarda uma referência a essa lista, pela mecânica do @sec-cap008. A terceira é iterar sobre uma **cópia**, que é o que salva o dicionário:
+
+```python
+estoque = {"onu-01": 3, "onu-02": 0, "onu-03": 5}
+for chave in list(estoque):
+    if estoque[chave] == 0:
+        del estoque[chave]
+print(estoque)
+```
+
+```text
+{'onu-01': 3, 'onu-03': 5}
+```
+
+`list(estoque)` congela as chaves antes do laço começar; o que muda é o dicionário, não a lista que está sendo percorrida.
+
+A sintaxe `[n for n in onus if ...]` é uma compreensão de lista, assunto do Volume 4. Ela aparece aqui porque é a resposta idiomática ao problema deste capítulo, e vale ler por enquanto como "um `for` que produz uma lista".
+
+## Laços aninhados
+
+```python
+matriz = [[1, 2, 3], [4, 5, 6]]
+for linha in matriz:
+    for valor in linha:
+        print(valor, end=" ")
+    print()
+```
+
+```text
+1 2 3
+4 5 6
+```
+
+Funciona e é legível em dois níveis. A partir do terceiro, e sempre que os dois laços percorrem coleções independentes, `itertools.product` diz o mesmo em uma linha — e o custo continua sendo o produto dos tamanhos. Dois laços de mil itens são um milhão de voltas, o que é a origem da maioria dos "ficou lento quando os dados cresceram".
+
+## 🐍 Jeito Pythônico
+
+**Itere sobre o objeto, não sobre índices.** `for item in colecao:` é o padrão; `for i, item in enumerate(colecao):` quando o índice também é necessário; `range(len(...))` praticamente nunca.
+
+```python
+# antipadrão
+for i in range(len(nomes)):
+    print(nomes[i], niveis[i])
+```
+
+```python
+# pythônico
+for nome, nivel in zip(nomes, niveis, strict=True):
+    print(nome, nivel)
+```
+
+**`while` para o que não tem contagem conhecida; `for` para todo o resto.** `while` com contador manual é `for` escrito com três chances a mais de errar.
+
+**Nunca modifique a coleção que está sendo percorrida.** Construa uma nova, ou itere sobre uma cópia (`list(d)`), ou atribua à fatia (`lst[:] = ...`).
+
+**`zip(..., strict=True)` sempre que os tamanhos deveriam bater** (3.10+). O truncamento silencioso é a categoria de bug mais barata de evitar e mais cara de achar.
+
+**Cuidado com iteradores consumidos.** `zip`, `enumerate`, `map`, `filter`, `reversed` e arquivos abertos são de uma passada só. Se vai usar duas vezes, `list()` antes.
+
+**`for _ in range(n)` quando o valor não importa.** O sublinhado é a convenção para "variável que existe só porque a sintaxe exige".
+
+**Não conte na mão o que a biblioteca já conta.** `sum`, `min`, `max`, `any`, `all`, `sorted` e `collections.Counter` substituem laços de acumulação inteiros, e cada um deles roda em C.
+
+```python
+# antipadrão
+total = 0
+for n in niveis:
+    total += n
+media = total / len(niveis)
+```
+
+```python
+# pythônico
+media = sum(niveis) / len(niveis)
+```
+
+**Iterável reutilizável, iterador descartável.** Ao escrever uma classe iterável, `__iter__` devolve um objeto **novo**; só um iterador devolve `self`.
+
+Sobre versões:
+
+- **Python 3.0** — `range`, `zip` e `map` passaram a ser preguiçosos; no Python 2 devolviam listas.
+- **Python 3.6** — o dicionário passou a preservar a ordem de inserção (detalhe de implementação no 3.6, garantia da linguagem no 3.7), então a ordem de iteração de um `dict` é previsível.
+- **Python 3.10** — `zip(..., strict=True)` (PEP 618).
+- **Python 3.12** — laços mais rápidos por conta da especialização adaptativa do interpretador (PEP 659), sem mudança de sintaxe.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir a remoção que pula elementos, desmontar o `for` no protocolo que ele usa, medir a diferença entre `range` e lista, e terminar escrevendo um iterável próprio que calcula média móvel.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab16 && cd ~/lab16
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza o bug.**
+
+```bash
+python -c "
+onus = ['onu-01', 'onu-02', 'offline', 'offline', 'onu-05', 'offline']
+for nome in onus:
+    if nome == 'offline':
+        onus.remove(nome)
+print(onus)
+"
+```
+
+```text
+['onu-01', 'onu-02', 'onu-05', 'offline']
+```
+
+**3. Instrumente o laço para ver o índice andar.**
+
+```bash
+python -c "
+onus = ['onu-01', 'onu-02', 'offline', 'offline', 'onu-05', 'offline']
+it = iter(onus)
+i = 0
+while True:
+    try:
+        nome = next(it)
+    except StopIteration:
+        break
+    print(f'posicao {i}  o for ve {nome!r:<10} tamanho={len(onus)}')
+    if nome == 'offline':
+        onus.remove(nome)
+    i += 1
+print('sobrou:', onus)
+"
+```
+
+```text
+posicao 0  o for ve 'onu-01'   tamanho=6
+posicao 1  o for ve 'onu-02'   tamanho=6
+posicao 2  o for ve 'offline'  tamanho=6
+posicao 3  o for ve 'onu-05'   tamanho=5
+posicao 4  o for ve 'offline'  tamanho=5
+sobrou: ['onu-01', 'onu-02', 'onu-05', 'offline']
+```
+
+Cinco voltas numa lista de seis, e a posição 3 já mostra `onu-05` — o segundo `offline` foi pulado. Compare com a @fig-remove-durante-for.
+
+**4. As duas correções.**
+
+```bash
+python -c "
+onus = ['onu-01', 'onu-02', 'offline', 'offline', 'onu-05', 'offline']
+print([n for n in onus if n != 'offline'])
+onus[:] = [n for n in onus if n != 'offline']
+print(onus)
+"
+```
+
+```text
+['onu-01', 'onu-02', 'onu-05']
+['onu-01', 'onu-02', 'onu-05']
+```
+
+**5. O dicionário falha alto.**
+
+```bash
+python -c "
+estoque = {'onu-01': 3, 'onu-02': 0, 'onu-03': 5}
+try:
+    for chave, qtd in estoque.items():
+        if qtd == 0:
+            del estoque[chave]
+except RuntimeError as e:
+    print('RuntimeError:', e)
+estoque = {'onu-01': 3, 'onu-02': 0, 'onu-03': 5}
+for chave in list(estoque):
+    if estoque[chave] == 0:
+        del estoque[chave]
+print(estoque)
+"
+```
+
+```text
+RuntimeError: dictionary changed size during iteration
+{'onu-01': 3, 'onu-03': 5}
+```
+
+Repare que a exceção veio **depois** de a remoção já ter acontecido. Falhar alto não desfaz nada: protege o resto, não o que já foi feito.
+
+**6. O protocolo na mão.**
+
+```bash
+python -c "
+it = iter(['a', 'b'])
+print(type(it))
+print(next(it))
+print(next(it))
+try:
+    next(it)
+except StopIteration:
+    print('StopIteration')
+"
+```
+
+```text
+<class 'list_iterator'>
+a
+b
+StopIteration
+```
+
+**7. Iterador se esgota; iterável não.**
+
+```bash
+python -c "
+nums = [1, 2, 3]
+it = iter(nums)
+print(list(it))
+print(list(it))
+print('iter(it) is it:', iter(it) is it)
+print('iter(nums) is nums:', iter(nums) is nums)
+"
+```
+
+```text
+[1, 2, 3]
+[]
+iter(it) is it: True
+iter(nums) is nums: False
+```
+
+As duas últimas linhas são a definição operacional da diferença: o iterador devolve a si mesmo, o iterável devolve um objeto novo.
+
+**8. `range` contra lista.**
+
+```bash
+python -c "
+import sys
+print(sys.getsizeof(range(1_000_000)), sys.getsizeof(list(range(1_000_000))))
+r = range(0, 10, 3)
+print(list(r), len(r), r[2], 9 in r, 4 in r)
+"
+```
+
+```text
+48 8000056
+[0, 3, 6, 9] 4 6 True False
+```
+
+**9. `enumerate` e `zip`.**
+
+```bash
+python -c "
+nomes = ['onu-01', 'onu-02', 'onu-03']
+niveis = [-19.5, -31.0]
+print(list(zip(nomes, niveis)))
+try:
+    list(zip(nomes, niveis, strict=True))
+except ValueError as e:
+    print('ValueError:', e)
+for i, (nome, nivel) in enumerate(zip(nomes, niveis), start=1):
+    print(i, nome, nivel)
+"
+```
+
+```text
+[('onu-01', -19.5), ('onu-02', -31.0)]
+ValueError: zip() argument 2 is shorter than argument 1
+1 onu-01 -19.5
+2 onu-02 -31.0
+```
+
+O desempacotamento aninhado `i, (nome, nivel)` combina os dois sem índice manual em lugar nenhum.
+
+**10. `while` consumindo fila.**
+
+```bash
+python -c "
+fila = ['job-1', 'job-2', 'job-3']
+while fila:
+    print('rodando', fila.pop(0), '| restam', len(fila))
+"
+```
+
+```text
+rodando job-1 | restam 2
+rodando job-2 | restam 1
+rodando job-3 | restam 0
+```
+
+Aqui a mutação é o **objetivo** do laço, e por isso é `while`, não `for`.
+
+**11. Escreva um iterável próprio.** Crie `janela.py`:
+
+```python
+"""Media movel sobre uma sequencia de leituras, como iteravel proprio."""
+
+
+class JanelaMovel:
+    """Iteravel (reutilizavel) que produz a media de cada janela de tamanho n."""
+
+    def __init__(self, dados, tamanho):
+        if tamanho < 1:
+            raise ValueError("tamanho da janela precisa ser >= 1")
+        self.dados = list(dados)
+        self.tamanho = tamanho
+
+    def __iter__(self):
+        return _JanelaIterador(self.dados, self.tamanho)
+
+
+class _JanelaIterador:
+    def __init__(self, dados, tamanho):
+        self.dados = dados
+        self.tamanho = tamanho
+        self.pos = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        fim = self.pos + self.tamanho
+        if fim > len(self.dados):
+            raise StopIteration
+        fatia = self.dados[self.pos:fim]
+        self.pos += 1
+        return sum(fatia) / self.tamanho
+
+
+if __name__ == "__main__":
+    leituras = [-19.5, -19.8, -21.2, -25.9, -27.1, -31.0]
+    janela = JanelaMovel(leituras, 3)
+
+    for i, media in enumerate(janela, start=1):
+        print(f"janela {i}: {media:>7.2f} dBm")
+
+    print("de novo (o iteravel e reutilizavel):", [round(m, 2) for m in janela])
+    print("pior media:", round(min(janela), 2))
+
+    it = iter(janela)
+    print("primeiro next():", round(next(it), 2))
+    print("resto:", [round(m, 2) for m in it])
+    print("esgotado:", list(it))
+```
+
+```bash
+python janela.py
+```
+
+```text
+janela 1:  -20.17 dBm
+janela 2:  -22.30 dBm
+janela 3:  -24.73 dBm
+janela 4:  -28.00 dBm
+de novo (o iteravel e reutilizavel): [-20.17, -22.3, -24.73, -28.0]
+pior media: -28.0
+primeiro next(): -20.17
+resto: [-22.3, -24.73, -28.0]
+esgotado: []
+```
+
+As três últimas linhas são o protocolo inteiro: o `for` já tinha consumido um iterador e o `min` outro, mas o **iterável** continuou inteiro; o iterador que você pegou na mão, não. E `min(janela)` funcionou sem nenhuma linha a mais, porque implementar `__iter__` já entrega a função inteira da biblioteca padrão que consome iteráveis.
+
+**12. Use o iterável em algo real.** Crie `tendencia.py`:
+
+```python
+"""Detecta ONUs em degradacao comparando cada leitura com a anterior."""
+
+from janela import JanelaMovel
+
+HISTORICO = {
+    "onu-01": [-19.5, -19.6, -19.4, -19.5],
+    "onu-03": [-24.0, -26.1, -28.7, -31.0],
+    "onu-04": [-27.0, -26.2, -25.1, -24.4],
+}
+
+for onu, leituras in HISTORICO.items():
+    quedas = 0
+    for anterior, atual in zip(leituras, leituras[1:]):
+        if atual < anterior:
+            quedas += 1
+    media = sum(JanelaMovel(leituras, 2)) / (len(leituras) - 1)
+    veredito = "degradando" if quedas >= 3 else "estavel"
+    print(f"{onu}  quedas={quedas}/{len(leituras) - 1}  media={media:>7.2f}  {veredito}")
+```
+
+```bash
+python tendencia.py
+```
+
+```text
+onu-01  quedas=2/3  media= -19.50  estavel
+onu-03  quedas=3/3  media= -27.43  degradando
+onu-04  quedas=0/3  media= -25.67  estavel
+```
+
+O `zip(leituras, leituras[1:])` é o idioma para percorrer pares consecutivos: a mesma sequência contra ela mesma deslocada de um. Nenhum índice, nenhum `range(len(...))`, e o `zip` para sozinho no penúltimo elemento.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- `while` repete enquanto a condição for verdadeira e testa só no início da volta; é a escolha certa quando o número de iterações não é conhecido. `while` com contador manual é um `for` mal escrito.
+- `for` percorre um **iterável**: chama `iter()` uma vez, `next()` a cada volta, e encerra ao capturar `StopIteration`.
+- Iterável produz um iterador novo a cada `iter()`; iterador guarda a posição, devolve `self` em `__iter__` e **se esgota**. `zip`, `enumerate`, `map`, `filter` e arquivos abertos são iteradores de uma passada só.
+- Implementar `__iter__` e `__next__` faz o objeto funcionar com `for`, `sum`, `min`, `sorted`, `in` e desempacotamento de uma vez.
+- `range` é sequência preguiçosa: 48 bytes para um milhão de valores, com índice, `len` e `in` por aritmética.
+- `enumerate` no lugar de `range(len(...))`; `zip` para percorrer em paralelo, com `strict=True` (3.10+) sempre que os tamanhos deveriam bater.
+- Modificar a coleção durante a iteração pula elementos em lista (silenciosamente) e levanta `RuntimeError` em dicionário e conjunto. Construa uma coleção nova, itere sobre `list(d)` ou atribua a `lst[:]`.
+- `zip(seq, seq[1:])` percorre pares consecutivos; `sum`, `max`, `any` e `all` substituem laços de acumulação inteiros.
