@@ -1,3 +1,838 @@
 # Pacotes, `__init__.py` e a organização de um projeto {#sec-cap030}
 
-*(em elaboracao)*
+O projeto da telemetria começou com dois arquivos. Sete meses depois, o diretório estava assim:
+
+```text
+coletor.py
+csv.py
+latencia.py
+modelos.py
+potencia.py
+texto.py
+util.py
+```
+
+Nenhum arquivo é grande, nenhum é ruim, e mesmo assim o conjunto já dói em três lugares. `csv.py` sombreia a biblioteca padrão, exatamente como o `statistics.py` do @sec-cap029. `texto.py` não diz se formata relatório ou se analisa texto de log. E `util.py` — todo projeto tem um — é onde vai parar o que ninguém sabe onde pôr.
+
+O que falta não é disciplina de nomes: é **hierarquia**. Um módulo é um arquivo; quando os arquivos passam de meia dúzia, o que organiza é o nível de cima.
+
+## Um pacote é um diretório
+
+```text
+telemetria/
+├── __init__.py
+├── coletor.py
+├── relatorio/
+│   ├── __init__.py
+│   └── texto.py
+└── sondas/
+    ├── __init__.py
+    ├── latencia.py
+    └── potencia.py
+```
+
+Isso é um pacote com dois subpacotes. Os nomes ficam qualificados — `telemetria.sondas.potencia` — e a colisão com a biblioteca padrão desaparece por construção: um arquivo chamado `csv.py` dentro de `telemetria/` é `telemetria.csv`, e ninguém confunde os dois.
+
+O uso é o esperado:
+
+```python
+import telemetria.coletor
+
+print(telemetria.coletor.coletar("onu-00042"))
+```
+
+```text
+{'onu': 'onu-00042', 'olt': 'olt-borda-01', 'nivel': -21.4}
+```
+
+Um pacote **também é um objeto módulo** — o `__init__.py` é o corpo dele. A diferença aparece num atributo a mais:
+
+```python
+import telemetria
+
+print("__file__:", telemetria.__file__)
+print("__path__:", telemetria.__path__)
+```
+
+```text
+__file__: /home/vitor/lab30/telemetria/__init__.py
+__path__: ['/home/vitor/lab30/telemetria']
+```
+
+`__path__` é o que faz de um módulo um pacote: é o `sys.path` **local** dele, a lista de diretórios onde os submódulos são procurados. Quando você escreve `import telemetria.sondas.potencia`, o Python procura `telemetria` no `sys.path`, depois procura `sondas` no `telemetria.__path__`, depois `potencia` no `telemetria.sondas.__path__`. É o mesmo algoritmo do capítulo anterior, aplicado em cadeia.
+
+::: {#fig-anatomia-pacote}
+```{.tikz}
+%%| filename: anatomia-pacote
+%%| alt: Arvore de um pacote Python com subpacotes, mostrando o papel de cada arquivo e o nome qualificado correspondente
+\begin{tikzpicture}[
+  dir/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!11,
+              minimum height=0.55cm, font=\ttfamily\scriptsize, anchor=west,
+              inner xsep=6pt},
+  arq/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualgray!7,
+              minimum height=0.55cm, font=\ttfamily\scriptsize, anchor=west,
+              inner xsep=6pt},
+  ini/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!12,
+              minimum height=0.55cm, font=\ttfamily\scriptsize, anchor=west,
+              inner xsep=6pt},
+  ent/.style={draw=manualyellow!70!black, very thick, rounded corners=1pt,
+              fill=manualyellow!22, minimum height=0.55cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=6pt},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  qn/.style={font=\ttfamily\scriptsize, text=manualblue!70!black, anchor=west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  ln/.style={manualgray!60, thick}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 1.6) rectangle (14.8,-5.9);
+
+  \node[hd] at (0.0, 1.1) {a árvore em disco};
+  \node[hd] at (5.4, 1.1) {o nome no \texttt{import}};
+  \node[hd] at (9.6, 1.1) {para que serve};
+
+  \node[dir] at (0.0, 0.4) {telemetria/};
+  \node[qn]  at (5.4, 0.4) {telemetria};
+  \node[lb, text width=5.0cm] at (9.6, 0.4) {o pacote --- um diretório com
+    \texttt{\_\_init\_\_.py}};
+
+  \node[ini] at (0.4,-0.3) {\_\_init\_\_.py};
+  \node[qn]  at (5.4,-0.3) {telemetria};
+  \node[lb, text width=5.0cm] at (9.6,-0.3) {o corpo do pacote; vazio é o
+    padrão saudável};
+
+  \node[ent] at (0.4,-1.0) {\_\_main\_\_.py};
+  \node[qn]  at (5.4,-1.0) {python -m telemetria};
+  \node[lb, text width=5.0cm] at (9.6,-1.0) {o que roda quando o pacote é
+    executado};
+
+  \node[arq] at (0.4,-1.7) {coletor.py};
+  \node[qn]  at (5.4,-1.7) {telemetria.coletor};
+  \node[lb, text width=5.0cm] at (9.6,-1.7) {um módulo comum};
+
+  \node[arq] at (0.4,-2.4) {limiares.toml};
+  \node[qn]  at (5.4,-2.4) {resources.files(...)};
+  \node[lb, text width=5.0cm] at (9.6,-2.4) {dado que viaja junto com o código};
+
+  \node[dir] at (0.4,-3.1) {sondas/};
+  \node[qn]  at (5.4,-3.1) {telemetria.sondas};
+  \node[lb, text width=5.0cm] at (9.6,-3.1) {subpacote: a mesma regra, um nível
+    abaixo};
+
+  \node[ini] at (0.8,-3.8) {\_\_init\_\_.py};
+  \node[arq] at (0.8,-4.5) {potencia.py};
+  \node[qn]  at (5.4,-4.5) {telemetria.sondas.potencia};
+  \node[arq] at (0.8,-5.2) {latencia.py};
+  \node[qn]  at (5.4,-5.2) {telemetria.sondas.latencia};
+
+  \draw[ln] (0.25, 0.15) -- (0.25,-5.2);
+  \draw[ln] (0.65,-3.55) -- (0.65,-5.2);
+\end{tikzpicture}
+```
+Cada arquivo de um pacote tem um nome qualificado, e dois nomes são especiais.
+:::
+
+## Importar o pacote não importa os submódulos
+
+Esta é a surpresa mais comum de quem chega de outras linguagens:
+
+```python
+import telemetria
+
+print(telemetria.coletor)
+```
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+    print(telemetria.coletor)
+          ^^^^^^^^^^^^^^^^^^
+AttributeError: module 'telemetria' has no attribute 'coletor'
+```
+
+`import telemetria` executa **só** o `__init__.py`. Se ele estiver vazio, você importou um objeto módulo vazio. Nada de varredura de diretório, nada de carregamento automático: submódulo se importa na unha.
+
+A recíproca vale e é útil: importar um submódulo importa **todos os pais** no caminho, porque cada `__path__` precisa existir antes do passo seguinte.
+
+```python
+import sys
+
+import telemetria.sondas.potencia
+
+print([n for n in sys.modules if n.startswith("telemetria")])
+```
+
+```text
+['telemetria', 'telemetria.sondas', 'telemetria.sondas.potencia']
+```
+
+E o efeito colateral: depois desse import, `telemetria.sondas` passa a existir como atributo, porque o mecanismo de import grava o filho no pai ao terminar. Contar com isso é frágil (funciona ou não conforme a ordem dos imports em outro arquivo qualquer), mas explica por que às vezes `telemetria.coletor` funciona sem você ter importado.
+
+## O que colocar no `__init__.py`
+
+**A resposta padrão é: nada.** Um `__init__.py` vazio de zero byte é o caso mais comum em projetos bons, e não é preguiça — é o pacote dizendo "eu sou só uma pasta com nome".
+
+O `__init__.py` executa quando o pacote é importado, e em cascata, de fora para dentro. Com um `print` em cada um dos dois:
+
+```bash
+python3 -c "import telemetria.sondas.potencia; print('pronto')"
+```
+
+```text
+  [telemetria] __init__ executado
+  [telemetria.sondas] __init__ executado
+pronto
+```
+
+Isso significa que **todo peso no `__init__.py` é pago por quem importa qualquer coisa do pacote**, mesmo quem só queria um submódulo. Ler configuração, abrir conexão ou montar cache no `__init__.py` é o jeito mais eficiente de deixar uma biblioteca lenta.
+
+O uso legítimo é a **fachada**: reexportar a API pública para encurtar o caminho de quem usa.
+
+```python
+"""Telemetria de rede optica."""
+
+from telemetria.coletor import coletar
+from telemetria.relatorio.texto import linha
+
+__all__ = ["coletar", "linha"]
+__version__ = "0.1.0"
+```
+
+```python
+import telemetria
+
+print(telemetria.__version__)
+print(telemetria.coletar("onu-00042"))
+print(telemetria.linha("onu-00042"))
+print("publicos:", [n for n in dir(telemetria) if not n.startswith("_")])
+```
+
+```text
+0.1.0
+{'onu': 'onu-00042', 'olt': 'olt-borda-01', 'nivel': -21.4}
+   onu-00042    olt-borda-01   -21.4 dBm
+publicos: ['coletar', 'coletor', 'linha', 'relatorio']
+```
+
+É assim que `from pathlib import Path` funciona sem você precisar saber que `Path` mora em outro arquivo lá dentro. Repare na última linha: além de `coletar` e `linha`, aparecem `coletor` e `relatorio` — os submódulos que a própria fachada teve de importar. `dir()` mostra tudo; `__all__` declara o que é **público**.
+
+`__all__` faz duas coisas: define o que `from telemetria import *` traz e serve de contrato para leitores e ferramentas (um verificador reclama se algo listado em `__all__` não existe). Não é uma trava: nada impede alguém de importar `telemetria.coletor.OLT_PADRAO`. É documentação executável, e o resto é convenção — nome com um underscore na frente é privado por acordo.
+
+O preço da fachada é real e vale saber antes de adotá-la: ela importa o pacote inteiro sempre, encarece o tempo de partida (@sec-cap029) e é a origem clássica de ciclos, porque um submódulo que faça `from telemetria import algo` volta a executar o `__init__.py` que ainda está no meio da execução. A saída conhecida é submódulo nunca importar da fachada — só de outros submódulos, por caminho explícito.
+
+## Imports relativos
+
+Dentro de um pacote, o ponto significa "aqui":
+
+```python
+"""Formatacao do relatorio em texto."""
+
+from ..coletor import coletar
+
+
+def linha(onu):
+    d = coletar(onu)
+    return f"{d['onu']:>12}  {d['olt']:>14}  {d['nivel']:6.1f} dBm"
+```
+
+Um ponto é o pacote atual (`telemetria.relatorio`), dois pontos é o pai (`telemetria`), três é o avô. Como `telemetria` é o topo, subir demais dá erro:
+
+```python
+from ...coletor import coletar
+```
+
+```text
+ImportError: attempted relative import beyond top-level package
+```
+
+O import relativo tem uma vantagem concreta: renomear o pacote inteiro (de `telemetria` para `telemetria_optica`, digamos) não quebra nenhum import interno. E tem uma armadilha:
+
+```bash
+python3 telemetria/relatorio/texto.py
+```
+
+```text
+ImportError: attempted relative import with no known parent package
+```
+
+Chamar o arquivo pelo caminho faz dele o `__main__` — um módulo de topo, sem pacote pai, e o `..` não tem para onde apontar. A correção é a do capítulo anterior:
+
+```bash
+python3 -m telemetria.relatorio.texto
+```
+
+Com `-m`, o Python importa `telemetria`, depois `telemetria.relatorio`, e só então executa `texto` sabendo quem é o pai. É a mesma regra do `sys.path[0]`, vista do outro lado.
+
+Vale mostrar um aviso que aparece justamente quando se tem uma fachada e se usa `-m` num submódulo que ela já importou:
+
+```text
+<frozen runpy>:128: RuntimeWarning: 'telemetria.relatorio.texto' found in sys.modules
+after import of package 'telemetria.relatorio', but prior to execution of
+'telemetria.relatorio.texto'; this may result in unpredictable behaviour
+```
+
+O `runpy` está avisando que o módulo vai ser executado **de novo**, como `__main__`, embora já exista em `sys.modules` sob o nome verdadeiro — resultado: duas cópias das mesmas classes e funções no mesmo processo. É inofensivo num script de demonstração e perigoso em código que compara tipos. A saída limpa é dar ao pacote um `__main__.py` (a seguir) em vez de executar submódulos soltos.
+
+Sobre qual estilo usar, a PEP 8 é morna: prefere absoluto, aceita relativo explícito para layouts complexos. Na prática, a divisão que funciona:
+
+- **Absoluto** (`from telemetria.coletor import coletar`) em scripts, testes e em qualquer lugar fora do pacote. Sempre.
+- **Relativo** (`from ..coletor import coletar`) entre módulos irmãos dentro do pacote — mais curto, sobrevive a renomeação.
+- **Nunca relativo implícito**: `import coletor` de dentro de `telemetria/relatorio/` não funciona desde o Python 3 (PEP 328), e ainda aparece em código antigo portado às pressas.
+
+## Pacotes de namespace
+
+Desde o Python 3.3 (PEP 420), **o `__init__.py` é opcional**. Um diretório sem ele também importa:
+
+```python
+import ferramentas
+
+print("__file__:", getattr(ferramentas, "__file__", None))
+print("__path__:", ferramentas.__path__)
+```
+
+```text
+__file__: None
+__path__: _NamespacePath(['/home/vitor/lab30/ferramentas'])
+```
+
+Repare no `__file__` nulo e no tipo do `__path__`: isso é um **pacote de namespace**, e ele existe para um caso específico — permitir que pedaços de um mesmo pacote venham de lugares diferentes do `sys.path`. Com `plugins_a/sondas_ext/temperatura.py` e `plugins_b/sondas_ext/vibracao.py`, nenhum dos dois com `__init__.py`:
+
+```bash
+PYTHONPATH=plugins_a:plugins_b python3 -c "
+import sondas_ext
+print(list(sondas_ext.__path__))
+import sondas_ext.temperatura, sondas_ext.vibracao
+print(sondas_ext.temperatura.NOME, '+', sondas_ext.vibracao.NOME)
+"
+```
+
+```text
+['/home/vitor/lab30/plugins_a/sondas_ext', '/home/vitor/lab30/plugins_b/sondas_ext']
+temperatura + vibracao
+```
+
+Os dois diretórios viraram **um** pacote com dois trechos. É assim que funcionam ecossistemas de plugin distribuídos em pacotes separados. Basta criar um `__init__.py` em qualquer um deles para a mágica acabar:
+
+```text
+__path__: ['/home/vitor/lab30/plugins_a/sondas_ext']
+ModuleNotFoundError: No module named 'sondas_ext.vibracao'
+```
+
+Um pacote comum é encontrado, a busca para ali, e o segundo diretório desaparece — inclusive de mensagens de erro, o que torna esse um problema difícil de diagnosticar sem olhar `__path__`.
+
+A segunda mordida do PEP 420 é mais frequente e mais boba: **qualquer diretório vira um import válido**. Um erro de digitação no nome de um diretório não dá erro de import; dá um pacote vazio.
+
+```python
+import telemetrai  # note o "ai" no fim
+
+print("importou sem erro:", telemetrai)
+```
+
+```text
+importou sem erro: <module 'telemetrai' (namespace) from ['/home/vitor/lab30/telemetrai']>
+```
+
+Nenhum `ModuleNotFoundError`. O erro só aparece bem depois, como `AttributeError` em algo que deveria existir. Daí a regra prática deste manual: **use `__init__.py`, mesmo vazio, em todo pacote seu**. Namespace é recurso para quem distribui plugins de terceiros, não estilo de organização — e as ferramentas de empacotamento do @sec-cap032 precisam de configuração extra para achar pacotes sem `__init__.py`.
+
+## `__main__.py`: o pacote executável
+
+Um arquivo com esse nome faz o pacote responder a `python3 -m`:
+
+```python
+"""Ponto de entrada: python -m telemetria."""
+
+from telemetria import linha
+
+for onu in ("onu-00042", "onu-00043"):
+    print(linha(onu))
+```
+
+```bash
+python3 -m telemetria
+```
+
+```text
+   onu-00042    olt-borda-01   -21.4 dBm
+   onu-00043    olt-borda-01   -21.4 dBm
+```
+
+É o mecanismo por trás de `python3 -m json.tool`, `python3 -m http.server` e `python3 -m venv`. O @sec-cap034 fecha o assunto, incluindo a diferença entre isso e um comando de terminal instalado.
+
+## Dados que viajam com o pacote
+
+Limiares, gabaritos, arquivos de tradução e esquemas moram junto do código e precisam ser lidos sem depender do diretório de trabalho. O caminho certo é `importlib.resources`:
+
+```python
+import tomllib
+from importlib.resources import files
+
+bruto = files("telemetria").joinpath("limiares.toml").read_text(encoding="utf-8")
+print(tomllib.loads(bruto))
+```
+
+```text
+{'potencia': {'critico': -28.0, 'atencao': -25.0}}
+```
+
+O que **não** fazer é `open("telemetria/limiares.toml")` nem montar caminho a partir de `__file__`: os dois quebram quando o pacote é instalado em outro lugar, e o segundo quebra também quando ele é distribuído dentro de um `.zip`. `files()` pergunta ao próprio mecanismo de import onde o recurso está, e funciona nos dois casos. (`tomllib` está na biblioteca padrão desde o Python 3.11 e só lê — para escrever TOML ainda é preciso um pacote externo.)
+
+## Layout: plano ou `src`
+
+Falta decidir onde o pacote mora dentro do repositório. Há duas convenções, e a diferença entre elas é sutil de ver e cara de ignorar.
+
+::: {#fig-layout-src}
+```{.tikz}
+%%| filename: layout-src
+%%| alt: Comparacao entre o layout plano e o layout src, mostrando que no layout plano o diretorio de trabalho poe o pacote no sys.path por acidente
+\begin{tikzpicture}[
+  cx/.style={draw=manualgray!70, thick, rounded corners, fill=white,
+             minimum width=6.2cm, minimum height=3.5cm},
+  dir/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!11,
+              minimum height=0.5cm, font=\ttfamily\scriptsize, anchor=west,
+              inner xsep=5pt},
+  arq/.style={draw=manualgray, thick, rounded corners=1pt, fill=manualgray!7,
+              minimum height=0.5cm, font=\ttfamily\scriptsize, anchor=west,
+              inner xsep=5pt},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, anchor=west},
+  bad/.style={font=\scriptsize, text=manualred, align=left, anchor=west},
+  gd/.style={font=\scriptsize, text=manualgreen!55!black, align=left, anchor=west},
+  fl/.style={->,>=stealth, thick}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 1.9) rectangle (14.8,-4.7);
+
+  \node[hd] at (0.0, 1.4) {layout plano};
+  \node[dir] at (0.0, 0.8) {projeto/};
+  \node[dir] at (0.4, 0.2) {telemetria/};
+  \node[dir] at (0.4,-0.4) {tests/};
+  \node[arq] at (0.4,-1.0) {pyproject.toml};
+
+  \node[bad, text width=6.2cm] at (0.0,-2.2)
+    {O diretório de trabalho é \texttt{sys.path[0]}: rodando da raiz,
+     \texttt{import telemetria} pega a \textbf{pasta}, não o pacote instalado.
+     O teste passa mesmo com o empacotamento quebrado --- e quebra na máquina
+     de quem instalou.};
+
+  \node[hd] at (7.6, 1.4) {layout \texttt{src}};
+  \node[dir] at (7.6, 0.8) {projeto/};
+  \node[dir] at (8.0, 0.2) {src/};
+  \node[dir] at (8.4,-0.4) {telemetria/};
+  \node[dir] at (8.0,-1.0) {tests/};
+  \node[arq] at (8.0,-1.6) {pyproject.toml};
+
+  \node[gd, text width=6.2cm] at (7.6,-2.6)
+    {\texttt{src/} não está no \texttt{sys.path}: da raiz,
+     \texttt{import telemetria} \textbf{falha} enquanto o pacote não estiver
+     instalado. O teste roda contra o que o usuário vai receber.};
+
+  \draw[manualgray!40, thick] (7.2, 1.6) -- (7.2,-4.4);
+\end{tikzpicture}
+```
+O layout `src` não é frescura: é o que impede o teste de mentir.
+:::
+
+A demonstração cabe em quatro linhas. Com o layout plano, da raiz do projeto:
+
+```bash
+python3 -c "import telemetria; print('da raiz: ok')"
+cd /tmp && python3 -c "import telemetria"
+```
+
+```text
+da raiz: ok
+ModuleNotFoundError: No module named 'telemetria'
+```
+
+Funciona da raiz e só da raiz — porque quem colocou o pacote no caminho foi o diretório de trabalho, não uma instalação. Com o layout `src`, nem da raiz:
+
+```bash
+cd projeto && python3 -c "import telemetria"
+PYTHONPATH=src python3 -c "import telemetria; print(telemetria.__file__)"
+```
+
+```text
+ModuleNotFoundError: No module named 'telemetria'
+/home/vitor/lab30/projeto/src/telemetria/__init__.py
+```
+
+Parece um retrocesso e é o contrário: o `src/` **obriga** o projeto a ser instalado para ser importado, e é isso que garante que a suíte de testes esteja exercitando o pacote de verdade — com os arquivos de dados que realmente foram incluídos, com os módulos que realmente foram declarados. O erro que o layout plano esconde é sempre o mesmo: esqueceu-se de incluir um subpacote ou um `.toml` na distribuição, tudo passou verde em casa, e o usuário recebeu um pacote que não importa.
+
+O `PYTHONPATH=src` acima é muleta de demonstração. A forma correta é `pip install -e .`, que o @sec-cap032 monta por inteiro; até lá, a estrutura de referência do manual é:
+
+```text
+projeto/
+├── pyproject.toml
+├── README.md
+├── src/
+│   └── telemetria/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── coletor.py
+│       ├── limiares.toml
+│       ├── relatorio/
+│       └── sondas/
+└── tests/
+    └── test_coletor.py
+```
+
+`tests/` fora do pacote, sem `__init__.py` — os testes não são parte do que se distribui, e o Volume 9 trata deles.
+
+## 🐍 Jeito Pythônico
+
+**Um pacote por projeto, `src/` na raiz, `tests/` ao lado.** É o layout que as ferramentas modernas (`hatchling`, `uv init --lib`, `pytest`) assumem por padrão.
+
+**`__init__.py` vazio, até haver motivo.** Quando houver, que seja fachada e nada mais:
+
+```python
+# antipadrão: o __init__ que trabalha
+import requests
+
+CONFIG = json.loads(open("config.json").read())   # roda em todo import
+SESSAO = requests.Session()                       # abre socket em todo import
+```
+
+```python
+# pythônico: o __init__ que só apresenta
+"""Telemetria de rede optica."""
+
+from telemetria.coletor import coletar
+from telemetria.relatorio.texto import linha
+
+__all__ = ["coletar", "linha"]
+```
+
+**Declare `__all__`** em módulos e pacotes que formam API pública. Nome com underscore na frente é privado, e a convenção basta.
+
+**Import absoluto para fora, relativo entre irmãos.** E jamais relativo implícito.
+
+**`python3 -m pacote` em vez de `python3 pacote/modulo.py`.** O primeiro sabe quem é o pai; o segundo, não.
+
+**`importlib.resources.files()` para ler dado do pacote.** Nunca caminho relativo, nunca `__file__` costurado à mão.
+
+**`__init__.py` mesmo vazio.** Pacote de namespace é para distribuir plugins de terceiros; no seu projeto, ele só transforma erro de digitação em bug silencioso.
+
+Sobre versões:
+
+- **Python 3.3** — PEP 420 tornou o `__init__.py` opcional e criou os pacotes de namespace.
+- **Python 3.7** — `importlib.resources` entrou na biblioteca padrão, aposentando `pkg_resources` (que era lento e exigia `setuptools` em tempo de execução).
+- **Python 3.9** — `importlib.resources.files()` trouxe a interface de caminho, que é a que se usa hoje.
+- **Python 3.11** — `tomllib` na biblioteca padrão, o que torna `.toml` a escolha natural para configuração que viaja com o pacote.
+- **Python 3.12** — os utilitários antigos de `importlib.resources` (`open_text`, `read_binary`) ficaram formalmente obsoletos em favor de `files()`.
+
+## 🧪 Laboratório
+
+Objetivo: transformar arquivos soltos num pacote, ver o `__init__.py` executar em cascata, montar uma fachada, quebrar e consertar imports relativos, dar ao pacote um `__main__.py`, ler um dado interno e terminar no layout `src`.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab30 && cd ~/lab30
+python3 --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Monte o pacote.**
+
+```bash
+mkdir -p telemetria/sondas telemetria/relatorio
+touch telemetria/__init__.py telemetria/sondas/__init__.py telemetria/relatorio/__init__.py
+```
+
+`telemetria/coletor.py`:
+
+```python
+"""Coleta bruta de leituras."""
+
+OLT_PADRAO = "olt-borda-01"
+
+
+def coletar(onu):
+    return {"onu": onu, "olt": OLT_PADRAO, "nivel": -21.4}
+```
+
+`telemetria/sondas/potencia.py`:
+
+```python
+"""Sonda de potencia optica."""
+
+NOME = "potencia optica"
+
+
+def medir(onu):
+    return {"metrica": "rx_dbm", "valor": -21.4}
+```
+
+`telemetria/sondas/latencia.py`:
+
+```python
+"""Sonda de latencia."""
+
+NOME = "latencia"
+
+
+def medir(onu):
+    return {"metrica": "rtt_ms", "valor": 8.2}
+```
+
+`telemetria/relatorio/texto.py`:
+
+```python
+"""Formatacao do relatorio em texto."""
+
+from telemetria.coletor import coletar
+
+
+def linha(onu):
+    d = coletar(onu)
+    return f"{d['onu']:>12}  {d['olt']:>14}  {d['nivel']:6.1f} dBm"
+```
+
+```bash
+find telemetria -name "*.py" | sort
+```
+
+```text
+telemetria/__init__.py
+telemetria/coletor.py
+telemetria/relatorio/__init__.py
+telemetria/relatorio/texto.py
+telemetria/sondas/__init__.py
+telemetria/sondas/latencia.py
+telemetria/sondas/potencia.py
+```
+
+**3. O pacote vazio não tem nada dentro.**
+
+```bash
+python3 -c "
+import telemetria
+print('__file__:', telemetria.__file__)
+print('__path__:', telemetria.__path__)
+print(telemetria.coletor)
+"
+```
+
+```text
+__file__: /home/vitor/lab30/telemetria/__init__.py
+__path__: ['/home/vitor/lab30/telemetria']
+Traceback (most recent call last):
+  File "<string>", line 6, in <module>
+    print(telemetria.coletor)
+          ^^^^^^^^^^^^^^^^^^
+AttributeError: module 'telemetria' has no attribute 'coletor'
+```
+
+**4. Importando o que existe.**
+
+```bash
+python3 -c "
+import sys
+import telemetria.sondas.potencia
+print([n for n in sys.modules if n.startswith('telemetria')])
+"
+python3 -c "
+from telemetria.sondas import latencia, potencia
+print(potencia.NOME, potencia.medir('onu-00042'))
+print(latencia.NOME, latencia.medir('onu-00042'))
+"
+```
+
+```text
+['telemetria', 'telemetria.sondas', 'telemetria.sondas.potencia']
+potencia optica {'metrica': 'rx_dbm', 'valor': -21.4}
+latencia {'metrica': 'rtt_ms', 'valor': 8.2}
+```
+
+**5. A cascata dos `__init__.py`.** Ponha uma linha em cada um:
+
+```bash
+echo 'print("  [telemetria] __init__ executado")' > telemetria/__init__.py
+echo 'print("  [telemetria.sondas] __init__ executado")' > telemetria/sondas/__init__.py
+python3 -c "import telemetria.sondas.potencia; print('pronto')"
+```
+
+```text
+  [telemetria] __init__ executado
+  [telemetria.sondas] __init__ executado
+pronto
+```
+
+Importar a folha executou os dois pais. Guarde isso na hora de decidir o que entra num `__init__.py`.
+
+**6. A fachada.** Esvazie o `sondas/__init__.py` e escreva `telemetria/__init__.py`:
+
+```python
+"""Telemetria de rede optica."""
+
+from telemetria.coletor import coletar
+from telemetria.relatorio.texto import linha
+
+__all__ = ["coletar", "linha"]
+__version__ = "0.1.0"
+```
+
+```bash
+python3 -c "
+import telemetria
+print(telemetria.__version__)
+print(telemetria.coletar('onu-00042'))
+print(telemetria.linha('onu-00042'))
+print('publicos:', [n for n in dir(telemetria) if not n.startswith('_')])
+"
+```
+
+```text
+0.1.0
+{'onu': 'onu-00042', 'olt': 'olt-borda-01', 'nivel': -21.4}
+   onu-00042    olt-borda-01   -21.4 dBm
+publicos: ['coletar', 'coletor', 'linha', 'relatorio']
+```
+
+**7. Import relativo.** Troque a primeira linha de `telemetria/relatorio/texto.py` por `from ..coletor import coletar` e confirme:
+
+```bash
+python3 -c "from telemetria.relatorio.texto import linha; print(linha('onu-00042'))"
+```
+
+```text
+   onu-00042    olt-borda-01   -21.4 dBm
+```
+
+**8. Os dois erros clássicos.**
+
+```bash
+echo 'from ...coletor import coletar' > telemetria/relatorio/errado.py
+python3 -c "import telemetria.relatorio.errado"
+python3 telemetria/relatorio/texto.py
+```
+
+```text
+ImportError: attempted relative import beyond top-level package
+ImportError: attempted relative import with no known parent package
+```
+
+O primeiro é subir mais níveis do que o pacote tem. O segundo é rodar o arquivo pelo caminho, sem pacote pai. Apague o `errado.py`.
+
+**9. O pacote executável.** Crie `telemetria/__main__.py`:
+
+```python
+"""Ponto de entrada: python -m telemetria."""
+
+from telemetria import linha
+
+for onu in ("onu-00042", "onu-00043"):
+    print(linha(onu))
+```
+
+```bash
+python3 -m telemetria
+```
+
+```text
+   onu-00042    olt-borda-01   -21.4 dBm
+   onu-00043    olt-borda-01   -21.4 dBm
+```
+
+**10. Dado dentro do pacote.** Crie `telemetria/limiares.toml`:
+
+```toml
+[potencia]
+critico = -28.0
+atencao = -25.0
+```
+
+```bash
+python3 -c "
+import tomllib
+from importlib.resources import files
+bruto = files('telemetria').joinpath('limiares.toml').read_text(encoding='utf-8')
+print(tomllib.loads(bruto))
+"
+```
+
+```text
+{'potencia': {'critico': -28.0, 'atencao': -25.0}}
+```
+
+**11. Namespace, de propósito e por acidente.**
+
+```bash
+mkdir -p plugins_a/sondas_ext plugins_b/sondas_ext
+echo 'NOME = "temperatura"' > plugins_a/sondas_ext/temperatura.py
+echo 'NOME = "vibracao"' > plugins_b/sondas_ext/vibracao.py
+PYTHONPATH=plugins_a:plugins_b python3 -c "
+import sondas_ext
+print(list(sondas_ext.__path__))
+import sondas_ext.temperatura, sondas_ext.vibracao
+print(sondas_ext.temperatura.NOME, '+', sondas_ext.vibracao.NOME)
+"
+```
+
+```text
+['/home/vitor/lab30/plugins_a/sondas_ext', '/home/vitor/lab30/plugins_b/sondas_ext']
+temperatura + vibracao
+```
+
+Agora crie um `__init__.py` no primeiro e veja o segundo sumir:
+
+```bash
+touch plugins_a/sondas_ext/__init__.py
+PYTHONPATH=plugins_a:plugins_b python3 -c "
+import sondas_ext
+print('__path__:', list(sondas_ext.__path__))
+import sondas_ext.vibracao
+"
+```
+
+```text
+__path__: ['/home/vitor/lab30/plugins_a/sondas_ext']
+ModuleNotFoundError: No module named 'sondas_ext.vibracao'
+```
+
+E o acidente:
+
+```bash
+mkdir -p telemetrai
+python3 -c "
+import telemetrai
+print('importou sem erro:', telemetrai)
+"
+```
+
+```text
+importou sem erro: <module 'telemetrai' (namespace) from ['/home/vitor/lab30/telemetrai']>
+```
+
+Um diretório vazio com nome errado importou sem reclamar. Apague-o: `rmdir telemetrai`.
+
+**12. Layout `src`.**
+
+```bash
+mkdir -p projeto/src projeto/tests
+cp -r telemetria projeto/src/
+cd projeto
+python3 -c "import telemetria"
+PYTHONPATH=src python3 -c "import telemetria; print(telemetria.__file__)"
+```
+
+```text
+ModuleNotFoundError: No module named 'telemetria'
+/home/vitor/lab30/projeto/src/telemetria/__init__.py
+```
+
+O `ModuleNotFoundError` é o comportamento **desejado**: com `src/`, importar exige instalar. É o que o próximo capítulo, e depois o @sec-cap032, resolvem para valer.
+
+## Resumo
+
+- Pacote é diretório com `__init__.py`; o que o distingue de um módulo é `__path__`, o caminho de busca local onde os submódulos são procurados.
+- `import pacote` executa **só** o `__init__.py` — submódulo não vem de brinde. Já `import pacote.sub.mod` executa os `__init__.py` de todos os pais, em cascata.
+- `__init__.py` vazio é o padrão saudável. Quando não for, que seja fachada de reexportação com `__all__`, nunca trabalho de verdade: todo peso ali é pago por quem importa qualquer coisa do pacote.
+- Import relativo (`from ..coletor import x`) vale entre irmãos e sobrevive a renomeação; absoluto vale para o resto. Rodar o arquivo pelo caminho mata o relativo — use `python3 -m`.
+- Pacote de namespace (sem `__init__.py`) junta diretórios espalhados pelo `sys.path`, o que serve a plugins e atrapalha todo o resto: erro de digitação em nome de diretório passa a importar em silêncio.
+- `__main__.py` faz o pacote responder a `python3 -m pacote`.
+- Dado que viaja com o pacote se lê com `importlib.resources.files()`, não com caminho relativo nem com `__file__`.
+- Layout `src/` impede o diretório de trabalho de fingir que o pacote está instalado — é o que faz o teste exercitar o que o usuário vai receber.
