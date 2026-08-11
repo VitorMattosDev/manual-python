@@ -57,7 +57,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 030** - Pacotes, `__init__.py` e a organização de um projeto - `vol05/cap030-pacotes-init-py-e-a-organizacao-de-um-projeto.qmd`
 - [x] **cap 031** - Ambientes virtuais: venv, pip e o isolamento de dependências - `vol05/cap031-ambientes-virtuais-venv-pip-e-o-isolamento-de.qmd`
 - [x] **cap 032** - Empacotamento moderno: pyproject.toml, build e publicação - `vol05/cap032-empacotamento-moderno-pyproject-toml-build-e.qmd`
-- [ ] **cap 033** - uv, pipx e Poetry: o ecossistema de gerenciamento - `vol05/cap033-uv-pipx-e-poetry-o-ecossistema-de.qmd`
+- [x] **cap 033** - uv, pipx e Poetry: o ecossistema de gerenciamento - `vol05/cap033-uv-pipx-e-poetry-o-ecossistema-de.qmd`
 - [ ] **cap 034** - Ponto de entrada: `__main__`, scripts de console e a linha de comando - `vol05/cap034-ponto-de-entrada-main-scripts-de-console-e-a.qmd`
 
 ### Volume 6 — Arquivos, Erros e Contextos

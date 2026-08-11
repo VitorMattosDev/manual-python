@@ -1,3 +1,924 @@
 # uv, pipx e Poetry: o ecossistema de gerenciamento {#sec-cap033}
 
-*(em elaboracao)*
+Três coisas ficaram pendentes nos capítulos anteriores.
+
+O @sec-cap031 mostrou que `pip freeze` produz uma lista de versões, não um arquivo de trava: sem hash, sem origem, sem plataforma, sem separar o que é seu do que veio junto. O @sec-cap032 pediu `pip install -e .`, `python -m build` e `twine` — três ferramentas para três etapas do mesmo trabalho. E o próprio Python que roda tudo isso continua sendo o do sistema, com a versão que a distribuição escolheu.
+
+Enquanto isso, criar um ambiente e instalar dois pacotes leva isto aqui:
+
+```text
+--- python3 -m venv .venv-pip
+  tempo: 2.919 s
+--- pip install rich httpx
+  tempo: 2.121 s
+```
+
+Cinco segundos parece pouco. Multiplique por cada vez que o CI roda, por cada contêiner que sobe, por cada troca de branch que muda dependência, e a conta muda de tamanho.
+
+Este capítulo é sobre as três ferramentas que responderam a isso — `pipx`, `Poetry` e `uv` — e sobre quando usar cada uma.
+
+## pipx: aplicação não é dependência
+
+Comece pelo problema mais simples. `ruff`, `httpie`, `black`, `yt-dlp` e o próprio `Poetry` são **programas escritos em Python**, não bibliotecas que seu código importa. Instalá-los no venv do projeto polui o arquivo de dependências com coisas que nada têm a ver com o produto; instalá-los no sistema esbarra na PEP 668 do @sec-cap031.
+
+`pipx` resolve isso instalando cada aplicação **no seu próprio ambiente virtual**, e expondo só os comandos:
+
+```bash
+pipx install uv
+pipx install poetry
+pipx list
+```
+
+```text
+  installed package uv 0.12.3, installed using Python 3.13.12
+  These apps are now available
+    - uv
+    - uvx
+  installed package poetry 2.4.1, installed using Python 3.13.12
+  These apps are now available
+    - poetry
+venvs are in /home/vitor/.local/share/pipx/venvs
+apps are exposed on your $PATH at /home/vitor/.local/bin
+```
+
+Dois programas, dois ambientes isolados, zero interferência entre eles e com o sistema. O truque é o mesmo do @sec-cap031, visto pelo shebang do comando exposto:
+
+```bash
+head -1 ~/.local/bin/poetry
+```
+
+```text
+#!/home/vitor/.local/share/pipx/venvs/poetry/bin/python -E
+```
+
+Não há cópia nem link mágico: o arquivo em `~/.local/bin` aponta para o Python de dentro do venv do `pipx`. E há a variante descartável, para quando você quer rodar sem instalar:
+
+```bash
+pipx run cowsay -t "idem, pelo pipx"
+```
+
+O ambiente é criado, usado e cacheado — nada fica no seu `PATH`.
+
+## uv: a ferramenta que absorveu as outras
+
+`uv` é escrito em Rust, vem como binário único, e cobre num só comando o que antes exigia `pip`, `venv`, `pip-tools`, `pipx`, `pyenv`, `build` e `twine`. A diferença de velocidade não é marginal:
+
+```text
+--- python3 -m venv .venv-pip
+  tempo: 2.919 s
+--- uv venv .venv-uv
+  tempo: 0.109 s
+
+--- pip install rich httpx        (cache quente)
+  tempo: 2.121 s
+--- uv pip install rich httpx     (cache quente)
+  tempo: 0.156 s
+```
+
+Vinte e seis vezes na criação do ambiente, treze vezes na instalação. Sem cache nenhum, com download real, a distância diminui mas continua grande (2,706 s contra 0,587 s), porque aí o gargalo passa a ser a rede.
+
+E não é só tempo:
+
+```bash
+du -sh .venv-pip .venv-uv
+```
+
+```text
+30M	.venv-pip
+9.3M	.venv-uv
+```
+
+O mesmo conjunto de pacotes ocupando um terço do espaço. O motivo aparece na contagem de links do arquivo:
+
+```bash
+stat -c "%h %n" .venv-uv/lib/python3.13/site-packages/rich/__init__.py
+stat -c "%h %n" .venv-pip/lib/python3.13/site-packages/rich/__init__.py
+```
+
+```text
+2 .venv-uv/lib/python3.13/site-packages/rich/__init__.py
+1 .venv-pip/lib/python3.13/site-packages/rich/__init__.py
+```
+
+Dois links para o mesmo inode: o `uv` **não copia** o arquivo do cache global para o ambiente, ele cria um link físico. Dez projetos usando `rich` guardam uma cópia só no disco. É o mesmo princípio de referências compartilhadas do @sec-cap008, aplicado ao sistema de arquivos.
+
+::: {#fig-matriz-ferramentas}
+```{.tikz}
+%%| filename: matriz-ferramentas
+%%| alt: Matriz comparando pip com venv, pipx, Poetry e uv em ambiente, resolucao, arquivo de trava, gestao de interpretador, ferramenta global e construcao de pacote
+\begin{tikzpicture}[
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, align=center},
+  rw/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  sim/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!14,
+              minimum width=2.0cm, minimum height=0.5cm, font=\scriptsize},
+  par/.style={draw=manualyellow!70!black, thick, rounded corners=1pt,
+              fill=manualyellow!22, minimum width=2.0cm, minimum height=0.5cm,
+              font=\scriptsize},
+  nao/.style={draw=manualgray!60, thick, rounded corners=1pt, fill=manualgray!6,
+              minimum width=2.0cm, minimum height=0.5cm, font=\scriptsize,
+              text=manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.0) rectangle (14.6,-4.6);
+
+  \node[hd] at (5.4, 1.5) {\texttt{pip + venv}};
+  \node[hd] at (7.7, 1.5) {\texttt{pipx}};
+  \node[hd] at (10.0, 1.5) {\texttt{Poetry}};
+  \node[hd] at (12.3, 1.5) {\texttt{uv}};
+
+  \node[rw] at (-0.5, 0.85) {criar ambiente virtual};
+  \node[sim] at (5.4, 0.85) {sim};
+  \node[par] at (7.7, 0.85) {por app};
+  \node[sim] at (10.0, 0.85) {sim};
+  \node[sim] at (12.3, 0.85) {sim};
+
+  \node[rw] at (-0.5, 0.2) {resolver dependências};
+  \node[sim] at (5.4, 0.2) {sim};
+  \node[nao] at (7.7, 0.2) {---};
+  \node[sim] at (10.0, 0.2) {sim};
+  \node[sim] at (12.3, 0.2) {sim};
+
+  \node[rw] at (-0.5,-0.45) {arquivo de trava com hash};
+  \node[nao] at (5.4,-0.45) {não};
+  \node[nao] at (7.7,-0.45) {---};
+  \node[sim] at (10.0,-0.45) {poetry.lock};
+  \node[sim] at (12.3,-0.45) {uv.lock};
+
+  \node[rw] at (-0.5,-1.1) {trava multiplataforma};
+  \node[nao] at (5.4,-1.1) {não};
+  \node[nao] at (7.7,-1.1) {---};
+  \node[sim] at (10.0,-1.1) {sim};
+  \node[sim] at (12.3,-1.1) {sim};
+
+  \node[rw] at (-0.5,-1.75) {instalar o interpretador};
+  \node[nao] at (5.4,-1.75) {não};
+  \node[nao] at (7.7,-1.75) {não};
+  \node[nao] at (10.0,-1.75) {não};
+  \node[sim] at (12.3,-1.75) {uv python};
+
+  \node[rw] at (-0.5,-2.4) {ferramenta global isolada};
+  \node[nao] at (5.4,-2.4) {não};
+  \node[sim] at (7.7,-2.4) {é o ponto};
+  \node[nao] at (10.0,-2.4) {não};
+  \node[sim] at (12.3,-2.4) {uv tool};
+
+  \node[rw] at (-0.5,-3.05) {construir e publicar};
+  \node[par] at (5.4,-3.05) {build+twine};
+  \node[nao] at (7.7,-3.05) {---};
+  \node[sim] at (10.0,-3.05) {poetry publish};
+  \node[sim] at (12.3,-3.05) {uv build/publish};
+
+  \node[rw] at (-0.5,-3.7) {escrito em};
+  \node[nao] at (5.4,-3.7) {Python};
+  \node[nao] at (7.7,-3.7) {Python};
+  \node[nao] at (10.0,-3.7) {Python};
+  \node[sim] at (12.3,-3.7) {Rust};
+\end{tikzpicture}
+```
+O que cada ferramenta cobre — e por que `uv` reduziu o número de ferramentas necessárias.
+:::
+
+### O modo "pip compatível"
+
+O caminho de menor atrito é usar `uv` como substituto direto do que você já digita. Os comandos existem com os mesmos nomes e as mesmas opções:
+
+```bash
+uv venv .venv                       # em vez de python3 -m venv .venv
+uv pip install rich httpx           # em vez de pip install
+uv pip freeze                       # em vez de pip freeze
+uv pip compile requirements.in -o requirements.txt --generate-hashes
+```
+
+Ele funciona inclusive dentro de um venv criado pelo `venv` comum — as duas ferramentas escrevem no mesmo lugar, no mesmo formato:
+
+```bash
+python3 -m venv .venv-comum
+uv pip install --python .venv-comum/bin/python cowsay
+.venv-comum/bin/cowsay -t "instalado pelo uv num venv do venv"
+```
+
+O `uv pip compile` merece destaque: é o `pip-tools` embutido, e é ele que fecha o buraco do `pip freeze` do @sec-cap031. Dado um `requirements.in` com as dependências diretas:
+
+```text
+rich>=13,<15
+httpx
+```
+
+```bash
+uv pip compile requirements.in -o requirements.txt --generate-hashes
+```
+
+```text
+# This file was autogenerated by uv via the following command:
+#    uv pip compile requirements.in -o requirements.txt --generate-hashes
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
+    --hash=sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f
+    # via httpx
+certifi==2026.7.22 \
+    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
+    --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
+    # via
+    #   httpcore
+    #   httpx
+```
+
+Quarenta e seis linhas com versão exata, hash duplo e — o mais valioso — o comentário `# via` dizendo **quem pediu cada pacote**. Esse arquivo é instalável por `pip` comum (`pip install -r requirements.txt`), o que o torna a ponte perfeita para um projeto que ainda não quer adotar `uv` inteiro.
+
+### O modo projeto
+
+O outro modo é o de gerenciador completo, em que o `uv` cuida do `pyproject.toml`, do ambiente e da trava, e você não digita `pip` nunca mais.
+
+```bash
+uv init --lib telemetria2
+find . -type f | sort
+```
+
+```text
+./.gitignore
+./pyproject.toml
+./.python-version
+./README.md
+./src/telemetria2/__init__.py
+./src/telemetria2/py.typed
+```
+
+Layout `src`, `py.typed` (a marca de que o pacote tem anotações de tipo, assunto do Volume 10), `.python-version` fixando o interpretador do projeto, e um `pyproject.toml` já no formato do @sec-cap032:
+
+```toml
+[project]
+name = "telemetria2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+```
+
+Acrescentar uma dependência é um comando que faz quatro coisas de uma vez:
+
+```bash
+uv add "rich>=13,<15"
+```
+
+```text
+Using CPython 3.13.12 interpreter at: /usr/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 5 packages in 105ms
+      Built telemetria2 @ file:///home/vitor/lab33/telemetria2
+Prepared 2 packages in 96ms
+Installed 5 packages in 12ms
+ + markdown-it-py==4.2.0
+ + mdurl==0.1.2
+ + pygments==2.20.0
+ + rich==14.3.4
+ + telemetria2==0.1.0 (from file:///home/vitor/lab33/telemetria2)
+```
+
+Ele criou o `.venv` (ninguém pediu, e é o certo), escreveu `rich>=13,<15` em `[project.dependencies]`, gerou o `uv.lock` e instalou tudo — **inclusive o próprio projeto, em modo editável**. O `pip install -e .` do capítulo anterior aconteceu sozinho.
+
+O `uv.lock` é o arquivo de trava que faltava:
+
+```text
+version = 1
+revision = 3
+requires-python = ">=3.13"
+
+[[package]]
+name = "markdown-it-py"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mdurl" },
+]
+sdist = { url = "https://files.pythonhosted.org/.../markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454 }
+wheels = [
+    { url = "https://files.pythonhosted.org/.../markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a", size = 91687 },
+]
+```
+
+Compare com as cinco linhas de `nome==versão` do `pip freeze`: aqui há origem, hash do `sdist` e de cada roda, tamanho, grafo de dependências e as marcas de plataforma. É **um** arquivo que descreve o ambiente em Linux, macOS e Windows — por isso ele vai para o Git, e o `.venv` não.
+
+A partir daí, o ciclo diário são três comandos:
+
+```bash
+uv sync   # o ambiente passa a ser exatamente o lock
+uv run    # roda algo dentro dele, sem ativar nada
+uv lock   # recalcula a trava quando o pyproject mudar
+```
+
+```bash
+rm -rf .venv && uv sync
+```
+
+```text
+Creating virtual environment at: .venv
+Resolved 10 packages in 1ms
+Installed 9 packages in 23ms
+  tempo: 0.061 s
+```
+
+Sessenta e um milissegundos para reconstruir do zero um ambiente com nove pacotes. É esse número que muda o hábito: um `.venv` deixa de ser algo que você preserva e passa a ser algo que você joga fora sem pensar.
+
+`uv run` é o comando que substitui o `activate`:
+
+```bash
+uv run python -c "from telemetria2 import relatorio; relatorio()"
+```
+
+```text
+onu-00042  -21.4 dBm  normal
+```
+
+Ele garante, antes de executar, que o ambiente está sincronizado com o `uv.lock` — o que elimina de vez a classe de bugs "instalei a dependência e esqueci de instalar na outra máquina". Em CI, `uv sync --frozen` e `uv lock --check` recusam-se a prosseguir se a trava estiver desatualizada em relação ao `pyproject.toml`.
+
+Dependências de desenvolvimento têm lugar próprio, o padrão de grupos da PEP 735:
+
+```bash
+uv add --dev pytest
+```
+
+```toml
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+```
+
+Elas não viajam para quem instala o pacote — algo que o `requirements-dev.txt` fazia por convenção e agora está no padrão.
+
+E há `uv tree`, que responde "de onde veio este pacote" sem instalar nada extra:
+
+```text
+telemetria2 v0.1.0
+    rich v14.3.4
+        markdown-it-py v4.2.0
+            mdurl v0.1.2
+        pygments v2.20.0
+    pytest v9.1.1 (group: dev)
+        iniconfig v2.3.0
+        packaging v26.3
+        pluggy v1.6.0
+        pygments v2.20.0
+```
+
+::: {#fig-fluxo-uv}
+```{.tikz}
+%%| filename: fluxo-uv
+%%| alt: Fluxo de trabalho com uv - pyproject declara, uv lock resolve e grava a trava, uv sync materializa o ambiente e uv run executa
+\begin{tikzpicture}[
+  arq/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.2cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  lok/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.2cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  amb/.style={draw=manualgray, thick, rounded corners, fill=manualgray!8,
+              text width=3.2cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  git/.style={draw=manualred, thick, rounded corners=1pt, fill=manualred!8,
+              text width=2.4cm, align=center, minimum height=0.5cm,
+              font=\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  cm/.style={font=\ttfamily\scriptsize, text=manualblue!70!black},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.7, 2.2) rectangle (14.7,-4.2);
+
+  \node[arq] at (1.9, 1.2) {pyproject.toml};
+  \node[lb, text width=3.4cm] at (1.9, 0.1) {o que você \textbf{pede}: faixas de
+    versão, grupos, extras};
+
+  \node[lok] at (6.6, 1.2) {uv.lock};
+  \node[lb, text width=3.6cm] at (6.6, 0.1) {o que foi \textbf{decidido}: versão
+    exata, hash, origem, todas as plataformas};
+
+  \node[amb] at (11.4, 1.2) {.venv/};
+  \node[lb, text width=3.4cm] at (11.4, 0.1) {o que \textbf{existe} nesta
+    máquina, agora};
+
+  \draw[fl] (3.6, 1.2) -- (4.9, 1.2) node[cm, midway, above] {uv lock};
+  \draw[fl] (8.3, 1.2) -- (9.7, 1.2) node[cm, midway, above] {uv sync};
+
+  \node[git] at (1.9,-1.4) {vai para o Git};
+  \node[git] at (6.6,-1.4) {vai para o Git};
+  \node[git, draw=manualgray!60, fill=manualgray!6] at (11.4,-1.4)
+       {fica no \texttt{.gitignore}};
+
+  \draw[fl] (1.9,-0.5) -- (1.9,-1.1);
+  \draw[fl] (6.6,-0.5) -- (6.6,-1.1);
+  \draw[fl] (11.4,-0.5) -- (11.4,-1.1);
+
+  \node[lb, text width=13.8cm, align=left] at (7.0,-2.9)
+    {\texttt{uv add} faz os três de uma vez. \texttt{uv run} sincroniza antes de
+     executar, então o ambiente nunca fica atrás da trava. Em CI,
+     \texttt{uv sync --frozen} falha se o \texttt{uv.lock} não bater com o
+     \texttt{pyproject.toml} --- o erro aparece no \emph{pipeline}, não em
+     produção.};
+\end{tikzpicture}
+```
+Três artefatos, três papéis: o que se pede, o que se decidiu, o que existe.
+:::
+
+### O interpretador também
+
+`uv` gerencia versões de Python, o que dispensa `pyenv`:
+
+```bash
+uv python install 3.12
+```
+
+```text
+Downloading cpython-3.12.13-linux-x86_64-gnu (download) (32.6MiB)
+Installed Python 3.12.13 in 2.41s
+ + cpython-3.12.13-linux-x86_64-gnu (python3.12)
+  tempo: 2.486 s
+```
+
+Dois segundos e meio para ter outro Python, sem compilar nada e sem tocar no do sistema. A partir daí:
+
+```bash
+uv venv --python 3.12 .venv-312
+uv run --python 3.12 python -V
+```
+
+```text
+Python 3.12.13
+```
+
+É a resposta prática para testar a biblioteca em três versões antes de publicar — e, no @sec-cap032, para conferir se aquele `requires-python = ">=3.11"` que você declarou é verdade.
+
+### Scripts com dependência (PEP 723)
+
+Um caso que era desagradável: o script de arquivo único que precisa de uma biblioteca. A PEP 723 (2024) permite declarar isso num comentário no topo do arquivo:
+
+```python
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["rich"]
+# ///
+"""Um script solto que declara as proprias dependencias."""
+
+from rich.console import Console
+
+Console().print("[bold red]onu-00042[/bold red] fora de servico")
+```
+
+```bash
+uv run alarme.py
+```
+
+```text
+Installed 4 packages in 18ms
+onu-00042 fora de servico
+  tempo: 0.348 s
+```
+
+O `uv` leu o cabeçalho, montou um ambiente temporário com `rich`, rodou e seguiu a vida. Um terço de segundo, nenhum venv no diretório, nenhuma instalação global. Para o script de manutenção que vive num repositório de infraestrutura, isso resolve um problema real de distribuição.
+
+(No Kali deste laboratório, `python3 alarme.py` também funciona — mas por acidente: o `rich` existe em `dist-packages` porque o sistema o instalou. Em outra máquina, o mesmo comando daria `ModuleNotFoundError`, e é exatamente essa diferença que o cabeçalho elimina.)
+
+## Poetry: o que você vai encontrar em projeto existente
+
+`Poetry` chegou em 2018, quando `pyproject.toml` mal existia, e popularizou a ideia de gerenciador único com arquivo de trava. Milhares de projetos usam, e vale saber operar.
+
+```bash
+poetry new telemetria3
+cd telemetria3
+poetry config virtualenvs.in-project true --local
+poetry add "rich>=13,<15"
+```
+
+```text
+Updating dependencies
+Resolving dependencies...
+
+Package operations: 4 installs, 0 updates, 0 removals
+
+  - Installing mdurl (0.1.2)
+  - Installing pygments (2.20.0)
+  - Installing markdown-it-py (4.2.0)
+  - Installing rich (14.3.4)
+
+Writing lock file
+  tempo: 2.755 s
+```
+
+O resultado é próximo do `uv`: `pyproject.toml` atualizado, `poetry.lock` gravado, ambiente pronto. O `poetry.lock` tem estrutura parecida, em TOML, com hash por arquivo:
+
+```text
+# This file is automatically @generated by Poetry 2.4.1 and should not be changed by hand.
+
+[[package]]
+name = "markdown-it-py"
+version = "4.2.0"
+description = "Python port of markdown-it. Markdown parsing, done right!"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a"},
+    {file = "markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49"},
+]
+```
+
+Três diferenças práticas em relação ao `uv`:
+
+**A configuração é global por padrão.** Sem `virtualenvs.in-project true`, o Poetry cria o ambiente em `~/.cache/pypoetry/virtualenvs/` com um nome derivado de hash, e não em `.venv` — o que confunde editor, `pytest` e quem chega novo no projeto. Aquele `poetry config ... --local` grava a preferência num `poetry.toml` ao lado do projeto e deve ser a primeira coisa a fazer.
+
+**`poetry add` não instala o próprio projeto.** Diferente do `uv`:
+
+```bash
+poetry run python -c "from telemetria3 import relatorio; relatorio()"
+```
+
+```text
+ModuleNotFoundError: No module named 'telemetria3'
+```
+
+Falta um passo:
+
+```bash
+poetry install
+```
+
+```text
+Installing dependencies from lock file
+
+No dependencies to install or update
+
+Installing the current project: telemetria3 (0.1.0)
+  tempo: 1.699 s
+```
+
+```text
+onu-00042  -21.4 dBm  normal
+```
+
+A última linha do log é a que importa: `poetry install` é quem instala o pacote em modo editável. Esquecer disso é o primeiro tropeço de quase todo mundo.
+
+**Metadados fora do padrão, até pouco tempo.** Projetos Poetry antigos têm `[tool.poetry]` com `name`, `version` e `dependencies` num dialeto próprio, anterior à PEP 621. O Poetry 2.0 (2025) passou a aceitar `[project]` padrão — o `poetry new` deste laboratório já gerou assim, deixando em `[tool.poetry]` apenas o que é específico dele:
+
+```toml
+[project]
+name = "telemetria3"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "rich (>=13,<15)"
+]
+
+[tool.poetry]
+packages = [{include = "telemetria3", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+```
+
+`poetry build` e `poetry publish` cobrem o @sec-cap032 sem `build` nem `twine`; `poetry show --tree` é o equivalente do `uv tree`. É uma ferramenta madura e completa — a razão de este manual não a adotar como padrão é velocidade e o fato de que ela não gerencia interpretador nem ferramenta global.
+
+## Qual usar
+
+- **`pip` + `venv`** continuam sendo o denominador comum: estão em toda máquina, não exigem instalação e são o que a documentação de qualquer projeto assume. Saber operá-los não é opcional — é o conteúdo do @sec-cap031.
+- **`pipx`** para aplicação de linha de comando, sempre. Mesmo que você use `uv` para tudo o mais (`uv tool install` faz o mesmo papel).
+- **`uv`** para projeto novo, para CI e sempre que o tempo de instalação incomodar. É a recomendação padrão deste manual daqui para a frente.
+- **`Poetry`** quando o projeto já é dele. Migrar sem necessidade é gastar um dia para trocar um `lock` por outro.
+
+Sobre o risco de adotar uma ferramenta nova: `uv` é jovem (2024) e de uma empresa (a Astral, dona também do `ruff`), o que é razão legítima de cautela. O mitigante é concreto: tudo o que ele produz é padrão — `pyproject.toml` da PEP 621, ambiente virtual comum, rodas comuns, `requirements.txt` compatível via `uv export`. Sair dele é apagar o `uv.lock`. Isso não vale para ferramenta que inventa formato próprio de metadados, e é o critério que vale a pena aplicar a qualquer novidade do ecossistema.
+
+## 🐍 Jeito Pythônico
+
+**Aplicação com `pipx` (ou `uv tool`), biblioteca com o gerenciador do projeto.** `ruff` e `pytest` não são a mesma categoria de coisa: o primeiro é um programa que você usa, o segundo é uma dependência de desenvolvimento do projeto.
+
+```bash
+# antipadrão
+pip install ruff black httpie   # no venv do projeto, poluindo o lock
+```
+
+```bash
+# pythônico
+pipx install ruff
+uv add --dev pytest
+```
+
+**Trave o que você instala, versione a trava.** `uv.lock` e `poetry.lock` vão para o Git; `.venv/` não. Com `pip` puro, `uv pip compile --generate-hashes` produz a trava que falta.
+
+**`uv run` em vez de ativar.** Um comando que não depende de o shell estar no estado certo é um comando que funciona no `Makefile`, no CI e no `cron`.
+
+**`uv sync --frozen` e `uv lock --check` no CI.** A trava desatualizada tem que falhar no *pipeline*, não em produção.
+
+**Não misture gerenciadores no mesmo projeto.** `poetry add` seguido de `pip install` produz um ambiente que nenhum dos dois descreve, e o próximo `poetry install` desfaz metade.
+
+**Ferramenta nova, formato padrão.** Adote o que produzir `pyproject.toml` da PEP 621 e ambiente virtual comum; desconfie do que exigir um formato só dele.
+
+Sobre versões e datas:
+
+- **`pipx` (2019)** — isolamento de aplicação; hoje é a resposta padrão à PEP 668 para programas.
+- **`Poetry` 1.0 (2019)** — trava e gerenciador único, com dialeto próprio em `[tool.poetry]`.
+- **PEP 621 (2020)** — `[project]` padroniza metadados, e o ecossistema converge.
+- **PEP 723 (2024)** — dependências declaradas dentro de um script de arquivo único; `uv run` e `pipx run` implementam.
+- **PEP 735 (2024)** — `[dependency-groups]` padroniza o que era `requirements-dev.txt`.
+- **`uv` (2024)** — `pip`, `venv`, `pip-tools`, `pyenv` e `pipx` num binário só; `Poetry` 2.0 (2025) adota `[project]`.
+
+## 🧪 Laboratório
+
+Objetivo: instalar as ferramentas com `pipx`, medir a diferença de velocidade, tocar um projeto inteiro com `uv` e reproduzir o mesmo com `Poetry` para saber operar os dois.
+
+**1. Instale as ferramentas.**
+
+```bash
+mkdir -p ~/lab33 && cd ~/lab33
+pipx install uv
+pipx install poetry
+pipx list
+```
+
+```text
+  installed package poetry 2.4.1, installed using Python 3.13.12
+    - poetry
+  installed package uv 0.12.3, installed using Python 3.13.12
+    - uv
+    - uvx
+```
+
+Se `uv` não for encontrado depois disso, `pipx ensurepath` acrescenta `~/.local/bin` ao `PATH` (é preciso reabrir o shell).
+
+**2. Meça.**
+
+```bash
+TIMEFORMAT='  tempo: %3R s'
+time python3 -m venv .venv-pip
+time uv venv .venv-uv
+time .venv-pip/bin/pip install -q rich httpx
+time uv pip install --python .venv-uv/bin/python -q rich httpx
+```
+
+```text
+  tempo: 2.919 s
+Using CPython 3.13.12 interpreter at: /usr/bin/python
+Creating virtual environment at: .venv-uv
+Activate with: source .venv-uv/bin/activate
+  tempo: 0.109 s
+  tempo: 2.121 s
+  tempo: 0.156 s
+```
+
+Os números variam com a máquina e com o cache; a ordem de grandeza, não.
+
+**3. O mesmo resultado, um terço do disco.**
+
+```bash
+du -sh .venv-pip .venv-uv
+stat -c "%h %n" .venv-uv/lib/python3.13/site-packages/rich/__init__.py
+stat -c "%h %n" .venv-pip/lib/python3.13/site-packages/rich/__init__.py
+```
+
+```text
+30M	.venv-pip
+9.3M	.venv-uv
+2 .venv-uv/lib/python3.13/site-packages/rich/__init__.py
+1 .venv-pip/lib/python3.13/site-packages/rich/__init__.py
+```
+
+**4. A trava que faltava.**
+
+```bash
+mkdir -p compilar && cd compilar
+printf 'rich>=13,<15\nhttpx\n' > requirements.in
+uv pip compile requirements.in -o requirements.txt --generate-hashes
+head -6 requirements.txt
+wc -l requirements.txt
+cd ..
+```
+
+```text
+# This file was autogenerated by uv via the following command:
+#    uv pip compile requirements.in -o requirements.txt --generate-hashes
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494 \
+    --hash=sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f
+    # via httpx
+46 requirements.txt
+```
+
+Esse arquivo é instalável com `pip install -r requirements.txt` em qualquer máquina, sem `uv`.
+
+**5. Projeto novo com `uv`.**
+
+```bash
+uv init --lib telemetria2 && cd telemetria2
+uv add "rich>=13,<15"
+uv add --dev pytest
+ls -a
+```
+
+```text
+.
+..
+.git
+.gitignore
+pyproject.toml
+.python-version
+README.md
+src
+uv.lock
+.venv
+```
+
+O `.venv` apareceu sem ninguém pedir, o `uv.lock` também, e há até um repositório Git iniciado.
+
+**6. Rode sem ativar nada.** Reescreva `src/telemetria2/__init__.py`:
+
+```python
+"""Telemetria de rede optica."""
+
+from rich.console import Console
+
+__version__ = "0.1.0"
+
+
+def relatorio():
+    Console().print("[bold]onu-00042[/bold]  -21.4 dBm  normal")
+```
+
+```bash
+uv run python -c "from telemetria2 import relatorio; relatorio()"
+uv run pytest --version
+```
+
+```text
+onu-00042  -21.4 dBm  normal
+pytest 9.1.1
+```
+
+**7. Jogue o ambiente fora.**
+
+```bash
+rm -rf .venv
+time uv sync
+uv tree
+```
+
+```text
+Resolved 10 packages in 1ms
+Installed 9 packages in 23ms
+  tempo: 0.061 s
+telemetria2 v0.1.0
+    rich v14.3.4
+        markdown-it-py v4.2.0
+            mdurl v0.1.2
+        pygments v2.20.0
+    pytest v9.1.1 (group: dev)
+        iniconfig v2.3.0
+        packaging v26.3
+        pluggy v1.6.0
+        pygments v2.20.0
+```
+
+**8. A trava confere com o `pyproject`?**
+
+```bash
+uv lock --check
+echo "codigo de saida: $?"
+```
+
+```text
+Resolved 10 packages in 1ms
+codigo de saida: 0
+```
+
+É essa a verificação que vai para o CI.
+
+**9. Outro interpretador.**
+
+```bash
+cd ~/lab33
+uv python install 3.12
+uv run --python 3.12 python -V
+```
+
+```text
+Installed Python 3.12.13 in 2.41s
+Python 3.12.13
+```
+
+**10. Script com dependência declarada.** Crie `alarme.py`:
+
+```python
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["rich"]
+# ///
+"""Um script solto que declara as proprias dependencias."""
+
+from rich.console import Console
+
+Console().print("[bold red]onu-00042[/bold red] fora de servico")
+```
+
+```bash
+uv run alarme.py
+```
+
+```text
+Installed 4 packages in 18ms
+onu-00042 fora de servico
+```
+
+**11. Sem instalar nada.**
+
+```bash
+uvx cowsay -t "sem instalar nada"
+```
+
+```text
+  _________________
+| sem instalar nada |
+  =================
+                 \
+                  \
+                    ^__^
+                    (oo)\_______
+                    (__)\       )\/\
+                        ||----w |
+                        ||     ||
+```
+
+**12. O mesmo projeto, com Poetry.**
+
+```bash
+cd ~/lab33
+poetry new telemetria3 && cd telemetria3
+poetry config virtualenvs.in-project true --local
+poetry add "rich>=13,<15"
+```
+
+```text
+Package operations: 4 installs, 0 updates, 0 removals
+
+  - Installing mdurl (0.1.2)
+  - Installing pygments (2.20.0)
+  - Installing markdown-it-py (4.2.0)
+  - Installing rich (14.3.4)
+
+Writing lock file
+  tempo: 2.755 s
+```
+
+**13. O tropeço clássico.** Escreva o mesmo `relatorio()` em `src/telemetria3/__init__.py` e tente:
+
+```bash
+poetry run python -c "from telemetria3 import relatorio; relatorio()"
+```
+
+```text
+ModuleNotFoundError: No module named 'telemetria3'
+```
+
+```bash
+poetry install
+poetry run python -c "from telemetria3 import relatorio; relatorio()"
+```
+
+```text
+Installing the current project: telemetria3 (0.1.0)
+onu-00042  -21.4 dBm  normal
+```
+
+`poetry add` instala as dependências; `poetry install` instala **o projeto**.
+
+**14. Construa com Poetry.**
+
+```bash
+poetry build && ls dist
+```
+
+```text
+  - Built telemetria3-0.1.0.tar.gz
+  - Built telemetria3-0.1.0-py3-none-any.whl
+telemetria3-0.1.0-py3-none-any.whl
+telemetria3-0.1.0.tar.gz
+```
+
+Os mesmos dois artefatos do @sec-cap032, por outro caminho.
+
+**15. Limpe.** `rm -rf ~/lab33` — e note que só os `pyproject.toml`, os `.lock` e o código precisariam ter ido para o Git.
+
+## Resumo
+
+- `pipx` instala **aplicação** Python em ambiente próprio e expõe só o comando; é a resposta certa à PEP 668 para `ruff`, `httpie` e afins — inclusive para instalar o `uv` e o `Poetry`.
+- `uv` é `pip` + `venv` + `pip-tools` + `pyenv` + `pipx` + `build` num binário em Rust: 0,1 s para criar ambiente contra 2,9 s, 0,16 s para instalar contra 2,1 s, e um terço do disco por usar link físico a partir de um cache global.
+- No modo compatível (`uv venv`, `uv pip install`), ele entra em projeto existente sem mudar nada. `uv pip compile --generate-hashes` gera a trava com hash e com o `# via` de quem pediu cada pacote — instalável por `pip` comum.
+- No modo projeto, `uv add` escreve no `pyproject.toml`, resolve, grava `uv.lock` e instala o próprio projeto em modo editável. `uv sync` reconstrói o ambiente em milissegundos; `uv run` executa sem ativar nada.
+- `uv.lock` e `poetry.lock` são travas de verdade: versão exata, hash, origem e várias plataformas num arquivo só. Vão para o Git; o `.venv` não.
+- `uv python install` resolve versão de interpretador sem `pyenv`; PEP 723 mais `uv run script.py` resolve o script solto que precisa de biblioteca.
+- `Poetry` faz quase tudo isso e está em milhares de projetos. Dois detalhes: configure `virtualenvs.in-project` e lembre que `poetry install` — não `poetry add` — é quem instala o seu pacote.
+- Critério para adotar ferramenta nova: se o que ela produz é padrão (PEP 621, venv, roda), sair dela é barato.
