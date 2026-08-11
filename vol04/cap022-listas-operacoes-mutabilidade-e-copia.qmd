@@ -1,3 +1,853 @@
 # Listas: operações, mutabilidade e cópia {#sec-cap022}
 
-*(em elaboracao)*
+A OLT tem três placas de três portas cada, e o inventário começa zerado. A linha que cria a matriz é curta e parece esperta:
+
+```python
+matriz = [[0] * 3] * 3
+print(matriz)
+matriz[0][0] = 9
+print(matriz)
+print([id(linha) for linha in matriz])
+```
+
+```text
+[[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+[[9, 0, 0], [9, 0, 0], [9, 0, 0]]
+[132627886935424, 132627886935424, 132627886935424]
+```
+
+Uma atribuição, três alterações. A terceira linha explica: os três identificadores são **iguais** — não existem três listas internas, existe **uma**, referenciada três vezes.
+
+O `*` de repetição copia **referências**, não objetos. `[x] * 3` produz uma lista com três apontadores para o mesmo `x`, e isso é invisível enquanto `x` for imutável (`[0] * 3` funciona porque ninguém consegue modificar o inteiro `0`). No instante em que o elemento repetido é mutável, a economia vira armadilha.
+
+A forma correta cria uma lista nova por volta:
+
+```python
+matriz = [[0] * 3 for _ in range(3)]
+matriz[0][0] = 9
+print(matriz)
+print(len({id(linha) for linha in matriz}), "linhas distintas")
+```
+
+```text
+[[9, 0, 0], [0, 0, 0], [0, 0, 0]]
+3 linhas distintas
+```
+
+A sintaxe `[... for _ in range(3)]` é uma compreensão de lista, tema do capítulo 26; aqui basta lê-la como "execute `[0] * 3` três vezes", e é justamente essa reexecução que produz três objetos distintos.
+
+Este capítulo abre o Volume 4 pela estrutura mais usada do Python: o que uma lista é por dentro, o que cada operação custa e por que copiar é uma decisão que precisa ser tomada, nunca presumida.
+
+## Uma lista é um vetor de referências
+
+```python
+import sys
+
+lista = [10, "texto", 3.5, None, [1, 2]]
+print(lista, len(lista))
+print(lista[0], lista[-1], lista[1:3])
+print(type(lista[4]))
+print("tamanho do objeto lista:", sys.getsizeof(lista), "bytes")
+print("tamanho de um int:      ", sys.getsizeof(10), "bytes")
+```
+
+```text
+[10, 'texto', 3.5, None, [1, 2]] 5
+10 [1, 2] ['texto', 3.5]
+<class 'list'>
+tamanho do objeto lista: 96 bytes
+tamanho de um int:       28 bytes
+```
+
+Cinco elementos de tipos diferentes, e o objeto lista inteiro ocupa 96 bytes — menos do que quatro inteiros. Ela não guarda os valores: guarda **ponteiros** para os objetos, que vivem em outro lugar da memória. É o modelo de referências do @sec-cap008 aplicado a um contêiner.
+
+Daí saem quase todas as propriedades da lista: ela é **heterogênea** (o ponteiro não se importa com o tipo), **ordenada** (a posição no vetor é a ordem), **indexável em tempo constante** (é aritmética de endereço) e **mutável** (trocar um ponteiro não mexe no objeto apontado).
+
+::: {#fig-lista-multiplicada}
+```{.tikz}
+%%| filename: lista-multiplicada
+%%| alt: Comparacao entre a lista multiplicada, cujos tres ponteiros apontam para a mesma lista interna, e a compreensao, que cria tres listas internas distintas
+\begin{tikzpicture}[
+  slot/.style={draw=manualgray, thick, fill=white, minimum width=1.1cm,
+               minimum height=0.62cm, font=\ttfamily\scriptsize},
+  intl/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!11,
+               minimum width=2.5cm, minimum height=0.62cm,
+               font=\ttfamily\scriptsize},
+  intg/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!12,
+               minimum width=2.5cm, minimum height=0.62cm,
+               font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  hd/.style={font=\small\bfseries, align=center},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.2, 2.9) rectangle (14.6,-4.9);
+
+  \node[hd, text=manualred]   at (2.6, 2.4) {\texttt{[[0]*3] * 3}};
+  \node[hd, text=manualgreen] at (10.4, 2.4) {\texttt{[[0]*3 for \_ in range(3)]}};
+
+  % esquerda
+  \node[slot] (a0) at (0.6, 1.4) {[0]};
+  \node[slot] (a1) at (1.7, 1.4) {[1]};
+  \node[slot] (a2) at (2.8, 1.4) {[2]};
+  \node[lb, anchor=east] at (0.0, 1.4) {matriz};
+  \node[intl] (ai) at (2.6,-0.6) {[0, 0, 0]};
+  \draw[fl, manualred] (a0) -- (ai.north west);
+  \draw[fl, manualred] (a1) -- (ai.north);
+  \draw[fl, manualred] (a2) -- (ai.north east);
+  \node[lb, text width=5.0cm, text=manualred] at (2.6,-1.9)
+    {\textbf{uma} lista interna, três nomes para ela --- mudar por um índice
+     muda ``os três''};
+
+  % direita
+  \node[slot] (b0) at (8.2, 1.4) {[0]};
+  \node[slot] (b1) at (10.2, 1.4) {[1]};
+  \node[slot] (b2) at (12.2, 1.4) {[2]};
+  \node[lb, anchor=east] at (7.5, 1.4) {matriz};
+  \node[intg, minimum width=1.85cm] (bi0) at (8.2,-0.4) {[0, 0, 0]};
+  \node[intg, minimum width=1.85cm] (bi1) at (10.2,-0.4) {[0, 0, 0]};
+  \node[intg, minimum width=1.85cm] (bi2) at (12.2,-0.4) {[0, 0, 0]};
+  \draw[fl, manualgreen] (b0) -- (bi0);
+  \draw[fl, manualgreen] (b1) -- (bi1);
+  \draw[fl, manualgreen] (b2) -- (bi2);
+  \node[lb, text width=5.4cm, text=manualgreen] at (10.2,-1.8)
+    {a expressão roda \textbf{três vezes} e produz três objetos independentes};
+
+  \node[lb, text width=13.8cm] at (6.4,-4.1)
+    {O \texttt{*} de repetição copia \textbf{referências}, nunca objetos. Com
+     elemento imutável (\texttt{[0] * 3}) isso é invisível e barato; com
+     elemento mutável, é o bug de abertura deste capítulo. Diagnóstico em uma
+     linha: \texttt{len(\{id(x) for x in lista\})}.};
+\end{tikzpicture}
+```
+`*` repete referências; a compreensão reexecuta a expressão e cria objetos novos.
+:::
+
+## Criar
+
+```python
+print(list("abc"))
+print(list(range(3)))
+print(list())
+print([0] * 4)
+print(list({"a": 1, "b": 2}))
+print(sorted([3, 1, 2]))
+```
+
+```text
+['a', 'b', 'c']
+[0, 1, 2]
+[]
+[0, 0, 0, 0]
+['a', 'b']
+[1, 2, 3]
+```
+
+`list(iteravel)` consome qualquer iterável do @sec-cap016 — inclusive um dicionário, de onde saem as chaves. `sorted` também devolve lista, sempre, mesmo recebendo tupla ou conjunto.
+
+## Operar
+
+```python
+fila = ["onu-01"]
+fila.append("onu-02")
+print("append   ", fila)
+fila.extend(["onu-03", "onu-04"])
+print("extend   ", fila)
+fila.insert(0, "onu-00")
+print("insert   ", fila)
+print("pop()    ", fila.pop(), fila)
+print("pop(0)   ", fila.pop(0), fila)
+fila.remove("onu-02")
+print("remove   ", fila)
+print("index    ", fila.index("onu-03"))
+print("count    ", fila.count("onu-03"))
+fila.reverse()
+print("reverse  ", fila)
+fila.clear()
+print("clear    ", fila)
+```
+
+```text
+append    ['onu-01', 'onu-02']
+extend    ['onu-01', 'onu-02', 'onu-03', 'onu-04']
+insert    ['onu-00', 'onu-01', 'onu-02', 'onu-03', 'onu-04']
+pop()     onu-04 ['onu-00', 'onu-01', 'onu-02', 'onu-03']
+pop(0)    onu-00 ['onu-01', 'onu-02', 'onu-03']
+remove    ['onu-01', 'onu-03']
+index     1
+count     1
+reverse   ['onu-03', 'onu-01']
+clear     []
+```
+
+Todos esses métodos **modificam no lugar** e devolvem `None` — menos `pop`, que devolve o item removido, e `index`/`count`, que só consultam. É a convenção do @sec-cap018: quem muda não devolve.
+
+`remove` apaga a **primeira** ocorrência e levanta `ValueError` se não achar; `index` também levanta `ValueError`. Quando a ausência é normal, teste com `in` antes.
+
+A confusão mais comum é entre `append` e `extend`:
+
+```python
+a = ["x"]
+a.append(["y", "z"])
+print("append de lista:", a, len(a))
+b = ["x"]
+b.extend(["y", "z"])
+print("extend de lista:", b, len(b))
+c = ["x"]
+c.extend("yz")
+print("extend de str:  ", c)
+```
+
+```text
+append de lista: ['x', ['y', 'z']] 2
+extend de lista: ['x', 'y', 'z'] 3
+extend de str:   ['x', 'y', 'z']
+```
+
+`append` acrescenta **um** elemento, seja ele o que for; `extend` percorre o iterável e acrescenta cada item. A terceira linha é a pegadinha: string é iterável, então `extend("yz")` acrescenta dois caracteres, não uma palavra.
+
+## `+` e `+=` não são a mesma coisa
+
+```python
+a = [1, 2]
+antes = id(a)
+a = a + [3]
+print("com +  mesmo objeto?", id(a) == antes, a)
+
+b = [1, 2]
+antes = id(b)
+b += [3]
+print("com += mesmo objeto?", id(b) == antes, b)
+```
+
+```text
+com +  mesmo objeto? False [1, 2, 3]
+com += mesmo objeto? True [1, 2, 3]
+```
+
+`+` **cria uma lista nova**; `+=` é `extend` disfarçado e **modifica no lugar**. Com um nome só, dá na mesma; com dois, não:
+
+```python
+compartilhada = [1, 2]
+outro_nome = compartilhada
+compartilhada += [3]
+print("quem tinha o outro nome viu?", outro_nome)
+compartilhada = compartilhada + [4]
+print("e depois do + ?             ", outro_nome)
+```
+
+```text
+quem tinha o outro nome viu? [1, 2, 3]
+e depois do + ?              [1, 2, 3]
+```
+
+O `+=` alcançou `outro_nome`; o `+` não, porque a partir dele `compartilhada` passou a apontar para outro objeto e `outro_nome` ficou com o antigo.
+
+Há um caso famoso que junta as duas metades do capítulo:
+
+```python
+t = ([1, 2], "fixo")
+t[0] += [3]
+```
+
+```text
+TypeError: 'tuple' object does not support item assignment
+```
+
+```python
+print("mas a lista mudou:", t)
+```
+
+```text
+mas a lista mudou: ([1, 2, 3], 'fixo')
+```
+
+Deu erro **e** funcionou. O `+=` executou o `extend` na lista (que é mutável) e depois tentou reatribuir `t[0]` na tupla (que não é), falhando na segunda metade. Não é bug: é `a[i] += x` sendo, por definição, `a[i] = a[i].__iadd__(x)`.
+
+## Fatiar, atribuir a fatia, apagar
+
+O fatiamento do @sec-cap012 vale igual, com um poder a mais: em lista, a fatia é também um **alvo de atribuição**.
+
+```python
+lista = list("abcdefg")
+print(lista[2:5], lista[:3], lista[-2:], lista[::2], lista[::-1])
+lista[1:3] = ["X", "Y", "Z"]
+print("atribuicao a fatia:", lista)
+lista[::2] = ["0"] * 4
+print("fatia com passo:   ", lista)
+del lista[:2]
+print("del de fatia:      ", lista)
+```
+
+```text
+['c', 'd', 'e'] ['a', 'b', 'c'] ['f', 'g'] ['a', 'c', 'e', 'g'] ['g', 'f', 'e', 'd', 'c', 'b', 'a']
+atribuicao a fatia: ['a', 'X', 'Y', 'Z', 'd', 'e', 'f', 'g']
+fatia com passo:    ['0', 'X', '0', 'Z', '0', 'e', '0', 'g']
+del de fatia:       ['0', 'Z', '0', 'e', '0', 'g']
+```
+
+Duas posições viraram três: a fatia comum aceita substituição de tamanho diferente. Já a fatia **com passo** exige quantidade exata — `lista[::2] = ["0"] * 4` só funcionou porque havia exatamente quatro posições pares.
+
+E `lista[:] = outra` é o idioma para trocar o conteúdo mantendo o objeto, que o @sec-cap016 usou para filtrar sem quebrar referências alheias.
+
+## Copiar: rasa e profunda
+
+```python
+import copy
+
+original = [1, [2, 3], 4]
+alias = original
+rasa = original[:]
+profunda = copy.deepcopy(original)
+
+original[0] = 99
+original[1][0] = 88
+
+print("original ", original)
+print("alias    ", alias)
+print("rasa     ", rasa)
+print("profunda ", profunda)
+```
+
+```text
+original  [99, [88, 3], 4]
+alias     [99, [88, 3], 4]
+rasa      [1, [88, 3], 4]
+profunda  [1, [2, 3], 4]
+```
+
+Três comportamentos diferentes para o que parece "a mesma lista":
+
+```python
+print("alias is original:", alias is original, "| rasa is original:", rasa is original)
+print("rasa[1] is original[1]:", rasa[1] is original[1])
+print("profunda[1] is original[1]:", profunda[1] is original[1])
+```
+
+```text
+alias is original: True | rasa is original: False
+rasa[1] is original[1]: True
+profunda[1] is original[1]: False
+```
+
+::: {#fig-copia-rasa-profunda}
+```{.tikz}
+%%| filename: copia-rasa-profunda
+%%| alt: Tres formas de copiar uma lista aninhada: alias aponta para o mesmo objeto, copia rasa duplica so o vetor externo e compartilha os internos, copia profunda duplica tudo
+\begin{tikzpicture}[
+  vec/.style={draw=manualgray, very thick, rounded corners=1pt, fill=white,
+              minimum width=3.0cm, minimum height=0.6cm,
+              font=\ttfamily\scriptsize},
+  ali/.style={draw=manualred, very thick, rounded corners=1pt, fill=manualred!11,
+              minimum width=3.0cm, minimum height=0.6cm,
+              font=\ttfamily\scriptsize},
+  novo/.style={draw=manualgreen, very thick, rounded corners=1pt, fill=manualgreen!12,
+               minimum width=3.0cm, minimum height=0.6cm,
+               font=\ttfamily\scriptsize},
+  ninho/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!13,
+                minimum width=1.7cm, minimum height=0.55cm,
+                font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  hd/.style={font=\scriptsize\bfseries, align=left, anchor=west},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-2.6, 2.2) rectangle (14.6,-5.6);
+
+  \node[hd, anchor=east] at (-0.2, 1.4) {original};
+  \node[vec] (o) at (1.5, 1.4) {[1, *, 4]};
+  \node[ninho] (n) at (6.6, 1.4) {[2, 3]};
+  \draw[fl] (o) -- (n);
+
+  \node[hd, anchor=east, text=manualred] at (-0.2, 0.2) {alias};
+  \node[ali] (a) at (1.5, 0.2) {(mesmo objeto)};
+  \draw[fl, manualred] (a.north) -- (o.south);
+  \node[lb, anchor=west, text width=5.6cm, text=manualred] at (8.4, 0.2)
+    {\texttt{alias = original} --- não copiou nada, só criou outro nome};
+
+  \node[hd, anchor=east] at (-0.2,-1.4) {rasa};
+  \node[novo] (r) at (1.5,-1.4) {[1, *, 4]};
+  \draw[fl, manualblue, very thick] (r) -- (n.south west);
+  \node[lb, anchor=west, text width=5.6cm] at (8.4,-1.4)
+    {\texttt{original[:]}, \texttt{list(o)}, \texttt{o.copy()} --- vetor externo
+     novo, \textbf{mesmos} objetos internos};
+
+  \node[hd, anchor=east] at (-0.2,-3.0) {profunda};
+  \node[novo] (p) at (1.5,-3.0) {[1, *, 4]};
+  \node[ninho, draw=manualgreen, fill=manualgreen!12] (n2) at (6.6,-3.0) {[2, 3]};
+  \draw[fl, manualgreen, very thick] (p) -- (n2);
+  \node[lb, anchor=west, text width=5.6cm, text=manualgreen] at (8.4,-3.0)
+    {\texttt{copy.deepcopy(o)} --- desce a árvore inteira e duplica tudo};
+
+  \node[lb, text width=13.8cm] at (-2.4,-4.7)
+    {A cópia rasa basta quando os elementos são imutáveis --- e é o caso da
+     maioria das listas. Quando há dicionário, lista ou objeto seu lá dentro,
+     ou você faz cópia profunda, ou reconstrói os elementos um a um. Teste
+     definitivo: \texttt{copia[i] is original[i]}.};
+\end{tikzpicture}
+```
+Alias não copia; rasa copia o vetor; profunda copia a árvore inteira.
+:::
+
+As três formas de cópia rasa — `original[:]`, `list(original)` e `original.copy()` — são equivalentes; a última é a mais explícita e a preferida desde o **Python 3.3**.
+
+Uma armadilha de teste: `==` compara **conteúdo**, então uma cópia rasa que compartilha o interior continua "igual" ao original mesmo depois de ele mudar por dentro.
+
+```python
+print("rasa == [1, [88, 3], 4]:", rasa == [1, [88, 3], 4])
+```
+
+```text
+rasa == [1, [88, 3], 4]: True
+```
+
+Se o seu teste só usa `==`, ele não vê o compartilhamento. O `is` do @sec-cap008 é o que vê.
+
+## Como a lista cresce
+
+`append` é barato porque a lista reserva espaço a mais:
+
+```python
+import sys
+
+anterior = 0
+lista = []
+for i in range(18):
+    lista.append(i)
+    atual = sys.getsizeof(lista)
+    if atual != anterior:
+        print(f"  len={len(lista):>3}  {atual} bytes  <- realocou")
+        anterior = atual
+```
+
+```text
+  len=  1  88 bytes  <- realocou
+  len=  5  120 bytes  <- realocou
+  len=  9  184 bytes  <- realocou
+  len= 17  248 bytes  <- realocou
+```
+
+Dezoito `append` e apenas quatro realocações. O CPython amplia a capacidade em saltos proporcionais ao tamanho, o que dá ao `append` custo **constante amortizado**: alguns poucos `append` pagam a cópia do vetor, e todos os outros são instantâneos.
+
+Inserir no **começo** é outra história, porque obriga a deslocar tudo:
+
+```python
+import timeit
+
+n = 20000
+fim = timeit.timeit("l.append(1)", setup="l=[]", number=n)
+inicio = timeit.timeit("l.insert(0, 1)", setup="l=[]", number=n)
+print(f"append   {fim * 1000:8.1f} ms")
+print(f"insert(0){inicio * 1000:8.1f} ms")
+print(f"razao    {inicio / fim:8.1f}x")
+```
+
+```text
+append        0.6 ms
+insert(0)    59.8 ms
+razao       104.8x
+```
+
+Cem vezes mais lento, e a diferença cresce com o tamanho. Quando o programa precisa inserir e remover nas duas pontas, a estrutura certa é `collections.deque` — e a comparação completa de custos é o capítulo 28.
+
+## 🐍 Jeito Pythônico
+
+**Nunca `[[...]] * n` com elemento mutável.** Use compreensão. O diagnóstico rápido é `len({id(x) for x in lista})`.
+
+**`copy()` para dizer que é cópia.** `lista[:]` funciona e é mais críptico; `lista.copy()` diz a intenção.
+
+**Cópia profunda só quando precisa.** `deepcopy` é lento e percorre grafos inteiros; na maioria dos casos, reconstruir com uma compreensão é mais rápido e mais claro.
+
+**Não modifique a lista enquanto a percorre** — a regra do @sec-cap016, que aqui aparece de novo porque é em lista que ela falha em silêncio.
+
+**Prefira construir a mutar.** Uma compreensão que produz a lista final é mais fácil de ler e de testar do que um `append` dentro de dois `if`.
+
+```python
+# antipadrão
+resultado = []
+for r in registros:
+    if r["nivel"] is not None:
+        resultado.append(r["onu"])
+```
+
+```python
+# pythônico
+resultado = [r["onu"] for r in registros if r["nivel"] is not None]
+```
+
+**`in` numa lista é varredura linear.** Para pertencimento repetido, o que você quer é um `set` — capítulo 25.
+
+**Não use lista como fila.** `pop(0)` e `insert(0, x)` são lineares; `collections.deque` faz os dois em tempo constante.
+
+**Cuidado com lista como valor padrão de parâmetro** — é o @sec-cap019, e é a mesma raiz: o objeto é criado uma vez só.
+
+Sobre versões:
+
+- **Python 3.3** — `list.copy()` e `list.clear()`, que antes só existiam em `dict`.
+- **Python 3.5** — desempacotamento em literais: `[*a, *b]` (PEP 448).
+- **Python 3.9** — `list[int]` direto na anotação, sem `typing.List` (PEP 585).
+- **Python 3.12** — a *comprehension inlining* (PEP 709) tornou compreensões de lista até duas vezes mais rápidas, por eliminarem o quadro de função que existia antes.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir a matriz multiplicada, medir a diferença entre `+` e `+=`, ver a lista realocar, cronometrar `insert(0)` e terminar com um inventário de portas em que as três formas de cópia aparecem separadas.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab22 && cd ~/lab22
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. A matriz que muda sozinha.**
+
+```bash
+python -c "
+matriz = [[0] * 3] * 3
+print(matriz)
+matriz[0][0] = 9
+print(matriz)
+print([id(linha) for linha in matriz])
+"
+```
+
+```text
+[[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+[[9, 0, 0], [9, 0, 0], [9, 0, 0]]
+[132627886935424, 132627886935424, 132627886935424]
+```
+
+Os identificadores mudam a cada execução; o que importa é os três serem **iguais entre si**.
+
+**3. A correção.**
+
+```bash
+python -c "
+matriz = [[0] * 3 for _ in range(3)]
+matriz[0][0] = 9
+print(matriz)
+print(len({id(linha) for linha in matriz}), 'linhas distintas')
+"
+```
+
+```text
+[[9, 0, 0], [0, 0, 0], [0, 0, 0]]
+3 linhas distintas
+```
+
+**4. A lista guarda ponteiros.**
+
+```bash
+python -c "
+import sys
+lista = [10, 'texto', 3.5, None, [1, 2]]
+print(lista, len(lista))
+print(lista[0], lista[-1], lista[1:3])
+print(type(lista[4]))
+print('tamanho do objeto lista:', sys.getsizeof(lista), 'bytes')
+print('tamanho de um int:      ', sys.getsizeof(10), 'bytes')
+"
+```
+
+```text
+[10, 'texto', 3.5, None, [1, 2]] 5
+10 [1, 2] ['texto', 3.5]
+<class 'list'>
+tamanho do objeto lista: 96 bytes
+tamanho de um int:       28 bytes
+```
+
+**5. Os métodos que mudam no lugar.**
+
+```bash
+python -c "
+fila = ['onu-01']
+fila.append('onu-02')
+print('append   ', fila)
+fila.extend(['onu-03', 'onu-04'])
+print('extend   ', fila)
+fila.insert(0, 'onu-00')
+print('insert   ', fila)
+print('pop()    ', fila.pop(), fila)
+print('pop(0)   ', fila.pop(0), fila)
+fila.remove('onu-02')
+print('remove   ', fila)
+print('index    ', fila.index('onu-03'))
+print('count    ', fila.count('onu-03'))
+fila.reverse()
+print('reverse  ', fila)
+fila.clear()
+print('clear    ', fila)
+"
+```
+
+```text
+append    ['onu-01', 'onu-02']
+extend    ['onu-01', 'onu-02', 'onu-03', 'onu-04']
+insert    ['onu-00', 'onu-01', 'onu-02', 'onu-03', 'onu-04']
+pop()     onu-04 ['onu-00', 'onu-01', 'onu-02', 'onu-03']
+pop(0)    onu-00 ['onu-01', 'onu-02', 'onu-03']
+remove    ['onu-01', 'onu-03']
+index     1
+count     1
+reverse   ['onu-03', 'onu-01']
+clear     []
+```
+
+**6. `append` contra `extend`.**
+
+```bash
+python -c "
+a = ['x']
+a.append(['y', 'z'])
+print('append de lista:', a, len(a))
+b = ['x']
+b.extend(['y', 'z'])
+print('extend de lista:', b, len(b))
+c = ['x']
+c.extend('yz')
+print('extend de str:  ', c)
+"
+```
+
+```text
+append de lista: ['x', ['y', 'z']] 2
+extend de lista: ['x', 'y', 'z'] 3
+extend de str:   ['x', 'y', 'z']
+```
+
+**7. `+` contra `+=`.**
+
+```bash
+python -c "
+a = [1, 2]
+antes = id(a)
+a = a + [3]
+print('com +  mesmo objeto?', id(a) == antes, a)
+b = [1, 2]
+antes = id(b)
+b += [3]
+print('com += mesmo objeto?', id(b) == antes, b)
+compartilhada = [1, 2]
+outro_nome = compartilhada
+compartilhada += [3]
+print('quem tinha o outro nome viu?', outro_nome)
+compartilhada = compartilhada + [4]
+print('e depois do + ?             ', outro_nome)
+"
+```
+
+```text
+com +  mesmo objeto? False [1, 2, 3]
+com += mesmo objeto? True [1, 2, 3]
+quem tinha o outro nome viu? [1, 2, 3]
+e depois do + ?              [1, 2, 3]
+```
+
+**8. O erro que também funciona.** Crie `tupla_mais_igual.py`:
+
+```python
+t = ([1, 2], "fixo")
+try:
+    t[0] += [3]
+except TypeError as e:
+    print("TypeError:", e)
+print("mas a lista mudou:", t)
+```
+
+```bash
+python tupla_mais_igual.py
+```
+
+```text
+TypeError: 'tuple' object does not support item assignment
+mas a lista mudou: ([1, 2, 3], 'fixo')
+```
+
+**9. Fatia como alvo.**
+
+```bash
+python -c "
+lista = list('abcdefg')
+print(lista[2:5], lista[:3], lista[-2:], lista[::2], lista[::-1])
+lista[1:3] = ['X', 'Y', 'Z']
+print('atribuicao a fatia:', lista)
+lista[::2] = ['0'] * 4
+print('fatia com passo:   ', lista)
+del lista[:2]
+print('del de fatia:      ', lista)
+"
+```
+
+```text
+['c', 'd', 'e'] ['a', 'b', 'c'] ['f', 'g'] ['a', 'c', 'e', 'g'] ['g', 'f', 'e', 'd', 'c', 'b', 'a']
+atribuicao a fatia: ['a', 'X', 'Y', 'Z', 'd', 'e', 'f', 'g']
+fatia com passo:    ['0', 'X', '0', 'Z', '0', 'e', '0', 'g']
+del de fatia:       ['0', 'Z', '0', 'e', '0', 'g']
+```
+
+**10. As três cópias.**
+
+```bash
+python -c "
+original = [1, [2, 3], 4]
+alias = original
+rasa = original[:]
+import copy
+profunda = copy.deepcopy(original)
+original[0] = 99
+original[1][0] = 88
+print('original ', original)
+print('alias    ', alias)
+print('rasa     ', rasa)
+print('profunda ', profunda)
+print('alias is original:', alias is original, '| rasa is original:', rasa is original)
+print('rasa[1] is original[1]:', rasa[1] is original[1])
+print('profunda[1] is original[1]:', profunda[1] is original[1])
+print('rasa == [1, [88, 3], 4]:', rasa == [1, [88, 3], 4])
+"
+```
+
+```text
+original  [99, [88, 3], 4]
+alias     [99, [88, 3], 4]
+rasa      [1, [88, 3], 4]
+profunda  [1, [2, 3], 4]
+alias is original: True | rasa is original: False
+rasa[1] is original[1]: True
+profunda[1] is original[1]: False
+rasa == [1, [88, 3], 4]: True
+```
+
+A cópia rasa protegeu o primeiro nível (o `99` não chegou nela) e não protegeu o segundo (o `88` chegou). A última linha é o alerta: um teste com `==` não detecta isso.
+
+**11. Veja a realocação.**
+
+```bash
+python -c "
+import sys
+anterior = 0
+lista = []
+for i in range(18):
+    lista.append(i)
+    atual = sys.getsizeof(lista)
+    if atual != anterior:
+        print(f'  len={len(lista):>3}  {atual} bytes  <- realocou')
+        anterior = atual
+"
+```
+
+```text
+  len=  1  88 bytes  <- realocou
+  len=  5  120 bytes  <- realocou
+  len=  9  184 bytes  <- realocou
+  len= 17  248 bytes  <- realocou
+```
+
+**12. Meça `insert(0)`.**
+
+```bash
+python -c "
+import timeit
+n = 20000
+fim = timeit.timeit('l.append(1)', setup='l=[]', number=n)
+inicio = timeit.timeit('l.insert(0, 1)', setup='l=[]', number=n)
+print(f'append   {fim * 1000:8.1f} ms')
+print(f'insert(0){inicio * 1000:8.1f} ms')
+print(f'razao    {inicio / fim:8.1f}x')
+"
+```
+
+```text
+append        0.6 ms
+insert(0)    59.8 ms
+razao       104.8x
+```
+
+Os tempos dependem da máquina; a razão de duas ordens de grandeza, não.
+
+**13. O inventário de portas.** Crie `inventario.py`:
+
+```python
+"""Inventario de ONUs: as operacoes de lista que aparecem em codigo real."""
+
+import copy
+
+MODELO_PORTA = {"onu": None, "nivel": None, "estado": "livre"}
+
+
+def criar_slot(quantidade):
+    """Cria uma lista de portas independentes (nao multiplicada)."""
+    return [copy.deepcopy(MODELO_PORTA) for _ in range(quantidade)]
+
+
+def ocupar(portas, indice, onu, nivel):
+    portas[indice] = {"onu": onu, "nivel": nivel, "estado": "ativa"}
+
+
+def liberar(portas, indice):
+    portas[indice] = copy.deepcopy(MODELO_PORTA)
+
+
+def compactar(portas):
+    """Devolve uma lista nova so com as portas ativas, sem tocar na original."""
+    return [p for p in portas if p["estado"] == "ativa"]
+
+
+if __name__ == "__main__":
+    portas = criar_slot(4)
+    print("portas independentes:", len({id(p) for p in portas}))
+
+    ocupar(portas, 0, "onu-01", -19.5)
+    ocupar(portas, 2, "onu-03", -31.2)
+    for i, p in enumerate(portas):
+        print(f"  porta {i}: {p}")
+
+    ativas = compactar(portas)
+    print("ativas:", len(ativas), "| total ainda:", len(portas))
+
+    liberar(portas, 0)
+    print("depois de liberar a 0:", portas[0])
+    print("a lista compactada nao mudou:", ativas[0]["onu"])
+
+    ativas.sort(key=lambda p: p["nivel"])
+    print("piores primeiro:", [p["onu"] for p in ativas])
+```
+
+```bash
+python inventario.py
+```
+
+```text
+portas independentes: 4
+  porta 0: {'onu': 'onu-01', 'nivel': -19.5, 'estado': 'ativa'}
+  porta 1: {'onu': None, 'nivel': None, 'estado': 'livre'}
+  porta 2: {'onu': 'onu-03', 'nivel': -31.2, 'estado': 'ativa'}
+  porta 3: {'onu': None, 'nivel': None, 'estado': 'livre'}
+ativas: 2 | total ainda: 4
+depois de liberar a 0: {'onu': None, 'nivel': None, 'estado': 'livre'}
+a lista compactada nao mudou: onu-01
+piores primeiro: ['onu-03', 'onu-01']
+```
+
+Duas linhas merecem atenção. A primeira confirma que as quatro portas são objetos distintos — `criar_slot` usou compreensão, não `*`. E a penúltima mostra o outro lado: `compactar` devolveu uma lista **nova**, mas com os **mesmos** dicionários; `liberar` funcionou porque **substituiu** a posição em `portas` em vez de mutar o dicionário. Se `liberar` fizesse `portas[indice]["estado"] = "livre"`, a `ativas` teria visto a mudança, porque é cópia rasa.
+
+**14. Feche com `deactivate`.**
+
+## Resumo
+
+- Lista é um vetor dinâmico de **referências**: heterogênea, ordenada, indexável em tempo constante e mutável. O objeto lista é pequeno; os valores vivem fora.
+- `[x] * n` repete **referências**. Com elemento mutável, produz n nomes para o mesmo objeto — use compreensão para criar objetos independentes.
+- Os métodos que modificam devolvem `None`; `pop` é a exceção que devolve o item.
+- `append` acrescenta um elemento; `extend` percorre o iterável — e string é iterável.
+- `+` cria lista nova; `+=` modifica no lugar e é visível por outros nomes. `t[0] += [x]` numa tupla levanta `TypeError` **e** modifica a lista.
+- Fatia é alvo de atribuição: `lista[1:3] = [...]` pode mudar o tamanho; com passo, a quantidade precisa bater. `lista[:] = ...` troca o conteúdo mantendo o objeto.
+- Alias não copia; `copy()`/`[:]`/`list()` copiam o vetor externo; `copy.deepcopy` copia a árvore. `==` não detecta compartilhamento, `is` detecta.
+- `append` é constante amortizado por causa da realocação em saltos; `insert(0)` e `pop(0)` são lineares — para fila, `collections.deque`.
