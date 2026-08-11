@@ -1,3 +1,948 @@
 # Condicionais: if, elif, else e a expressão condicional {#sec-cap015}
 
-*(em elaboracao)*
+O sistema de monitoramento de uma rede de fibra recebe, a cada cinco minutos, o nível óptico de milhares de ONUs. A faixa saudável vai de −28 dBm a −8 dBm: abaixo disso o sinal está fraco demais para o equipamento entender, acima disso está forte demais e satura o receptor. Alguém escreveu o alerta:
+
+```python
+def alerta(nivel):
+    if nivel < -28 or -8:
+        return "fora de faixa"
+    return "ok"
+```
+
+Lê-se em voz alta como português correto — "se o nível for menor que −28 ou −8" — e o resultado é este:
+
+```python
+for n in (-20.0, -3.0, -30.0):
+    print(n, alerta(n))
+```
+
+```text
+-20.0 fora de faixa
+-3.0 fora de faixa
+-30.0 fora de faixa
+```
+
+Todas as ONUs da rede aparecem fora de faixa. A equipe de campo passou uma semana perseguindo alarme falso antes de alguém rodar isto:
+
+```python
+print(bool(-8))
+print((-20.0 < -28) or -8)
+```
+
+```text
+True
+-8
+```
+
+O `or` não distribui a comparação. O Python avalia `nivel < -28` (falso), passa para o segundo operando, encontra `-8`, e `-8` é um objeto verdadeiro — como qualquer número diferente de zero, pela regra do @sec-cap011. A condição inteira é sempre verdadeira, e o `if` sempre entra. Não houve erro de sintaxe, não houve traceback, não houve aviso: o código está perfeitamente correto para o Python e perfeitamente errado para a rede.
+
+A forma certa é uma cadeia de comparação, e ela também é mais curta:
+
+```python
+def alerta(nivel):
+    if not -28 <= nivel <= -8:
+        return "fora de faixa"
+    return "ok"
+
+
+for n in (-20.0, -3.0, -30.0, -8.0):
+    print(n, alerta(n))
+```
+
+```text
+-20.0 ok
+-3.0 fora de faixa
+-30.0 fora de faixa
+-8.0 ok
+```
+
+Este capítulo é sobre decidir: a sintaxe do `if`, o que exatamente o Python considera verdadeiro na hora de decidir, e as três ou quatro construções que substituem escadas de condicionais por código que se lê de uma vez.
+
+## `if`, `elif`, `else`
+
+A estrutura é a que se espera, com a indentação do @sec-cap006 delimitando os blocos e os dois-pontos fechando cada cabeçalho:
+
+```python
+nivel = -19.5
+
+if nivel < -28:
+    estado = "critico"
+elif nivel < -25:
+    estado = "atencao"
+elif nivel <= -8:
+    estado = "normal"
+else:
+    estado = "alto demais"
+
+print(estado)
+```
+
+```text
+normal
+```
+
+Três detalhes que importam mais do que parecem:
+
+- `elif` é uma palavra só. Não existe `else if` em Python, e escrever `else:` seguido de um `if` indentado funciona, mas empurra tudo um nível para a direita.
+- `elif` e `else` são **opcionais**, e pode haver quantos `elif` você quiser. Um `if` sozinho é uma condicional completa.
+- **A primeira condição verdadeira vence.** As de baixo nem chegam a ser avaliadas — e isso não é detalhe de desempenho, é semântica.
+
+::: {#fig-cadeia-elif}
+```{.tikz}
+%%| filename: cadeia-elif
+%%| alt: A cadeia de if e elif avaliada de cima para baixo: cada teste desvia para o bloco correspondente quando verdadeiro, e os testes abaixo do que venceu nunca sao avaliados
+\begin{tikzpicture}[
+  teste/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+                text width=4.3cm, align=center, minimum height=0.85cm,
+                font=\ttfamily\small},
+  bx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+             text width=3.9cm, align=center, minimum height=0.78cm,
+             font=\ttfamily\small},
+  morto/.style={draw=manualgray, thick, dashed, rounded corners, fill=manualgray!6,
+                text width=4.3cm, align=center, minimum height=0.85cm,
+                font=\ttfamily\small, text=manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  fv/.style={->,>=stealth, very thick, manualgreen}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-4.6, 2.6) rectangle (13.2,-4.9);
+
+  \node[teste] (t1) at (0, 1.9) {if nivel < -28};
+  \node[teste] (t2) at (0, 0.5) {elif nivel < -25};
+  \node[morto] (t3) at (0,-0.9) {elif nivel <= -8};
+  \node[morto] (t4) at (0,-2.3) {else};
+
+  \node[bx] (b1) at (6.4, 1.9) {"critico"};
+  \node[bx] (b2) at (6.4, 0.5) {"atencao"};
+  \node[bx, draw=manualgray, fill=manualgray!6, text=manualgray] (b3) at (6.4,-0.9) {"normal"};
+  \node[bx, draw=manualgray, fill=manualgray!6, text=manualgray] (b4) at (6.4,-2.3) {"alto demais"};
+
+  \draw[fl] (t1) -- (t2) node[lb, midway, right=2pt] {falso};
+  \draw[fv] (t2) -- (b2) node[lb, midway, above, text=manualgreen] {verdadeiro};
+  \draw[fl] (t1) -- (b1) node[lb, midway, above] {verdadeiro};
+  \draw[fl, dashed] (t2) -- (t3);
+  \draw[fl, dashed] (t3) -- (t4);
+  \draw[fl, dashed] (t3) -- (b3);
+  \draw[fl, dashed] (t4) -- (b4);
+
+  \node[lb, anchor=west, text width=3.9cm] at (9.1, 1.9)
+    {caminho \textbf{não} tomado: \texttt{-26.4} não é menor que \texttt{-28}};
+  \node[lb, anchor=west, text width=3.9cm, text=manualgreen] at (9.1, 0.5)
+    {\textbf{vence}: primeira condição verdadeira da cadeia};
+  \node[lb, anchor=west, text width=3.9cm] at (9.1,-1.6)
+    {nunca avaliados --- a cadeia já saiu};
+
+  \node[lb, text width=13.0cm, align=center] at (3.5,-4.2)
+    {para \texttt{nivel = -26.4}: o Python testa de cima para baixo, para no
+     primeiro \texttt{True} e pula o resto do bloco inteiro --- por isso a ordem
+     das condições é parte da lógica, não uma questão de estilo};
+\end{tikzpicture}
+```
+A cadeia é avaliada de cima para baixo e para no primeiro teste verdadeiro.
+:::
+
+Dá para ver a parada acontecendo com uma função que anuncia quando é chamada:
+
+```python
+def testa(rotulo, valor):
+    print(f"testando {rotulo}")
+    return valor
+
+
+if testa("A", False):
+    print("A venceu")
+elif testa("B", True):
+    print("B venceu")
+elif testa("C", True):
+    print("C venceu")
+else:
+    print("nenhuma")
+```
+
+```text
+testando A
+testando B
+B venceu
+```
+
+`C` era verdadeiro e nunca foi testado. Se `testa("C", ...)` gravasse no banco, a gravação não teria acontecido. Condição com efeito colateral é uma armadilha justamente por isso.
+
+Como consequência prática: **ordem importa e ordem esconde bug**. Numa escada de faixas numéricas, trocar duas linhas de lugar muda o resultado sem mudar nada visível. Se você inverter os dois primeiros `elif` do exemplo acima, `-26.4` continua caindo em `atencao`, mas `-31.0` também — porque `-31 < -25` é verdadeiro e a linha do `critico` deixou de ser alcançável para todo mundo.
+
+## O que o `if` considera verdadeiro
+
+O `if` não exige um `bool`. Ele chama o protocolo de valor-verdade do @sec-cap011 em qualquer objeto:
+
+```python
+for v in (0, 0.0, 0j, "", b"", [], (), {}, set(), None, range(0), "0", [0], -1):
+    print(f"{v!r:>10}  {bool(v)}")
+```
+
+```text
+         0  False
+       0.0  False
+        0j  False
+        ''  False
+       b''  False
+        []  False
+        ()  False
+        {}  False
+     set()  False
+      None  False
+range(0, 0)  False
+       '0'  True
+       [0]  True
+        -1  True
+```
+
+Zero de qualquer tipo numérico, contêiner vazio e `None` são falsos; o resto é verdadeiro. Repare em `"0"` e `[0]`: a string com o dígito zero e a lista que contém um zero são **verdadeiras**, porque não estão vazias.
+
+Isso torna idiomático testar contêiner diretamente:
+
+```python
+portas = []
+
+if portas:
+    print("tem porta")
+else:
+    print("lista vazia")
+```
+
+```text
+lista vazia
+```
+
+`if portas:` em vez de `if len(portas) > 0:`. É mais curto, funciona para qualquer sequência e não força o objeto a calcular um comprimento que pode ser caro.
+
+E é aqui que mora o segundo bug clássico do capítulo. Quando `0` é um valor legítimo, `if not x:` confunde "não informado" com "informado como zero":
+
+```python
+def desconto_ruim(p=None):
+    if not p:
+        p = 10
+    return p
+
+
+def desconto(p=None):
+    if p is None:
+        p = 10
+    return p
+
+
+for arg in (0, 5, None):
+    print(f"{str(arg):>4}  ruim={desconto_ruim(arg):>3}  certo={desconto(arg):>3}")
+```
+
+```text
+   0  ruim= 10  certo=  0
+   5  ruim=  5  certo=  5
+None  ruim= 10  certo= 10
+```
+
+O cliente que tinha desconto de 0% recebeu 10%. A regra é curta: **para testar ausência, use `is None`**; para testar vazio, use o valor-verdade. Vale também para string (`""` é um nome vazio informado, `None` é nome não informado) e para lista (`[]` é "consultei e não achou nada", `None` é "não consultei").
+
+O `is` aqui é o mesmo do @sec-cap008: compara identidade, e `None` é um singleton, então `is None` é a comparação certa — e mais rápida que `== None`, que ainda por cima pode ser sequestrada por uma classe que defina `__eq__`.
+
+## Comparações encadeadas
+
+O Python permite escrever a desigualdade dupla como se escreve em matemática:
+
+```python
+x = 5
+print(1 < x < 10)
+print(1 < x and x < 10)
+```
+
+```text
+True
+True
+```
+
+As duas formas são equivalentes em resultado, mas não em execução: na cadeia, o operando do meio é avaliado **uma vez só**.
+
+```python
+def um():
+    print("avaliou uma vez")
+    return 5
+
+
+print(0 < um() < 10)
+```
+
+```text
+avaliou uma vez
+True
+```
+
+Escrito como `0 < um() and um() < 10`, a função seria chamada duas vezes. O bytecode mostra o truque — o Python duplica o valor na pilha em vez de recalcular:
+
+```python
+import dis
+
+dis.dis("a < b < c")
+```
+
+```text
+  0           RESUME                   0
+
+  1           LOAD_NAME                0 (a)
+              LOAD_NAME                1 (b)
+              SWAP                     2
+              COPY                     2
+              COMPARE_OP               2 (<)
+              COPY                     1
+              TO_BOOL
+              POP_JUMP_IF_FALSE        5 (to L1)
+              POP_TOP
+              LOAD_NAME                2 (c)
+              COMPARE_OP               2 (<)
+              RETURN_VALUE
+      L1:     SWAP                     2
+              POP_TOP
+              RETURN_VALUE
+```
+
+O `POP_JUMP_IF_FALSE` é o curto-circuito: se a primeira comparação falha, `c` nunca é carregado.
+
+A cadeia funciona com qualquer operador de comparação e com mais de dois:
+
+```python
+print(-28 <= -19.5 <= -8)
+print("a" < "b" < "c")
+print(1 == 1 != 2)
+```
+
+```text
+True
+True
+True
+```
+
+O último merece atenção: `1 == 1 != 2` significa `1 == 1 and 1 != 2`, não `(1 == 1) != 2`. Encadear operadores de igualdade com operadores de ordem é legal e quase sempre confuso — use quando for uma faixa (`a <= x <= b`) e evite o resto.
+
+## Cláusulas de guarda em vez de pirâmide
+
+Condicional aninhada cresce para a direita e o código fica difícil de seguir depois do terceiro nível:
+
+```python
+def registrar_aninhado(leitura):
+    if leitura is not None:
+        if leitura.get("nivel") is not None:
+            if -28 <= leitura["nivel"] <= -8:
+                return "ok"
+            else:
+                return "fora de faixa"
+        else:
+            return "sem nivel"
+    else:
+        return "sem leitura"
+```
+
+O caso normal — o `"ok"` — é o mais escondido de todos, e cada `else` está a dezenas de colunas do `if` que ele fecha. A mesma função, escrita com **cláusulas de guarda**, trata cada caso excepcional na hora e devolve:
+
+```python
+def registrar(leitura):
+    if leitura is None:
+        return "sem leitura"
+    nivel = leitura.get("nivel")
+    if nivel is None:
+        return "sem nivel"
+    if not -28 <= nivel <= -8:
+        return "fora de faixa"
+    return "ok"
+```
+
+```python
+casos = [None, {}, {"nivel": -19.5}, {"nivel": -31.0}]
+for c in casos:
+    print(f"{str(c):<18} {registrar_aninhado(c):<14} {registrar(c)}")
+```
+
+```text
+None               sem leitura    sem leitura
+{}                 sem nivel      sem nivel
+{'nivel': -19.5}   ok             ok
+{'nivel': -31.0}   fora de faixa  fora de faixa
+```
+
+Idênticas no comportamento, distantes na legibilidade. A versão com guardas tem um nível de indentação, lê-se de cima para baixo como uma lista de pré-condições e termina no caminho feliz.
+
+::: {#fig-guardas}
+```{.tikz}
+%%| filename: guardas
+%%| alt: Comparacao entre condicional aninhada, que cresce em degraus para a direita, e clausulas de guarda, que ficam todas no mesmo nivel de indentacao
+\begin{tikzpicture}[
+  bx/.style={draw=manualred, thick, rounded corners=1pt, fill=manualred!8,
+             text width=6.0cm, align=left, minimum height=0.5cm,
+             font=\ttfamily\scriptsize, anchor=west, inner xsep=5pt},
+  gd/.style={draw=manualgreen, thick, rounded corners=1pt, fill=manualgreen!10,
+             text width=6.0cm, align=left, minimum height=0.5cm,
+             font=\ttfamily\scriptsize, anchor=west, inner xsep=5pt},
+  fim/.style={draw=manualblue, very thick, rounded corners=1pt, fill=manualblue!16,
+              text width=6.0cm, align=left, minimum height=0.5cm,
+              font=\ttfamily\scriptsize, anchor=west, inner xsep=5pt},
+  hd/.style={font=\small\bfseries, align=center},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  prof/.style={font=\scriptsize, align=center}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.9, 1.9) rectangle (15.1,-5.4);
+
+  \node[hd, text=manualred]   at (3.2, 1.45) {aninhamento};
+  \node[hd, text=manualgreen] at (11.2, 1.45) {cláusulas de guarda};
+
+  \node[bx] at (0.2, 0.75) {if leitura is not None:};
+  \node[bx] at (0.2, 0.15) {~~if nivel is not None:};
+  \node[bx] at (0.2,-0.45) {~~~~if -28 <= n <= -8:};
+  \node[fim] at (0.2,-1.05) {~~~~~~return "ok"};
+  \node[bx] at (0.2,-1.65) {~~~~else: "fora de faixa"};
+  \node[bx] at (0.2,-2.25) {~~else: "sem nivel"};
+  \node[bx] at (0.2,-2.85) {else: "sem leitura"};
+
+  \node[gd] at (8.2, 0.75) {if leitura is None:};
+  \node[gd] at (8.2, 0.15) {~~return "sem leitura"};
+  \node[gd] at (8.2,-0.45) {if nivel is None:};
+  \node[gd] at (8.2,-1.05) {~~return "sem nivel"};
+  \node[gd] at (8.2,-1.65) {if not -28 <= n <= -8:};
+  \node[gd] at (8.2,-2.25) {~~return "fora de faixa"};
+  \node[fim] at (8.2,-2.85) {return "ok"};
+
+  \draw[manualred, thick, <->, >=stealth] (-0.35, 0.75) -- (-0.35,-2.85);
+  \node[prof, text=manualred, rotate=90] at (-0.75,-1.05) {4 níveis};
+  \draw[manualgreen, thick, <->, >=stealth] (7.65, 0.75) -- (7.65,-2.85);
+  \node[prof, text=manualgreen, rotate=90] at (7.25,-1.05) {1 nível};
+
+  \node[lb, text width=6.4cm] at (3.2,-3.95)
+    {o caminho feliz é o mais fundo, e cada \texttt{else} está a sete linhas do
+     \texttt{if} que ele fecha};
+  \node[lb, text width=6.4cm] at (11.2,-3.95)
+    {o caminho feliz é a última linha, no nível zero, e não há
+     \texttt{else} nenhum};
+\end{tikzpicture}
+```
+A mesma lógica em pirâmide e em guardas: só a indentação muda, e ela muda tudo.
+:::
+
+Numa função sem `return` — dentro de um laço, por exemplo — a guarda usa `continue`, que é assunto do capítulo 17.
+
+## A expressão condicional
+
+`if` é uma **instrução**: ele não produz valor, então não cabe dentro de uma expressão. Quando você precisa escolher um valor, o operador ternário do Python resolve:
+
+```python
+nivel = -19.5
+rotulo = "ok" if -28 <= nivel <= -8 else "fora"
+print(rotulo)
+```
+
+```text
+ok
+```
+
+A ordem é `valor_se_verdadeiro if condição else valor_se_falso` — a condição fica no meio, ao contrário do `? :` de C e JavaScript. É estranho no primeiro dia e natural no terceiro, porque se lê como português: *"ok", se o nível estiver na faixa; senão, "fora"*.
+
+O `else` é **obrigatório**. Não existe expressão condicional sem alternativa — o Python precisa produzir um valor nos dois caminhos.
+
+Onde ele rende de verdade é dentro de outra expressão, em lugares onde um `if` de bloco não caberia:
+
+```python
+print([("ok" if -28 <= n <= -8 else "fora") for n in (-20, -3, -30)])
+```
+
+```text
+['ok', 'fora', 'fora']
+```
+
+Dentro de uma f-string do @sec-cap013, cuidando de plural:
+
+```python
+for falta in (0, 1, 3):
+    print(f'{falta} porta{"s" if falta != 1 else ""} livre{"s" if falta != 1 else ""}')
+```
+
+```text
+0 portas livres
+1 porta livre
+3 portas livres
+```
+
+E para tratar ausência sem quebrar a formatação:
+
+```python
+valores = {"onu-01": -19.5, "onu-02": None, "onu-03": -31.0}
+for nome, n in valores.items():
+    print(f"{nome}: {'sem leitura' if n is None else f'{n:.1f} dBm'}")
+```
+
+```text
+onu-01: -19.5 dBm
+onu-02: sem leitura
+onu-03: -31.0 dBm
+```
+
+Ternários aninhados são legais e funcionam:
+
+```python
+n = -31.0
+print("critico" if n < -28 else "atencao" if n < -25 else "ok")
+```
+
+```text
+critico
+```
+
+Funciona, e é o limite. Com quatro faixas isso vira uma linha que ninguém revisa direito — a partir daí, uma função com cadeia de `if` e `return` é mais barata de ler e de testar.
+
+## O operador morsa em condições
+
+Desde o **Python 3.8** (PEP 572), `:=` atribui **dentro** de uma expressão. O caso que justifica o operador é exatamente o do `if`: você precisa do resultado de uma chamada tanto para testar quanto para usar.
+
+```python
+import re
+
+registro = "onu-07 nivel=-24.3 status=up"
+if (m := re.search(r"nivel=(-?\d+\.\d+)", registro)):
+    print("nivel:", float(m.group(1)))
+else:
+    print("sem nivel")
+```
+
+```text
+nivel: -24.3
+```
+
+Sem ele, ou você chama `re.search` duas vezes, ou atribui antes do `if` e deixa a variável viva num escopo mais largo do que precisa. Com ele, `m` nasce e é testado na mesma linha.
+
+Duas regras de higiene: os parênteses em torno do `:=` são quase sempre dispensáveis, mas deixá-los evita ambiguidade de precedência e sinaliza a atribuição para quem lê; e `:=` **não** substitui `=` na atribuição comum — usar o morsa fora de uma expressão é `SyntaxError`.
+
+## Escada de `elif` ou tabela?
+
+Quando toda a cadeia testa igualdade contra a mesma variável, ela não é lógica: é uma tabela escrita como código.
+
+```python
+def taxa_elif(plano):
+    if plano == "basico":
+        return 79.90
+    elif plano == "turbo":
+        return 129.90
+    elif plano == "gamer":
+        return 199.90
+    else:
+        raise ValueError(f"plano desconhecido: {plano!r}")
+```
+
+Um dicionário diz o mesmo em três linhas, e o preço vira dado em vez de código:
+
+```python
+TARIFAS = {"basico": 79.90, "turbo": 129.90, "gamer": 199.90}
+
+print(TARIFAS["turbo"])
+print(TARIFAS.get("empresarial", 0.0))
+```
+
+```text
+129.9
+0.0
+```
+
+Um dicionário de funções faz o mesmo com comportamento no lugar do valor — é o *dispatch table*, e é o que substitui o `switch` que o Python não tem. Isso vale para **igualdade contra constantes**. Quando as condições são faixas, testes compostos ou desestruturação de dados, a escada de `if` continua sendo a resposta certa — ou o `match`, que estrutura o caso de desestruturação e é o assunto do capítulo 17.
+
+## 🐍 Jeito Pythônico
+
+**Teste o objeto, não o comprimento dele.** `if portas:` em vez de `if len(portas) > 0:`, `if not texto:` em vez de `if texto == "":`. A PEP 8 é explícita nesse ponto.
+
+**Para ausência, `is None`.** Sempre que `0`, `""` ou `[]` forem valores legítimos, `if x is None:` é a única forma correta de perguntar "veio alguma coisa?". `== None` funciona por acidente e `not x` funciona até o dia em que alguém passa zero.
+
+**Compare em cadeia.** `-28 <= nivel <= -8` é mais curto, avalia o meio uma vez e não tem como virar o bug do `or -8` da abertura.
+
+**Prefira guardas a aninhamento.** Trate os casos excepcionais no começo, saia cedo, e deixe o caminho normal sem indentação nenhuma. Três níveis de `if` dentro de `if` é o sinal de que a função quer virar duas.
+
+**Não escreva `if x == True:`.** É redundante e é sutilmente diferente de `if x:` para objetos que não são `bool`. Pela mesma razão, `if x is True:` só se você realmente quer o singleton `True` e não "algo verdadeiro" — o que é raro.
+
+```python
+# antipadrão
+if usuario.ativo == True:
+    ...
+if len(erros) != 0:
+    ...
+if resultado != None:
+    ...
+```
+
+```python
+# pythônico
+if usuario.ativo:
+    ...
+if erros:
+    ...
+if resultado is not None:
+    ...
+```
+
+**Não faça a mesma atribuição nos dois ramos.** Um `if`/`else` que só muda o valor de uma variável é uma expressão condicional disfarçada:
+
+```python
+# antipadrão
+if -28 <= nivel <= -8:
+    rotulo = "ok"
+else:
+    rotulo = "fora"
+```
+
+```python
+# pythônico
+rotulo = "ok" if -28 <= nivel <= -8 else "fora"
+```
+
+**Ternário só quando cabe numa linha e numa leitura.** A partir de dois `else` encadeados, escreva uma função.
+
+**Dicionário no lugar de escada de igualdades.** Se todos os testes são `variavel == constante`, a estrutura de dados certa é um `dict`.
+
+Sobre versões:
+
+- **Python 3.8** — operador morsa `:=` (PEP 572), que tornou o `if (m := ...)` idiomático.
+- **Python 3.10** — instrução `match`/`case` (PEP 634), para os casos em que a decisão é sobre a *forma* do dado, não sobre um valor escalar.
+- **Python 3.12** — mensagens de erro de sintaxe mais precisas para `if` sem dois-pontos e para `=` onde se queria `==`, o que encurta a caçada descrita no @sec-cap007.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o alarme falso da abertura, ver a tabela de valores falsos com os próprios olhos, medir a diferença entre `not x` e `is None`, e terminar com um monitor de rede que classifica leituras e diz o que fazer com cada uma.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab15 && cd ~/lab15
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza o bug do `or`.**
+
+```bash
+python -c "
+def alerta(nivel):
+    if nivel < -28 or -8:
+        return 'fora de faixa'
+    return 'ok'
+for n in (-20.0, -3.0, -30.0):
+    print(n, alerta(n))
+print('bool(-8) =', bool(-8))
+"
+```
+
+```text
+-20.0 fora de faixa
+-3.0 fora de faixa
+-30.0 fora de faixa
+bool(-8) = True
+```
+
+Três leituras completamente diferentes, um único veredito. A última linha é a causa.
+
+**3. Corrija com a cadeia de comparação.**
+
+```bash
+python -c "
+def alerta(nivel):
+    if not -28 <= nivel <= -8:
+        return 'fora de faixa'
+    return 'ok'
+for n in (-20.0, -3.0, -30.0, -8.0, -28.0):
+    print(f'{n:>6}  {alerta(n)}')
+"
+```
+
+```text
+ -20.0  ok
+  -3.0  fora de faixa
+ -30.0  fora de faixa
+  -8.0  ok
+ -28.0  ok
+```
+
+Repare nos dois extremos: `-8.0` e `-28.0` entram como `ok` porque `<=` inclui a borda. Faixa é sempre uma decisão sobre bordas, e é onde mora metade dos bugs de classificação.
+
+**4. Veja a tabela de valores falsos.**
+
+```bash
+python -c "
+for v in (0, 0.0, 0j, '', b'', [], (), {}, set(), None, range(0), '0', [0], -1):
+    print(f'{v!r:>10}  {bool(v)}')
+"
+```
+
+```text
+         0  False
+       0.0  False
+        0j  False
+        ''  False
+       b''  False
+        []  False
+        ()  False
+        {}  False
+     set()  False
+      None  False
+range(0, 0)  False
+       '0'  True
+       [0]  True
+        -1  True
+```
+
+Guarde as três últimas linhas: `"0"` e `[0]` não são vazios, e `-1` não é zero.
+
+**5. `not x` contra `is None`.**
+
+```bash
+python -c "
+def desconto_ruim(p=None):
+    if not p:
+        p = 10
+    return p
+def desconto(p=None):
+    if p is None:
+        p = 10
+    return p
+for arg in (0, 5, None):
+    print(f'{str(arg):>4}  ruim={desconto_ruim(arg):>3}  certo={desconto(arg):>3}')
+"
+```
+
+```text
+   0  ruim= 10  certo=  0
+   5  ruim=  5  certo=  5
+None  ruim= 10  certo= 10
+```
+
+A primeira linha é o bug: desconto zero virou desconto de dez por cento.
+
+**6. Escreva o classificador.** Crie `classificar.py`:
+
+```python
+"""Classifica o nivel optico de uma ONU em faixas operacionais."""
+
+CRITICO = -28.0
+ATENCAO = -25.0
+SATURACAO = -8.0
+
+
+def classificar(nivel):
+    if nivel is None:
+        return "sem leitura"
+    if nivel < CRITICO:
+        return "critico"
+    if nivel < ATENCAO:
+        return "atencao"
+    if nivel <= SATURACAO:
+        return "normal"
+    return "saturado"
+
+
+if __name__ == "__main__":
+    for n in (None, -31.0, -26.4, -19.5, -3.0):
+        print(f"{str(n):>7}  {classificar(n)}")
+```
+
+```bash
+python classificar.py
+```
+
+```text
+   None  sem leitura
+  -31.0  critico
+  -26.4  atencao
+  -19.5  normal
+   -3.0  saturado
+```
+
+Cinco guardas, um nível de indentação, nenhum `else`. Cada `return` fecha um caso, e o último é o que sobra.
+
+**7. Ternário dentro de f-string.**
+
+```bash
+python -c "
+for falta in (0, 1, 3):
+    print(f'{falta} porta{\"s\" if falta != 1 else \"\"} livre{\"s\" if falta != 1 else \"\"}')
+"
+```
+
+```text
+0 portas livres
+1 porta livre
+3 portas livres
+```
+
+**8. Morsa numa varredura de log.**
+
+```bash
+cat > enlace.log <<'LOG'
+2026-08-11 09:00:01 onu-01 nivel=-19.5 status=up
+2026-08-11 09:00:02 onu-02 status=down
+2026-08-11 09:00:03 onu-03 nivel=-31.0 status=up
+2026-08-11 09:00:04 onu-04 nivel=-24.3 status=up
+LOG
+
+python -c "
+import re
+from pathlib import Path
+padrao = re.compile(r'(onu-\d+) nivel=(-?\d+\.\d+)')
+for linha in Path('enlace.log').read_text(encoding='utf-8').splitlines():
+    if (m := padrao.search(linha)):
+        print(f'{m.group(1)}  {float(m.group(2)):>7.1f} dBm')
+    else:
+        print(f'{linha.split()[2]}  sem leitura')
+"
+```
+
+```text
+onu-01    -19.5 dBm
+onu-02  sem leitura
+onu-03    -31.0 dBm
+onu-04    -24.3 dBm
+```
+
+Uma busca por linha, e o resultado usado dentro do bloco. Sem `:=`, seriam duas buscas ou uma variável a mais.
+
+**9. Guardas contra pirâmide.**
+
+```bash
+python -c "
+def registrar(leitura):
+    if leitura is None:
+        return 'sem leitura'
+    nivel = leitura.get('nivel')
+    if nivel is None:
+        return 'sem nivel'
+    if not -28 <= nivel <= -8:
+        return 'fora de faixa'
+    return 'ok'
+for c in (None, {}, {'nivel': -19.5}, {'nivel': -31.0}):
+    print(f'{str(c):<18} {registrar(c)}')
+"
+```
+
+```text
+None               sem leitura
+{}                 sem nivel
+{'nivel': -19.5}   ok
+{'nivel': -31.0}   fora de faixa
+```
+
+**10. Tabela no lugar da escada.**
+
+```bash
+python -c "
+TARIFAS = {'basico': 79.90, 'turbo': 129.90, 'gamer': 199.90}
+print(TARIFAS['turbo'])
+print(TARIFAS.get('empresarial', 0.0))
+try:
+    TARIFAS['empresarial']
+except KeyError as e:
+    print('KeyError:', e)
+"
+```
+
+```text
+129.9
+0.0
+KeyError: 'empresarial'
+```
+
+`[]` para quando a chave ausente é erro; `.get` com padrão para quando não é. A escolha entre os dois é uma condicional que você não precisou escrever.
+
+**11. Monte o monitor.** Crie `leituras.csv`:
+
+```bash
+cat > leituras.csv <<'CSV'
+onu;nivel
+onu-01;-19.5
+onu-02;
+onu-03;-31.0
+onu-04;-26.4
+onu-05;-3.0
+onu-06;-8.0
+CSV
+```
+
+E `monitor.py`:
+
+```python
+"""Relatorio de niveis opticos: classifica cada ONU e resume por faixa."""
+
+import csv
+from collections import Counter
+from pathlib import Path
+
+from classificar import classificar
+
+ACAO = {
+    "critico": "abrir chamado de campo",
+    "atencao": "agendar inspecao",
+    "normal": "",
+    "saturado": "instalar atenuador",
+    "sem leitura": "verificar se a ONU responde",
+}
+
+
+def ler(caminho):
+    texto = Path(caminho).read_text(encoding="utf-8")
+    for linha in csv.DictReader(texto.splitlines(), delimiter=";"):
+        bruto = linha["nivel"].strip()
+        yield linha["onu"], (float(bruto) if bruto else None)
+
+
+if __name__ == "__main__":
+    contagem = Counter()
+    for onu, nivel in ler("leituras.csv"):
+        faixa = classificar(nivel)
+        contagem[faixa] += 1
+        medida = "  ---  " if nivel is None else f"{nivel:>7.1f}"
+        print(f"{onu}  {medida}  {faixa:<12} {ACAO[faixa]}")
+
+    print("-" * 52)
+    problemas = sum(v for k, v in contagem.items() if k != "normal")
+    print(f"{contagem.total()} ONUs, {problemas} exigem acao")
+    for faixa, n in contagem.most_common():
+        print(f"  {faixa:<12} {n}")
+```
+
+```bash
+python monitor.py
+```
+
+```text
+onu-01    -19.5  normal
+onu-02    ---    sem leitura  verificar se a ONU responde
+onu-03    -31.0  critico      abrir chamado de campo
+onu-04    -26.4  atencao      agendar inspecao
+onu-05     -3.0  saturado     instalar atenuador
+onu-06     -8.0  normal
+----------------------------------------------------
+6 ONUs, 4 exigem acao
+  normal       2
+  sem leitura  1
+  critico      1
+  atencao      1
+  saturado     1
+```
+
+Todas as construções do capítulo estão nas trinta linhas: guardas em `classificar`, `is None` para distinguir ausência de zero, ternário em `float(bruto) if bruto else None` e em `medida`, e dois dicionários fazendo o papel de escadas de `elif` que ninguém precisou escrever.
+
+**12. Feche com `deactivate`.**
+
+## Resumo
+
+- `if`/`elif`/`else` é avaliado de cima para baixo e para no primeiro teste verdadeiro; as condições abaixo não são avaliadas, então ordem é semântica e condição com efeito colateral é armadilha.
+- `if` aceita qualquer objeto e aplica o valor-verdade: zero de qualquer tipo, contêiner vazio e `None` são falsos. `"0"` e `[0]` são verdadeiros.
+- Para ausência, `is None`; para vazio, o valor-verdade. Confundir os dois é o bug que transforma desconto zero em desconto padrão.
+- `a <= x <= b` avalia `x` uma única vez e curto-circuita. `x < a or b` não é comparação com dois limites — é o bug da abertura.
+- Cláusulas de guarda com `return` antecipado substituem pirâmides de `if` aninhado: um nível de indentação e o caminho normal no fim, sem `else`.
+- A expressão condicional `A if cond else B` produz valor e cabe onde um bloco não caberia (f-string, compreensão, argumento). O `else` é obrigatório e o aninhamento tem limite de um.
+- `:=` (3.8) atribui dentro da condição, evitando a chamada dupla no par testar-e-usar.
+- Escada de `elif` comparando a mesma variável com constantes é um dicionário disfarçado; faixas e formas de dados continuam sendo `if` ou `match`.
