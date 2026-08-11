@@ -1,3 +1,826 @@
 # Escopo, closures e a regra LEGB {#sec-cap020}
 
-*(em elaboracao)*
+O contador de alarmes vive no módulo, e a função incrementa. É a coisa mais simples do capítulo, e não funciona:
+
+```python
+alarmes = 0
+
+
+def registrar(onu):
+    alarmes += 1
+    print(f"{onu} registrada, total {alarmes}")
+
+
+registrar("onu-01")
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab20/contador.py", line 9, in <module>
+    registrar("onu-01")
+    ~~~~~~~~~^^^^^^^^^^
+  File "/home/vitor/lab20/contador.py", line 5, in registrar
+    alarmes += 1
+    ^^^^^^^
+UnboundLocalError: cannot access local variable 'alarmes' where it is not associated with a value
+```
+
+"Não consigo acessar a variável local `alarmes`" — mas `alarmes` não é local, está lá em cima, no módulo, valendo zero. E se a função só **ler**, funciona:
+
+```python
+alarmes = 0
+
+
+def ler():
+    print("leitura funciona:", alarmes)
+
+
+ler()
+```
+
+```text
+leitura funciona: 0
+```
+
+A diferença não é o valor, é a **atribuição**. Existe uma regra que decide tudo neste capítulo: se um nome recebe atribuição em qualquer ponto do corpo de uma função, ele é local **na função inteira** — inclusive nas linhas antes da atribuição. E `alarmes += 1` é uma atribuição.
+
+Dá para ver a decisão já tomada, antes de qualquer execução, no código compilado:
+
+```python
+alarmes = 0
+
+
+def escreve():
+    alarmes = alarmes + 1
+
+
+def le():
+    print(alarmes)
+
+
+print("escreve co_varnames:", escreve.__code__.co_varnames)
+print("le    co_varnames:", le.__code__.co_varnames)
+print("le    co_names:   ", le.__code__.co_names)
+```
+
+```text
+escreve co_varnames: ('alarmes',)
+le    co_varnames: ()
+le    co_names:    ('print', 'alarmes')
+```
+
+Em `escreve`, `alarmes` está entre as **variáveis locais**; em `le`, está entre os **nomes globais**. O compilador classificou os dois na hora de compilar, olhando só para a presença da atribuição — não para o que existe em tempo de execução.
+
+Este capítulo é sobre onde o Python procura um nome, o que muda essa busca, e o que acontece quando uma função guarda um pedaço do escopo em que nasceu.
+
+## LEGB: a ordem da busca
+
+Quando o Python encontra um nome, ele procura em quatro lugares, nesta ordem:
+
+::: {#fig-legb}
+```{.tikz}
+%%| filename: legb
+%%| alt: Quatro escopos aninhados: local dentro de envolvente, dentro de global, dentro de embutido, com a busca de um nome indo de dentro para fora e parando no primeiro que tiver o nome
+\begin{tikzpicture}[
+  rot/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west,
+              text width=6.0cm},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  fl/.style={->,>=stealth, very thick, manualred}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-2.4, 0.4) rectangle (14.9,-8.4);
+
+  \draw[draw=manualgray, very thick, rounded corners, fill=manualgray!5]
+        (0,-0.2) rectangle (8.6,-7.6);
+  \draw[draw=manualyellow!70!black, very thick, rounded corners, fill=manualyellow!14]
+        (0.5,-1.4) rectangle (8.1,-7.1);
+  \draw[draw=manualgreen, very thick, rounded corners, fill=manualgreen!12]
+        (1.0,-2.6) rectangle (7.6,-6.6);
+  \draw[draw=manualblue, very thick, rounded corners, fill=manualblue!14]
+        (1.5,-3.8) rectangle (7.1,-6.1);
+
+  \node[rot] at (0.2,-0.4)
+    {\textbf{B --- Built-in (embutido)}\\
+     \texttt{len}, \texttt{print}, \texttt{sum}, \texttt{list}};
+  \node[rot] at (0.7,-1.6)
+    {\textbf{G --- Global (o módulo)}\\
+     \texttt{alarmes = 0}, funções do arquivo};
+  \node[rot] at (1.2,-2.8)
+    {\textbf{E --- Enclosing (função de fora)}\\
+     \texttt{fator}, capturado pela de dentro};
+  \node[rot] at (1.7,-4.0)
+    {\textbf{L --- Local (a função atual)}\\
+     parâmetros e nomes atribuídos aqui};
+
+  \draw[fl] (-0.7,-5.0) -- (-0.7,-0.6);
+  \node[lb, text=manualred, rotate=90, anchor=south, text width=4.2cm,
+        align=center] at (-1.1,-4.8)
+    {a busca vai de \textbf{dentro para fora} e para no \textbf{primeiro}
+     escopo que tiver o nome};
+
+  \node[lb, text width=5.4cm, anchor=north west] at (9.4,-0.3)
+    {\textbf{Atribuir muda tudo.} Um nome atribuído no corpo é
+     \textbf{local}, mesmo que exista igual mais fora --- e a busca nem sai do
+     nível L.};
+  \node[lb, text width=5.4cm, anchor=north west] at (9.4,-2.6)
+    {\texttt{global x} manda a atribuição para o nível \textbf{G};
+     \texttt{nonlocal x} manda para o \textbf{E} mais próximo que já tenha
+     \texttt{x}.};
+  \node[lb, text width=5.4cm, anchor=north west] at (9.4,-5.0)
+    {Não achar em lugar nenhum é \texttt{NameError}. Achar no L antes de ele
+     receber valor é \texttt{UnboundLocalError}.};
+  \node[lb, text width=5.4cm, anchor=north west] at (9.4,-7.2)
+    {Classe \textbf{não} entra na cadeia: o corpo de uma classe não vira escopo
+     envolvente dos métodos.};
+\end{tikzpicture}
+```
+A ordem LEGB, e as três palavras que a alteram.
+:::
+
+Um exemplo com os quatro níveis de uma vez:
+
+```python
+x = "global"
+
+
+def externa():
+    x = "da externa"
+
+    def interna():
+        print("interna ve:", x)
+
+    interna()
+    print("externa ve:", x)
+
+
+externa()
+print("modulo ve:", x)
+print("embutida:", len("abc"))
+```
+
+```text
+interna ve: da externa
+externa ve: da externa
+modulo ve: global
+embutida: 3
+```
+
+`interna` não tem `x` local, então subiu um nível e encontrou o `x` de `externa` (E) — o global (G) nem foi consultado. E `len` veio do nível B, que é o último da fila.
+
+## `global` e `nonlocal`
+
+Para **atribuir** num escopo de fora, é preciso declarar. São as duas únicas palavras que fazem isso:
+
+```python
+alarmes = 0
+
+
+def registrar(onu):
+    global alarmes
+    alarmes += 1
+    return f"{onu}: total {alarmes}"
+
+
+print(registrar("onu-01"))
+print(registrar("onu-02"))
+print("no modulo:", alarmes)
+```
+
+```text
+onu-01: total 1
+onu-02: total 2
+no modulo: 2
+```
+
+`nonlocal` faz o mesmo para o escopo envolvente mais próximo — e **não** alcança o global:
+
+```python
+def contador_local():
+    total = 0
+
+    def somar(n):
+        nonlocal total
+        total += n
+        return total
+
+    return somar
+
+
+c = contador_local()
+print(c(3), c(4), c(10))
+outro = contador_local()
+print("contador novo:", outro(1))
+```
+
+```text
+3 7 17
+contador novo: 1
+```
+
+`c` acumulou até 17; `outro`, criado por outra chamada de `contador_local`, começou do zero. Cada chamada da função externa produz um `total` novo — e é exatamente isso que faz de `somar` um **closure**.
+
+Sobre `global`: ele funciona e quase nunca é a resposta. Estado global mutável mexido de dentro de funções é a receita de bug que só aparece com a ordem certa de chamadas. A alternativa é devolver o valor novo, passar um objeto que carregue o estado, ou usar o fechamento da seção seguinte.
+
+## Sombrear um nome embutido
+
+Como o nível B é o **último** da busca, qualquer nome definido no módulo ou na função tapa o embutido de mesmo nome:
+
+```python
+niveis = [-19.5, -31.0, -8.0]
+sum = 0
+for n in niveis:
+    sum = sum + n
+print("soma manual:", sum)
+print(sum(niveis))
+```
+
+```text
+soma manual: -58.5
+Traceback (most recent call last):
+  File "/home/vitor/lab20/sombra.py", line 6, in <module>
+    print(sum(niveis))
+          ~~~^^^^^^^^
+TypeError: 'float' object is not callable
+```
+
+O erro nem menciona `sum`: diz que um `float` não é chamável. Quando o sombreamento acontece dentro de uma função grande, a distância entre a causa e o sintoma é de dezenas de linhas. Os nomes que mais aparecem sombreados por acidente são `list`, `dict`, `set`, `str`, `id`, `type`, `input`, `next`, `filter`, `max`, `min` e `sum` — e o `ruff` sinaliza todos eles (regra `A001`). Quando o nome certo mesmo é `list`, a convenção é um sublinhado no fim: `list_`.
+
+## Closures
+
+Um **closure** é uma função que continua enxergando variáveis do escopo onde nasceu, mesmo depois de esse escopo ter terminado:
+
+```python
+def multiplicador(fator):
+    def aplicar(valor):
+        return valor * fator
+
+    return aplicar
+
+
+dobro = multiplicador(2)
+triplo = multiplicador(3)
+print(dobro(10), triplo(10))
+print("fator ainda vive:", dobro.__closure__)
+print("valor guardado:  ", dobro.__closure__[0].cell_contents)
+print("nomes capturados:", dobro.__code__.co_freevars)
+```
+
+```text
+20 30
+fator ainda vive: (<cell at 0x77dfacce39a0: int object at 0xa56c48>,)
+valor guardado:   2
+nomes capturados: ('fator',)
+```
+
+Quando `multiplicador(2)` retornou, o quadro dele foi desempilhado — mas `fator` não morreu junto. O Python percebeu, **na compilação**, que `aplicar` usa um nome que não é dele, e promoveu esse nome a **célula**: uma caixinha que fica pendurada no objeto função e sobrevive ao quadro.
+
+::: {#fig-closure}
+```{.tikz}
+%%| filename: closure
+%%| alt: Um fechamento: o quadro da funcao externa desaparece apos o retorno, mas a celula com o valor capturado permanece ligada ao objeto da funcao interna
+\begin{tikzpicture}[
+  qd/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!7,
+             text width=4.4cm, align=center, minimum height=1.5cm,
+             font=\ttfamily\scriptsize},
+  ido/.style={draw=manualgray, very thick, dashed, rounded corners,
+              fill=manualgray!4, text width=4.4cm, align=center,
+              minimum height=1.5cm, font=\ttfamily\scriptsize, text=manualgray},
+  fn/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!12,
+             text width=4.0cm, align=center, minimum height=1.5cm,
+             font=\ttfamily\scriptsize},
+  cel/.style={draw=manualred, very thick, rounded corners, fill=manualred!12,
+              text width=2.5cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  fr/.style={->,>=stealth, very thick, manualred}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.4, 3.1) rectangle (14.6,-5.4);
+
+  \node[lb, font=\small\bfseries] at (2.4, 2.5) {durante a chamada};
+  \node[lb, font=\small\bfseries] at (10.4, 2.5) {depois do return};
+
+  \node[qd]  (q1) at (2.4, 1.3) {quadro de\\ \textbf{multiplicador}\\ fator = 2};
+  \node[fn]  (f1) at (2.4,-0.9) {objeto\\ \textbf{aplicar}};
+  \node[cel] (c1) at (2.4,-2.7) {célula\\ fator = 2};
+
+  \node[ido] (q2) at (10.4, 1.3) {quadro\\ \textbf{descartado}};
+  \node[fn]  (f2) at (10.4,-0.9) {dobro\\ (\_\_closure\_\_)};
+  \node[cel] (c2) at (10.4,-2.7) {célula\\ fator = 2};
+
+  \draw[fl] (q1) -- (f1) node[lb, midway, right=3pt] {cria};
+  \draw[fr] (f1) -- (c1) node[lb, midway, right=3pt, text=manualred] {captura};
+  \draw[fr] (f2) -- (c2) node[lb, midway, right=3pt, text=manualred]
+    {continua ligada};
+
+  \draw[fl, very thick] (5.0,-0.9) -- (7.6,-0.9)
+    node[lb, midway, above] {\texttt{return aplicar}};
+
+  \node[lb, text width=13.8cm, align=left] at (6.4,-4.4)
+    {A célula é decidida na \textbf{compilação}: o Python vê que \texttt{aplicar}
+     usa um nome que não é dele nem global, e promove esse nome a célula em vez
+     de deixá-lo morrer com o quadro. Por isso \texttt{dobro} e \texttt{triplo},
+     vindos de duas chamadas diferentes, têm células \textbf{diferentes} --- e é
+     assim que cada um lembra do próprio fator.};
+\end{tikzpicture}
+```
+O quadro morre no `return`; a célula com o valor capturado, não.
+:::
+
+Closure é a base de decorador, de *callback* com contexto, de fábrica de funções e de boa parte do que o @sec-cap021 vai mostrar.
+
+## A armadilha da captura tardia
+
+O closure captura a **variável**, não o valor dela no instante da criação. Num laço, isso produz o erro mais famoso da categoria:
+
+```python
+funcoes = []
+for fator in (2, 3, 4):
+    funcoes.append(lambda v: v * fator)
+
+print([f(10) for f in funcoes])
+```
+
+```text
+[40, 40, 40]
+```
+
+As três funções compartilham a mesma variável `fator`, e quando alguém finalmente as chama, `fator` já vale 4 — o valor que sobrou depois do laço. Não é um bug de escopo: é o escopo funcionando exatamente como definido.
+
+Há duas correções idiomáticas:
+
+```python
+certas = []
+for fator in (2, 3, 4):
+    certas.append(lambda v, fator=fator: v * fator)
+
+print([f(10) for f in certas])
+
+from functools import partial
+
+
+def escala(fator, valor):
+    return valor * fator
+
+
+com_partial = [partial(escala, f) for f in (2, 3, 4)]
+print([f(10) for f in com_partial])
+print("fator depois do laco:", fator)
+```
+
+```text
+[20, 30, 40]
+[20, 30, 40]
+4
+```
+
+A primeira usa o valor padrão do @sec-cap019 justamente porque ele é avaliado **na definição** — o mesmo comportamento que causa o bug do padrão mutável aqui resolve o problema. A segunda usa `functools.partial`, que fixa o argumento de verdade e é mais explícita.
+
+E a última linha mostra outra coisa importante: **o `for` não cria escopo**. `fator` continua vivo, valendo 4, depois do laço terminar.
+
+## Compreensões têm escopo próprio; laços, não
+
+```python
+quadrados = [n * n for n in range(3)]
+print(quadrados)
+print(n)
+```
+
+```text
+[0, 1, 4]
+NameError: name 'n' is not defined
+```
+
+```python
+for m in range(3):
+    pass
+print("depois do for, m =", m)
+```
+
+```text
+depois do for, m = 2
+```
+
+A compreensão roda num escopo próprio (mudança do Python 3, para não poluir o ambiente); o `for` de bloco vaza a variável. Isso é útil quando você quer o último valor, e é fonte de confusão quando você não quer — outra razão para não reaproveitar nome de variável de laço.
+
+## `locals()` e `globals()`
+
+```python
+def f(a, b=2):
+    c = a + b
+    print("locals:", locals())
+
+
+f(1)
+g = 10
+print("g esta em globals:", "g" in globals())
+print("len esta em builtins:", "len" in dir(__builtins__))
+```
+
+```text
+locals: {'a': 1, 'b': 2, 'c': 3}
+g esta em globals: True
+len esta em builtins: True
+```
+
+São ótimas para depurar e para entender, e ruins para programar: escrever em `locals()` dentro de uma função não tem efeito garantido, e criar nomes dinamicamente com `globals()[nome] = valor` é o caminho mais curto para código que nenhuma ferramenta consegue analisar. Quando a chave é dinâmica, o que você quer é um dicionário seu.
+
+## 🐍 Jeito Pythônico
+
+**Prefira parâmetro e retorno a estado global.** Uma função que recebe tudo que usa e devolve tudo que produz é testável em uma linha e não depende de ordem de execução.
+
+```python
+# antipadrão
+total = 0
+
+
+def somar(n):
+    global total
+    total += n
+```
+
+```python
+# pythônico
+def somar(total, n):
+    return total + n
+```
+
+**`nonlocal` é aceitável; `global` quase nunca.** `nonlocal` mora dentro de um fechamento pequeno e explícito. `global` alcança o módulo inteiro.
+
+**Não sombreie nomes embutidos.** `list`, `dict`, `sum`, `id`, `type`, `input`. Se o nome perfeito for um deles, use `list_` ou um nome mais específico (`itens`, `mapa`, `total`).
+
+**Não conte com a variável vazada do `for`.** Ela existe, mas depender disso é frágil e não sobrevive a quem transformar o laço numa compreensão.
+
+**Ao criar funções em laço, fixe o valor.** `lambda v, fator=fator: ...` ou `functools.partial`. Sem isso, todas capturam a mesma variável.
+
+**Função pequena, escopo pequeno.** A regra LEGB só machuca em função longa, onde uma atribuição na linha 60 muda a natureza de um nome usado na linha 10.
+
+Sobre versões:
+
+- **Python 3.0** — `nonlocal` (PEP 3104), e as compreensões passaram a ter escopo próprio.
+- **Python 3.11** — o `UnboundLocalError` deixou de dizer apenas *local variable referenced before assignment* e passou a nomear a variável, como no traceback da abertura.
+- **Python 3.12** — parâmetros de tipo genérico (PEP 695) introduzem um escopo lexical novo, o *annotation scope*, que é o primeiro escopo criado no Python desde as compreensões.
+- **Python 3.13** — `locals()` teve a semântica finalmente especificada (PEP 667): em função, devolve um instantâneo independente, então escrever nele nunca afeta as variáveis reais.
+
+## 🧪 Laboratório
+
+Objetivo: provocar o `UnboundLocalError` e ver que a decisão é do compilador, medir o alcance de `global` e `nonlocal`, ver a célula de um fechamento com os próprios olhos, cair na captura tardia e sair dela.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab20 && cd ~/lab20
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. O erro da abertura.** Crie `contador.py`:
+
+```python
+alarmes = 0
+
+
+def registrar(onu):
+    alarmes += 1
+    print(f"{onu} registrada, total {alarmes}")
+
+
+registrar("onu-01")
+```
+
+```bash
+python contador.py
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab20/contador.py", line 9, in <module>
+    registrar("onu-01")
+    ~~~~~~~~~^^^^^^^^^^
+  File "/home/vitor/lab20/contador.py", line 5, in registrar
+    alarmes += 1
+    ^^^^^^^
+UnboundLocalError: cannot access local variable 'alarmes' where it is not associated with a value
+```
+
+**3. Só ler funciona.**
+
+```bash
+python -c "
+alarmes = 0
+def ler():
+    print('leitura funciona:', alarmes)
+ler()
+"
+```
+
+```text
+leitura funciona: 0
+```
+
+**4. A decisão é do compilador.**
+
+```bash
+python -c "
+alarmes = 0
+def escreve():
+    alarmes = alarmes + 1
+def le():
+    print(alarmes)
+print('escreve co_varnames:', escreve.__code__.co_varnames)
+print('le    co_varnames:', le.__code__.co_varnames)
+print('le    co_names:   ', le.__code__.co_names)
+"
+```
+
+```text
+escreve co_varnames: ('alarmes',)
+le    co_varnames: ()
+le    co_names:    ('print', 'alarmes')
+```
+
+Nenhuma das duas foi chamada. A classificação já estava feita.
+
+**5. `global` e `nonlocal`.** Crie `global_nonlocal.py`:
+
+```python
+alarmes = 0
+
+
+def registrar(onu):
+    global alarmes
+    alarmes += 1
+    return f"{onu}: total {alarmes}"
+
+
+print(registrar("onu-01"))
+print(registrar("onu-02"))
+print("no modulo:", alarmes)
+
+
+def contador_local():
+    total = 0
+
+    def somar(n):
+        nonlocal total
+        total += n
+        return total
+
+    return somar
+
+
+c = contador_local()
+print(c(3), c(4), c(10))
+outro = contador_local()
+print("contador novo:", outro(1))
+```
+
+```bash
+python global_nonlocal.py
+```
+
+```text
+onu-01: total 1
+onu-02: total 2
+no modulo: 2
+3 7 17
+contador novo: 1
+```
+
+**6. Os quatro níveis.**
+
+```bash
+python -c "
+x = 'global'
+def externa():
+    x = 'da externa'
+    def interna():
+        print('interna ve:', x)
+    interna()
+    print('externa ve:', x)
+externa()
+print('modulo ve:', x)
+print('embutida:', len('abc'))
+"
+```
+
+```text
+interna ve: da externa
+externa ve: da externa
+modulo ve: global
+embutida: 3
+```
+
+**7. Sombreie um embutido.** Crie `sombra.py`:
+
+```python
+niveis = [-19.5, -31.0, -8.0]
+sum = 0
+for n in niveis:
+    sum = sum + n
+print("soma manual:", sum)
+print(sum(niveis))
+```
+
+```bash
+python sombra.py
+```
+
+```text
+soma manual: -58.5
+Traceback (most recent call last):
+  File "/home/vitor/lab20/sombra.py", line 6, in <module>
+    print(sum(niveis))
+          ~~~^^^^^^^^
+TypeError: 'float' object is not callable
+```
+
+**8. Veja a célula.** Crie `fechamento.py`:
+
+```python
+def multiplicador(fator):
+    def aplicar(valor):
+        return valor * fator
+
+    return aplicar
+
+
+dobro = multiplicador(2)
+triplo = multiplicador(3)
+print(dobro(10), triplo(10))
+print("fator ainda vive:", dobro.__closure__)
+print("valor guardado:  ", dobro.__closure__[0].cell_contents)
+print("nomes capturados:", dobro.__code__.co_freevars)
+```
+
+```bash
+python fechamento.py
+```
+
+```text
+20 30
+fator ainda vive: (<cell at 0x77dfacce39a0: int object at 0xa56c48>,)
+valor guardado:   2
+nomes capturados: ('fator',)
+```
+
+O endereço muda a cada execução. O que importa é que `__closure__` não é `None` e que a célula guarda o `2`.
+
+**9. Captura tardia, e as duas saídas.** Crie `tardio.py`:
+
+```python
+funcoes = []
+for fator in (2, 3, 4):
+    funcoes.append(lambda v: v * fator)
+
+print([f(10) for f in funcoes])
+
+certas = []
+for fator in (2, 3, 4):
+    certas.append(lambda v, fator=fator: v * fator)
+
+print([f(10) for f in certas])
+
+from functools import partial
+
+
+def escala(fator, valor):
+    return valor * fator
+
+
+com_partial = [partial(escala, f) for f in (2, 3, 4)]
+print([f(10) for f in com_partial])
+print("fator depois do laco:", fator)
+```
+
+```bash
+python tardio.py
+```
+
+```text
+[40, 40, 40]
+[20, 30, 40]
+[20, 30, 40]
+fator depois do laco: 4
+```
+
+**10. Escopo de compreensão e de laço.**
+
+```bash
+python -c "
+quadrados = [n * n for n in range(3)]
+print(quadrados)
+try:
+    print(n)
+except NameError as e:
+    print('NameError:', e)
+for m in range(3):
+    pass
+print('depois do for, m =', m)
+"
+```
+
+```text
+[0, 1, 4]
+NameError: name 'n' is not defined
+depois do for, m = 2
+```
+
+**11. Olhe os dicionários de escopo.**
+
+```bash
+python -c "
+def f(a, b=2):
+    c = a + b
+    print('locals:', locals())
+f(1)
+g = 10
+print('g esta em globals:', 'g' in globals())
+print('len esta em builtins:', 'len' in dir(__builtins__))
+"
+```
+
+```text
+locals: {'a': 1, 'b': 2, 'c': 3}
+g esta em globals: True
+len esta em builtins: True
+```
+
+**12. Estado privado sem variável global.** Crie `acumulador.py`:
+
+```python
+"""Acumuladores de alarme por OLT, construidos com fechamento."""
+
+
+def criar_monitor(olt, limite=-28.0):
+    """Devolve (registrar, resumo) com estado privado por OLT."""
+    total = 0
+    criticas = []
+
+    def registrar(onu, nivel):
+        nonlocal total
+        total += 1
+        if nivel < limite:
+            criticas.append((onu, nivel))
+        return len(criticas)
+
+    def resumo():
+        pior = min(criticas, key=lambda par: par[1], default=None)
+        return {
+            "olt": olt,
+            "lidas": total,
+            "criticas": len(criticas),
+            "pior": pior,
+        }
+
+    return registrar, resumo
+
+
+norte, resumo_norte = criar_monitor("olt-norte")
+sul, resumo_sul = criar_monitor("olt-sul", limite=-30.0)
+
+for onu, nivel in [("onu-01", -19.5), ("onu-02", -31.2), ("onu-03", -28.4)]:
+    norte(onu, nivel)
+for onu, nivel in [("onu-04", -29.0), ("onu-05", -33.1)]:
+    sul(onu, nivel)
+
+print(resumo_norte())
+print(resumo_sul())
+print("estado e privado:", resumo_norte()["lidas"], "!=", resumo_sul()["lidas"])
+print("nomes livres de registrar:", norte.__code__.co_freevars)
+```
+
+```bash
+python acumulador.py
+```
+
+```text
+{'olt': 'olt-norte', 'lidas': 3, 'criticas': 2, 'pior': ('onu-02', -31.2)}
+{'olt': 'olt-sul', 'lidas': 2, 'criticas': 1, 'pior': ('onu-05', -33.1)}
+estado e privado: 3 != 2
+nomes livres de registrar: ('criticas', 'limite', 'total')
+```
+
+Duas OLTs, dois estados completamente separados, nenhuma variável global e nenhuma classe. As duas funções devolvidas por `criar_monitor` compartilham as **mesmas** células — é assim que `resumo` enxerga o que `registrar` acumulou — e as células de `norte` são outras que as de `sul`.
+
+Repare também que `criticas.append(...)` **não** precisou de `nonlocal`: mutar o objeto não é reatribuir o nome. Só `total`, que recebe `total += 1`, precisou da declaração. É a mesma distinção do @sec-cap018 entre mutar e reatribuir, agora do lado do escopo.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- Um nome atribuído em qualquer ponto do corpo de uma função é local na função **inteira**; ler antes da atribuição dá `UnboundLocalError`. A classificação é feita na compilação, e aparece em `co_varnames` e `co_names`.
+- A busca de nomes segue LEGB: Local, Enclosing, Global, Built-in — de dentro para fora, parando no primeiro que tiver o nome.
+- `global` manda a atribuição para o módulo; `nonlocal` para o escopo envolvente mais próximo. Mutar um objeto não exige nenhum dos dois: só reatribuir o nome exige.
+- Sombrear um embutido (`sum = 0`) não dá erro na hora — dá um `TypeError` confuso quando alguém tenta chamar o nome mais adiante.
+- Um closure é uma função que mantém vivas, em células, as variáveis do escopo em que nasceu. Cada chamada da função externa cria células novas.
+- A captura é da **variável**, não do valor: funções criadas dentro de um laço veem o último valor. A saída é `lambda ..., x=x:` ou `functools.partial`.
+- Compreensão tem escopo próprio; `for` de bloco não tem, e a variável do laço sobrevive a ele.
+- `locals()` e `globals()` servem para inspecionar, não para programar.
