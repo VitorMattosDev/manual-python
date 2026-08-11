@@ -1,3 +1,818 @@
 # Métodos de string, formatação e f-strings {#sec-cap013}
 
-*(em elaboracao)*
+O importador de clientes recebe URLs de portal com e sem esquema, e normaliza tudo removendo o `https://`. A linha existe há dois anos:
+
+```python
+url = "https://portal.exemplo.com"
+print(repr(url.lstrip("https://")))
+```
+
+```text
+'ortal.exemplo.com'
+```
+
+Sumiu o `p` de `portal`. E o caso seguinte é pior:
+
+```python
+print(repr("stackoverflow.com".lstrip("stack")))
+print(repr("relatorio.log".rstrip(".log")))
+```
+
+```text
+'overflow.com'
+'relatori'
+```
+
+`stackoverflow.com` virou `overflow.com`, e `relatorio.log` perdeu o `o` do nome além da extensão.
+
+O motivo é que **`strip`, `lstrip` e `rstrip` não recebem um prefixo: recebem um conjunto de caracteres**. `lstrip("https://")` significa "remova do começo, um a um, todo caractere que esteja no conjunto `{h, t, p, s, :, /}`, até encontrar um que não esteja". O `p` de `portal` está no conjunto, então foi. O `o` de `ortal` não está, e a remoção parou ali.
+
+Este capítulo cobre os métodos de `str` e as três formas de formatar texto. É o capítulo de consulta do volume — e o que tem a maior densidade de armadilhas por linha.
+
+## `strip` é um conjunto, não um prefixo
+
+::: {#fig-strip-conjunto}
+```{.tikz}
+%%| filename: strip-conjunto
+%%| alt: O metodo lstrip recebe um conjunto de caracteres e remove da esquerda enquanto encontrar membros desse conjunto, o que consome tambem o p de portal
+\begin{tikzpicture}[
+  ch/.style={draw=manualgray, thick, fill=white,
+             minimum width=0.52cm, minimum height=0.72cm,
+             font=\ttfamily\small, inner sep=1pt},
+  chg/.style={draw=manualred, very thick, fill=manualred!14,
+              minimum width=0.52cm, minimum height=0.72cm,
+              font=\ttfamily\small, inner sep=1pt},
+  chs/.style={draw=manualgreen, very thick, fill=manualgreen!12,
+              minimum width=0.52cm, minimum height=0.72cm,
+              font=\ttfamily\small, inner sep=1pt},
+  cj/.style={draw=manualred, thick, rounded corners, fill=manualred!8,
+             font=\ttfamily\small, minimum height=0.7cm, inner xsep=8pt},
+  lb/.style={font=\scriptsize, align=center, text=manualgray},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-1.2, 2.55) rectangle (13.0,-2.6);
+
+  \node[cj] at (1.9, 2.05) {conjunto = \{ h, t, p, s, :, / \}};
+  \node[lb, anchor=west, text width=6.2cm] at (4.2, 2.05)
+    {a string \texttt{"https://"} vira este conjunto --- a ordem não importa};
+
+  \foreach \cc [count=\ii from 0] in {h,t,t,p,s,{:},{/},{/},p}
+    { \node[chg] at (0.55*\ii, 0.75) {\cc}; }
+  \foreach \cc [count=\jj from 9] in
+      {o,r,t,a,l,{.},e,x,e,m,p,l,o,{.},c,o,m}
+    { \node[chs] at (0.55*\jj, 0.75) {\cc}; }
+
+  \draw[fl, manualred] (-0.4,-0.05) -- (4.6,-0.05);
+  \node[lb, text=manualred, text width=5.2cm] at (2.1,-0.75)
+    {removidos: nove caracteres, e o nono é o \textbf{p} de \texttt{portal}};
+  \node[lb, text=manualgreen, anchor=west, text width=5.4cm] at (5.1,-0.35)
+    {parou no \texttt{o}, que não está no conjunto};
+
+  \node[lb, text width=13.0cm] at (5.5,-1.9)
+    {\texttt{"https://portal.exemplo.com".lstrip("https://")}
+     devolve \texttt{'ortal.exemplo.com'}\\
+     o que você queria é
+     \texttt{.removeprefix("https://")}, que compara a \textbf{sequência} inteira};
+\end{tikzpicture}
+```
+`lstrip` consome caracteres do conjunto até achar um que não pertence.
+:::
+
+A correção existe desde o **Python 3.9** (PEP 616):
+
+```python
+print(repr(url.removeprefix("https://")))
+print(repr("relatorio.log".removesuffix(".log")))
+```
+
+```text
+'portal.exemplo.com'
+'relatorio'
+```
+
+`removeprefix` compara a sequência inteira e, se ela não estiver lá, devolve a string intacta — sem exceção e sem estrago. Antes do 3.9, o idioma correto era `s[len(p):] if s.startswith(p) else s`.
+
+Onde `strip` é a ferramenta certa: **limpar espaço em branco**, que é o uso para o qual ele existe. Sem argumento, remove qualquer espaço, tabulação e quebra de linha das pontas:
+
+```python
+t = "  \t leitura \n "
+print(repr(t.strip()), repr(t.lstrip()), repr(t.rstrip()))
+```
+
+```text
+'leitura' 'leitura \n ' '  \t leitura'
+```
+
+## Os métodos, por família
+
+### Caixa
+
+```python
+s = "Relatório de Leituras"
+print(s.upper())
+print(s.lower())
+print(s.title())
+print(s.capitalize())
+```
+
+```text
+RELATÓRIO DE LEITURAS
+relatório de leituras
+Relatório De Leituras
+Relatório de leituras
+```
+
+`title()` põe maiúscula em toda palavra, inclusive em `De` — quase nunca é o que se quer em português. Para comparação sem diferenciar caixa, o método certo **não** é `lower()`:
+
+```python
+print("straße".lower() == "STRASSE".lower())
+print("straße".casefold() == "STRASSE".casefold())
+```
+
+```text
+False
+True
+```
+
+`casefold()` é uma normalização mais agressiva, feita para comparação: ele sabe que o `ß` alemão equivale a `ss`. Regra: `lower()` para exibir, `casefold()` para comparar.
+
+### Busca e substituição
+
+```python
+linha = "2026-03-11 06:47:55 CHACARA-DO-ZE -18.4 OK"
+
+print(linha.find("CHACARA"), linha.find("ZZZ"))
+print(linha.startswith("2026"), linha.endswith("OK"))
+print(linha.startswith(("2025", "2026")))
+print(linha.count("-"))
+print(linha.replace("-", "/", 2))
+```
+
+```text
+20 -1
+True True
+True
+5
+2026/03/11 06:47:55 CHACARA-DO-ZE -18.4 OK
+```
+
+Três coisas para guardar. `find` devolve `-1` quando não acha, enquanto `index` levanta `ValueError` — prefira `index` quando a ausência for erro, para não deixar um `-1` virar índice válido. `startswith` e `endswith` aceitam uma **tupla** de opções, o que evita encadear `or`. E `replace` aceita um limite de substituições.
+
+### Divisão e junção
+
+```python
+print("a,b,,c".split(","))
+print("a b  c".split())
+print("a b  c".split(" "))
+```
+
+```text
+['a', 'b', '', 'c']
+['a', 'b', 'c']
+['a', 'b', '', 'c']
+```
+
+`split()` **sem argumento** é um método diferente de `split(" ")`: ele quebra em qualquer sequência de espaço em branco, descarta os vazios e ignora as pontas. É o que você quer para texto humano. Com separador explícito, cada ocorrência gera um campo — inclusive vazios, que é o que você quer para CSV.
+
+```python
+print("chave=valor=x".partition("="))
+print("chave=valor=x".rpartition("="))
+print("a,b,c".split(",", 1))
+```
+
+```text
+('chave', '=', 'valor=x')
+('chave=valor', '=', 'x')
+['a', 'b,c']
+```
+
+`partition` divide na **primeira** ocorrência e devolve sempre uma tupla de três elementos, mesmo quando não acha — o que dispensa checar tamanho antes de desempacotar. Para `chave=valor` com `=` no valor, é a ferramenta certa.
+
+E `splitlines` entende as quebras de linha de todos os sistemas e não deixa vazio no fim:
+
+```python
+print("l1\nl2\n".splitlines())
+print("l1\nl2\n".split("\n"))
+```
+
+```text
+['l1', 'l2']
+['l1', 'l2', '']
+```
+
+`join` já apareceu no @sec-cap012 e exige que todos os itens sejam `str`:
+
+```python
+"-".join(["a", 1])
+```
+
+```text
+TypeError: sequence item 1: expected str instance, int found
+```
+
+A conversão vai dentro: `"-".join(str(x) for x in itens)`.
+
+### Testes de conteúdo
+
+Os métodos `is*` são o campo minado do módulo:
+
+```python
+for v in ["123", "12.3", "１２３", "²", "abc1", "", "café"]:
+    print(f"{v!r:<8} digit={v.isdigit()} decimal={v.isdecimal()} "
+          f"alpha={v.isalpha()} ascii={v.isascii()}")
+```
+
+```text
+'123'    digit=True decimal=True alpha=False ascii=True
+'12.3'   digit=False decimal=False alpha=False ascii=True
+'１２３'    digit=True decimal=True alpha=False ascii=True
+'²'      digit=True decimal=False alpha=False ascii=False
+'abc1'   digit=False decimal=False alpha=False ascii=True
+''       digit=False decimal=False alpha=False ascii=True
+'café'   digit=False decimal=False alpha=True ascii=False
+```
+
+Duas armadilhas de segurança aqui. `"12.3".isdigit()` é **falso** — o ponto não é dígito —, então `isdigit` não valida número decimal. E `"１２３".isdigit()` é **verdadeiro**: são os algarismos de largura total do japonês, que passam no teste e explodem em `int()`... ou pior, não explodem, porque `int()` os aceita. Para validar entrada numérica, o teste honesto é tentar converter:
+
+```python
+try:
+    valor = float(entrada)
+except ValueError:
+    ...
+```
+
+É o EAFP do @sec-cap007 outra vez. E note que `"".isalpha()` é falso — string vazia falha em todos os `is*`, o que é a resposta certa e às vezes esquecida.
+
+### Preenchimento e tradução
+
+```python
+print(repr("42".zfill(6)), repr("-42".zfill(6)))
+print(repr("ab".ljust(6, ".")), repr("ab".center(6, ".")))
+```
+
+```text
+'000042' '-00042'
+'ab....' '..ab..'
+```
+
+`zfill` é mais esperto que `rjust(6, "0")`: ele põe os zeros **depois** do sinal. Fora esse caso, prefira a mini-linguagem de formatação da próxima seção, que faz o mesmo dentro do molde.
+
+`translate` com `str.maketrans` troca vários caracteres numa passada só, e é a forma rápida de remover acentos quando a tabela é fixa:
+
+```python
+ACENTOS = str.maketrans("áàâãéêíóôõúüçÁÀÂÃÉÊÍÓÔÕÚÜÇ",
+                        "aaaaeeiooouucAAAAEEIOOOUUC")
+print("Configuração Ótima da Estação".translate(ACENTOS))
+```
+
+```text
+Configuracao Otima da Estacao
+```
+
+Funciona e é explícito. A alternativa geral, que não depende de tabela escrita à mão, usa `unicodedata` e é assunto do @sec-cap014.
+
+## Três formas de formatar
+
+Python tem três mecanismos de formatação, todos vivos e nenhum obsoleto por decreto:
+
+```python
+cliente, nivel = "chacara-do-ze", -18.4
+
+print("%s: %.1f dBm" % (cliente, nivel))
+print("{}: {:.1f} dBm".format(cliente, nivel))
+print(f"{cliente}: {nivel:.1f} dBm")
+```
+
+```text
+chacara-do-ze: -18.4 dBm
+chacara-do-ze: -18.4 dBm
+chacara-do-ze: -18.4 dBm
+```
+
+**`%`** é herança de C, do Python 1. Continua funcionando e ainda é o formato usado pelo módulo `logging` (por um bom motivo, adiante). Não use em código novo fora disso: ele confunde tupla com argumento único (`"%s" % (1, 2)` é `TypeError`) e não tem a mini-linguagem completa.
+
+**`.format()`** chegou no Python 2.6 e é o mecanismo completo. Ainda é a escolha certa quando o molde é **dado**, e não código — vindo de um arquivo de configuração, do banco ou de tradução.
+
+**f-string** chegou no Python 3.6 (PEP 498) e é o padrão para tudo o mais. É a mais legível, porque a expressão está onde ela aparece, e a mais rápida:
+
+```text
+caso A: interpolacao simples, sem spec
+  %                 104 ns  1.25x
+  .format()         227 ns  2.71x
+  f-string           84 ns  1.00x
+  concatenacao      128 ns  1.54x
+
+caso B: com especificacao de formato
+  %                 408 ns  1.10x
+  .format()         555 ns  1.50x
+  f-string          371 ns  1.00x
+```
+
+A f-string ganha porque não é chamada de função: o compilador a transforma em instruções de construção de string direto no bytecode.
+
+## A mini-linguagem de formatação
+
+`.format()` e f-strings compartilham a mesma especificação, que é a parte depois dos dois-pontos. Vale aprender uma vez.
+
+::: {#fig-format-spec}
+```{.tikz}
+%%| filename: format-spec
+%%| alt: Anatomia da especificacao de formato com os campos preenchimento, alinhamento, sinal, largura, agrupamento, precisao e tipo
+\begin{tikzpicture}[
+  pc/.style={draw=manualgray, thick, fill=manualblue!7, rounded corners=1pt,
+             minimum height=0.8cm, font=\ttfamily\small, inner xsep=5pt},
+  lb/.style={font=\tiny, text=manualgray, align=center, text width=1.9cm},
+  fl/.style={-,manualgray, thin},
+  ex/.style={font=\ttfamily\scriptsize, text=manualgray, align=left}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-7.0, 2.6) rectangle (7.0,-3.5);
+
+  \node[font=\ttfamily\large, anchor=east] at (-4.95, 1.35) {\{campo};
+  \node[pc, minimum width=1.0cm] (cv) at (-4.35, 1.35) {!r};
+  \node[font=\ttfamily\large] at (-3.55, 1.35) {:};
+  \node[pc, minimum width=0.85cm] (pr) at (-2.95, 1.35) {*};
+  \node[pc, minimum width=0.85cm] (al) at (-2.05, 1.35) {>};
+  \node[pc, minimum width=0.85cm] (si) at (-1.15, 1.35) {+};
+  \node[pc, minimum width=1.05cm] (lg) at (-0.15, 1.35) {10};
+  \node[pc, minimum width=0.85cm] (ag) at ( 0.85, 1.35) {,};
+  \node[pc, minimum width=1.15cm] (pe) at ( 1.90, 1.35) {.2};
+  \node[pc, minimum width=0.85cm] (tp) at ( 2.85, 1.35) {f};
+  \node[font=\ttfamily\large] at (3.55, 1.35) {\}};
+
+  \node[lb] at (-4.35, 2.25) {conversão\\\texttt{!r !s !a}};
+  \node[lb] at (-2.95,-0.05) {preenchimento};
+  \node[lb] at (-2.05, 2.25) {alinhamento\\\texttt{< > \^{} =}};
+  \node[lb] at (-1.15,-0.05) {sinal\\\texttt{+ - espaço}};
+  \node[lb] at (-0.15, 2.25) {largura\\mínima};
+  \node[lb] at ( 0.85,-0.05) {separador\\\texttt{, ou \_}};
+  \node[lb] at ( 1.90, 2.25) {precisão\\ou tamanho};
+  \node[lb] at ( 2.90,-0.05) {tipo};
+
+  \foreach \nn/\yy in {cv/1.85, al/1.85, lg/1.85, pe/1.85}
+    { \draw[fl] (\nn.north) -- +(0,0.25); }
+  \foreach \nn in {pr, si, ag, tp}
+    { \draw[fl] (\nn.south) -- +(0,-0.25); }
+
+  \node[ex, anchor=west] at (-6.4,-1.15)
+    {f"\{nivel:>8.1f\}"\ \ \ \ \ \ \ \ ->\ \ '\ \ \ -18.4'};
+  \node[ex, anchor=west] at (-6.4,-1.65)
+    {f"\{total:,.2f\}"\ \ \ \ \ \ \ \ ->\ \ '1,234,567.89'};
+  \node[ex, anchor=west] at (-6.4,-2.15)
+    {f"\{taxa:.1\%\}"\ \ \ \ \ \ \ \ \ \ ->\ \ '87.3\%'};
+  \node[ex, anchor=west] at (-6.4,-2.65)
+    {f"\{'ok':*\^{}10\}"\ \ \ \ \ \ \ \ ->\ \ '****ok****'};
+  \node[ex, anchor=west] at (-6.4,-3.15)
+    {f"\{255:\#x\}"\ \ \ \ \ \ \ \ \ \ \ \ ->\ \ '0xff'};
+\end{tikzpicture}
+```
+A especificação de formato, campo a campo. Tudo é opcional.
+:::
+
+Na prática:
+
+```python
+print(f"{42:5d}|", f"{42:<5d}|", f"{42:^5d}|", f"{42:05d}|")
+print(f"{1234567.891:,.2f}", f"{1234567.891:_.2f}")
+print(f"{0.1234:.1%}", f"{255:#x}", f"{255:#b}")
+print(f"{42:+d}", f"{-42:+d}")
+print(f"{'ok':*^10}")
+```
+
+```text
+   42| 42   |  42  | 00042|
+1,234,567.89 1_234_567.89
+12.3% 0xff 0b11111111
++42 -42
+****ok****
+```
+
+Números alinham à direita por padrão, texto à esquerda — o que é quase sempre o que se quer numa tabela. A largura pode vir de uma variável, com chaves aninhadas:
+
+```python
+larg = 8
+print(f"{'x':>{larg}}|")
+```
+
+```text
+       x|
+```
+
+E o objeto pode ter a sua própria linguagem de formato. `datetime` é o exemplo mais útil:
+
+```python
+import datetime
+
+agora = datetime.datetime(2026, 3, 11, 6, 47, 55)
+print(f"{agora:%d/%m/%Y %H:%M}")
+```
+
+```text
+11/03/2026 06:47
+```
+
+Isso funciona porque a especificação inteira é repassada ao `__format__` do objeto, tema do Volume 8.
+
+## Detalhes de f-string que valem saber
+
+**As três conversões.** `!s` chama `str()`, `!r` chama `repr()`, `!a` chama `ascii()`:
+
+```python
+n = "café"
+print(f"{n!r}", f"{n!s}", f"{n!a}")
+```
+
+```text
+'café' café 'caf\xe9'
+```
+
+Use `!r` em mensagem de erro e em log: ele mostra as aspas e revela espaço em branco invisível, que é exatamente o que você quer ver quando está depurando.
+
+**O `=` de depuração**, do Python 3.8, imprime a expressão junto com o valor:
+
+```python
+x = 5
+print(f"{x = }", f"{x*2 = }")
+```
+
+```text
+x = 5 x*2 = 10
+```
+
+É a forma mais rápida de instrumentar um trecho sem escrever o nome duas vezes.
+
+**Chave literal se escreve dobrada:**
+
+```python
+print(f"{{literal}} e {x}")
+```
+
+```text
+{literal} e 5
+```
+
+**Desde o Python 3.12** (PEP 701), a f-string aceita qualquer expressão dentro, incluindo as mesmas aspas e a barra invertida:
+
+```python
+d = {"cliente": "ze"}
+print(f"{d["cliente"]}")
+print(f"{'\n'.join(['a', 'b'])}")
+```
+
+```text
+ze
+a
+b
+```
+
+Nas versões anteriores as duas linhas eram `SyntaxError`. Se o seu código precisa rodar em 3.11 ou antes, continue usando aspas diferentes por dentro e por fora.
+
+## Quando o molde não é código
+
+f-string é **código compilado**, avaliado no lugar. Ela não serve para molde que vem de fora, e tentar fazer isso é uma vulnerabilidade: avaliar texto de terceiro como expressão dá acesso ao interior do programa.
+
+Para molde vindo de arquivo, banco ou tradução, as opções seguras são duas. `str.format` com um molde de dados:
+
+```python
+molde = "{cliente:<20}{nivel:>8.1f}"      # veio da configuração
+print(molde.format(cliente="ze", nivel=-18.4))
+```
+
+```text
+ze                     -18.4
+```
+
+Ou `string.Template`, que é deliberadamente burro — só substitui `$nome`, sem chamar método nem acessar atributo:
+
+```python
+from string import Template
+
+t = Template("Cliente $cliente teve $n quedas")
+print(t.substitute(cliente="ze", n=3))
+print(t.safe_substitute(cliente="ze"))
+```
+
+```text
+Cliente ze teve 3 quedas
+Cliente ze teve $n quedas
+```
+
+`substitute` levanta `KeyError` se faltar chave; `safe_substitute` deixa o marcador como está. Quando o molde é escrito por um usuário, `Template` é a escolha, porque `str.format` ainda permite alcançar atributos (`{obj.__class__}`) e vazar informação.
+
+## 🐍 Jeito Pythônico
+
+**f-string por padrão; `.format()` quando o molde é dado; `%` só no `logging`.**
+
+O caso do `logging` merece explicação, porque parece inconsistência:
+
+```python
+# antipadrão
+logging.debug(f"leitura de {cliente}: {nivel:.1f}")
+```
+
+```python
+# pythônico
+logging.debug("leitura de %s: %.1f", cliente, nivel)
+```
+
+Com a f-string, a string é montada **sempre**, mesmo quando o nível `DEBUG` está desligado e a mensagem vai direto para o lixo. Com os `%` e os argumentos separados, o `logging` só monta se for realmente registrar. Num laço quente com log de depuração desligado, a diferença é medível. O Volume 9 volta a isso.
+
+**`removeprefix`/`removesuffix`, nunca `strip`, para tirar prefixo ou sufixo.** É o assunto da abertura e provavelmente o erro mais comum deste capítulo em código real.
+
+**`split()` sem argumento para texto de humano, com argumento para formato de máquina.** E `partition` quando o separador pode aparecer no valor.
+
+**Valide convertendo, não com `is*`.** `isdigit` aceita algarismo de largura total e recusa ponto decimal; `try: float(x) except ValueError:` é honesto.
+
+**`casefold()` para comparar, `lower()` para exibir.** E, se a comparação for de dado do usuário, o @sec-cap014 acrescenta a normalização Unicode que falta.
+
+**Não construa comando, consulta ou HTML por concatenação.** Vale repetir do capítulo anterior porque aqui a tentação é maior: `f"SELECT * FROM x WHERE id = {entrada}"` é injeção de SQL, e a f-string a torna curta e bonita. Parâmetros de consulta no Volume 10, `subprocess` com lista no Volume 12, template com escapamento no Volume 14.
+
+Um antipadrão discreto de alinhamento:
+
+```python
+# antipadrão: conta o preenchimento na mão
+print(cliente + " " * (20 - len(cliente)) + str(nivel))
+```
+
+```python
+# pythônico
+print(f"{cliente:<20}{nivel:>8.1f}")
+```
+
+Sobre versões:
+
+- **Python 2.6** — `str.format` e a mini-linguagem.
+- **Python 3.6** — f-strings (PEP 498) e separador `_` em números formatados.
+- **Python 3.8** — o `=` de depuração dentro da f-string.
+- **Python 3.9** — `str.removeprefix` e `str.removesuffix` (PEP 616).
+- **Python 3.12** — f-strings sem restrição de aspas e barra invertida (PEP 701).
+- **Python 3.14** — t-strings (PEP 750), moldes que devolvem um objeto em vez de uma string pronta, para que a biblioteca faça o escapamento certo. É a resposta estrutural para injeção de SQL e HTML, e ainda estava chegando ao ecossistema quando este livro foi escrito.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o estrago do `strip`, percorrer as famílias de métodos, dominar a mini-linguagem de formatação e produzir um relatório alinhado de verdade.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab13 && cd ~/lab13
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza a abertura.**
+
+```bash
+python -c "
+url = 'https://portal.exemplo.com'
+print(repr(url.lstrip('https://')))
+print(repr(url.removeprefix('https://')))
+print(repr('stackoverflow.com'.lstrip('stack')))
+print(repr('relatorio.log'.rstrip('.log')))
+print(repr('relatorio.log'.removesuffix('.log')))
+"
+```
+
+```text
+'ortal.exemplo.com'
+'portal.exemplo.com'
+'overflow.com'
+'relatori'
+'relatorio'
+```
+
+Escreva o conjunto de caracteres de `"stack"` e confirme, letra a letra, por que `stackoverflow` perdeu justamente cinco caracteres.
+
+**3. `strip` no uso para o qual serve.**
+
+```bash
+python -c "
+t = '  \t leitura \n '
+print(repr(t.strip()), repr(t.lstrip()), repr(t.rstrip()))
+print(repr('  -18.4  '.strip()))
+"
+```
+
+```text
+'leitura' 'leitura \n ' '  \t leitura'
+'-18.4'
+```
+
+**4. Caixa e comparação.**
+
+```bash
+python -c "
+print('straße'.lower() == 'STRASSE'.lower())
+print('straße'.casefold() == 'STRASSE'.casefold())
+print('relatório de leituras'.title())
+"
+```
+
+```text
+False
+True
+Relatório De Leituras
+```
+
+O `De` maiúsculo mostra por que `title()` quase nunca serve para português.
+
+**5. `split` tem dois comportamentos.**
+
+```bash
+python -c "
+print('a b  c'.split())
+print('a b  c'.split(' '))
+print('a,b,,c'.split(','))
+print('chave=valor=x'.partition('='))
+print('l1\nl2\n'.splitlines(), 'l1\nl2\n'.split('\n'))
+"
+```
+
+```text
+['a', 'b', 'c']
+['a', 'b', '', 'c']
+['a', 'b', '', 'c']
+('chave', '=', 'valor=x')
+['l1', 'l2'] ['l1', 'l2', '']
+```
+
+**6. O campo minado dos `is*`.**
+
+```bash
+python -c "
+for v in ['123', '12.3', '１２３', '²', '', 'café']:
+    print(f'{v!r:<8} digit={v.isdigit()} decimal={v.isdecimal()} numeric={v.isnumeric()} ascii={v.isascii()}')
+print(int('１２３'), float('12.3'))
+"
+```
+
+```text
+'123'    digit=True decimal=True numeric=True ascii=True
+'12.3'   digit=False decimal=False numeric=False ascii=True
+'１２３'    digit=True decimal=True numeric=True ascii=False
+'²'      digit=True decimal=False numeric=True ascii=False
+''       digit=False decimal=False numeric=False ascii=True
+'café'   digit=False decimal=False numeric=False ascii=False
+```
+
+```text
+123 12.3
+```
+
+A última linha é o que assusta: `int()` **aceita** os algarismos japoneses de largura total. Um formulário que valida com `isdigit` e converte com `int` aceita entrada que ninguém previu.
+
+**7. Percorra a mini-linguagem.**
+
+```bash
+python -c "
+print(f'{42:5d}|', f'{42:<5d}|', f'{42:^5d}|', f'{42:05d}|')
+print(f'{1234567.891:,.2f}', f'{1234567.891:_.2f}')
+print(f'{0.1234:.1%}', f'{255:#x}', f'{255:#b}', f'{255:o}')
+print(f'{3.14159:.3f}', f'{3.14159:10.3f}|', f'{1e6:e}', f'{1e6:g}')
+print(f'{42:+d}', f'{42: d}', f'{-42:+d}')
+print(f\"{'ok':*^10}\")
+"
+```
+
+```text
+   42| 42   |  42  | 00042|
+1,234,567.89 1_234_567.89
+12.3% 0xff 0b11111111 377
+3.142      3.142| 1.000000e+06 1e+06
++42  42 -42
+****ok****
+```
+
+**8. Depuração com `=` e `!r`.**
+
+```bash
+python -c "
+n = 'café  '
+print(f'{n = }')
+print(f'{n!r}', f'{n!s}', f'{n!a}')
+"
+```
+
+```text
+n = 'café  '
+'café  ' café   'caf\xe9  '
+```
+
+Repare como o `!r` denuncia os dois espaços do fim, que o `!s` esconde. É a razão de usar `!r` em log.
+
+**9. f-string do 3.12.**
+
+```bash
+python -c "
+d = {'cliente': 'ze'}
+print(f'{d[\"cliente\"]}')
+"
+```
+
+```text
+ze
+```
+
+Em Python 3.11 essa linha seria `SyntaxError`.
+
+**10. Meça as três formas.** Crie `bench.py` com os dois casos do capítulo e rode:
+
+```text
+caso A: interpolacao simples, sem spec
+  %                 104 ns  1.25x
+  .format()         227 ns  2.71x
+  f-string           84 ns  1.00x
+  concatenacao      128 ns  1.54x
+
+caso B: com especificacao de formato
+  %                 408 ns  1.10x
+  .format()         555 ns  1.50x
+  f-string          371 ns  1.00x
+```
+
+Os seus números vão diferir. Confirme apenas a ordem: f-string na frente, `.format()` atrás.
+
+**11. `Template` para molde de fora.**
+
+```bash
+python -c "
+from string import Template
+t = Template('Cliente \$cliente teve \$n quedas')
+print(t.substitute(cliente='ze', n=3))
+print(t.safe_substitute(cliente='ze'))
+"
+```
+
+```text
+Cliente ze teve 3 quedas
+Cliente ze teve $n quedas
+```
+
+**12. Monte o relatório.** Crie `relatorio.py`:
+
+```python
+"""Relatorio alinhado de niveis opticos."""
+
+LEITURAS = [
+    ("chacara-do-ze", -18.4, "OK"),
+    ("sitio-mangueira", -21.75, "OK"),
+    ("fazenda-boa-vista", -7.0, "ALERTA"),
+]
+LARG = 20
+
+
+def emitir(leituras):
+    linhas = [
+        f"{'CLIENTE':<{LARG}}{'NIVEL':>8}  {'ESTADO':<8}",
+        "-" * (LARG + 18),
+    ]
+    linhas += [
+        f"{cliente:<{LARG}}{nivel:>8.1f}  {estado:<8}"
+        for cliente, nivel, estado in leituras
+    ]
+    media = sum(n for _, n, _ in leituras) / len(leituras)
+    linhas += ["-" * (LARG + 18), f"{'MEDIA':<{LARG}}{media:>8.1f}"]
+    return "\n".join(linhas)
+
+
+if __name__ == "__main__":
+    print(emitir(LEITURAS))
+```
+
+```bash
+python relatorio.py
+```
+
+```text
+CLIENTE                NIVEL  ESTADO
+--------------------------------------
+chacara-do-ze          -18.4  OK
+sitio-mangueira        -21.8  OK
+fazenda-boa-vista       -7.0  ALERTA
+--------------------------------------
+MEDIA                  -15.7
+```
+
+Três coisas aconteceram aqui. A largura veio de uma constante aninhada nas chaves, então mudar `LARG` realinha a tabela inteira. Os números alinharam à direita e o texto à esquerda, sem uma única conta de `len`. E a montagem foi por `join` sobre uma lista, como manda o @sec-cap012.
+
+Agora troque `LARG` para 25 e confirme que só o alinhamento muda. Depois substitua o nome de um cliente por um mais longo que `LARG` e observe: a largura é **mínima**, não máxima — o campo cresce e a coluna desalinha. Para truncar, a precisão em texto resolve: `f"{cliente:<{LARG}.{LARG}}"`.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- `strip`, `lstrip` e `rstrip` recebem um **conjunto de caracteres**, não um prefixo: `"https://portal".lstrip("https://")` come o `p` de `portal`. Para prefixo e sufixo, `removeprefix` e `removesuffix`, do Python 3.9.
+- `lower()` para exibir, `casefold()` para comparar. `title()` capitaliza toda palavra e quase nunca serve para português.
+- `find` devolve `-1`, `index` levanta `ValueError`. `startswith` e `endswith` aceitam tupla de opções.
+- `split()` sem argumento quebra em qualquer espaço e descarta vazios; com separador, cada ocorrência gera campo. `partition` divide na primeira ocorrência e sempre devolve três elementos.
+- Os métodos `is*` não validam número: `"12.3".isdigit()` é falso e `"１２３".isdigit()` é verdadeiro. Valide tentando converter.
+- As três formas de formatar compartilham a mesma mini-linguagem depois dos dois-pontos: preenchimento, alinhamento, sinal, largura, separador de milhar, precisão e tipo — tudo opcional, e a largura pode vir de variável.
+- f-string por padrão (mais legível e mais rápida); `.format()` quando o molde é dado; `%` no `logging`, para adiar a montagem da mensagem; `string.Template` quando o molde vem do usuário.
+- `!r` em mensagem de erro e log — ele revela espaço em branco invisível. `f"{x = }"` instrumenta um trecho sem repetir o nome.
