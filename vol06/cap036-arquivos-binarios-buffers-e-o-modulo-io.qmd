@@ -1,3 +1,839 @@
-# Arquivos binários, buffers e o módulo io {#sec-cap036}
+# Arquivos binários, buffers e o módulo `io` {#sec-cap036}
 
-*(em elaboracao)*
+O script de distribuição copiava o firmware da ONU do servidor para o pendrive do técnico. Copiava havia dois anos. Um dia, um equipamento se recusou a aceitar a imagem, e a comparação byte a byte explicou por quê:
+
+```bash
+ls -l firmware.bin copia-ruim.bin
+```
+
+```text
+-rw-r--r-- 1 vitor vitor 8210 Aug 11 20:34 copia-ruim.bin
+-rw-r--r-- 1 vitor vitor 4112 Aug 11 20:34 firmware.bin
+```
+
+A cópia tinha o dobro do tamanho do original. O script abria o arquivo em modo texto, com `errors="replace"` para "não dar erro" — e cada byte que não decodificava virava o caractere de substituição, que ocupa três bytes ao ser gravado de volta. O arquivo ficou maior, ficou diferente e continuou parecendo um arquivo.
+
+O @sec-cap035 tratou de texto, onde há um decodificador no caminho. Este capítulo tira essa camada e mostra o que sobra: bytes, uma posição e um buffer. É onde vivem firmware, imagem, `.zip`, captura de pacote, banco SQLite e qualquer formato que não seja feito de caracteres.
+
+## Modo binário: sem tradução
+
+Acrescentar `"b"` ao modo desliga a camada de texto. O que entra e sai são objetos `bytes`:
+
+```python
+with open("firmware.bin", "rb") as f:
+    print(f.read(24))
+```
+
+```text
+b'ONUFW\x01\x03\x02\x00\x10\x00\x00\xef\xbe\xad\xde\x00\x01\x02\x03\x04\x05\x06\x07'
+```
+
+```bash
+xxd -l 24 firmware.bin
+```
+
+```text
+00000000: 4f4e 5546 5701 0302 0010 0000 efbe adde  ONUFW...........
+00000010: 0001 0203 0405 0607                      ........
+```
+
+Os cinco primeiros bytes são a assinatura `ONUFW` em ASCII; o resto é número. Tentar ler isso como texto falha exatamente onde o número deixa de ser um caractere válido:
+
+```python
+with open("firmware.bin", encoding="utf-8") as f:
+    f.read()
+```
+
+```text
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xde in position 15: invalid continuation byte
+```
+
+E a cópia binária, que é o que o script deveria ter feito:
+
+```python
+with open("firmware.bin", "rb") as e, open("copia-boa.bin", "wb") as s:
+    s.write(e.read())
+
+import filecmp
+print("identicos?", filecmp.cmp("firmware.bin", "copia-boa.bin", shallow=False))
+```
+
+```text
+identicos? True
+```
+
+Em binário não há `encoding`, não há `newline` e não há tradução de `\r\n` — o que é o segundo motivo pelo qual copiar arquivo em modo texto corrompe, e o motivo clássico no Windows, onde o `\n` de dentro de um `.zip` viraria `\r\n`.
+
+Um lembrete do @sec-cap014, porque é a confusão que mais aparece: `bytes` não é `str` pequeno.
+
+```python
+b = b"ONUFW\x01"
+print("indexar :", b[0], type(b[0]).__name__)
+print("fatiar  :", b[0:5], type(b[0:5]).__name__)
+print("decode  :", b[0:5].decode("ascii"))
+print("hex     :", b.hex(" "))
+```
+
+```text
+indexar : 79 int
+fatiar  : b'ONUFW' bytes
+decode  : ONUFW
+hex     : 4f 4e 55 46 57 01
+```
+
+Indexar devolve um `int`; fatiar devolve `bytes`. E não há conversão implícita:
+
+```python
+print(b"ONUFW" + "texto")
+```
+
+```text
+TypeError: can't concat str to bytes
+```
+
+## A pilha do módulo `io`
+
+O objeto que `open` devolve muda conforme o modo — e essa mudança é a chave para entender todo o resto:
+
+```python
+casos = [("rb", {}), ("wb", {}), ("rb+", {}),
+         ("rb", {"buffering": 0}), ("r", {"encoding": "utf-8"})]
+for modo, extra in casos:
+    ...
+```
+
+```text
+rb    {}                     -> BufferedReader
+wb    {}                     -> BufferedWriter
+rb+   {}                     -> BufferedRandom
+rb    {'buffering': 0}       -> FileIO
+r     {'encoding': 'utf-8'}  -> TextIOWrapper
+```
+
+Cinco tipos diferentes para a mesma função. Eles não são alternativas: são camadas empilhadas uma sobre a outra.
+
+::: {#fig-pilha-io}
+```{.tikz}
+%%| filename: pilha-io
+%%| alt: As tres camadas do modulo io - FileIO cru sobre o descritor do sistema, BufferedReader ou BufferedWriter acumulando blocos, e TextIOWrapper decodificando bytes em caracteres - e qual delas cada chamada de open devolve
+\begin{tikzpicture}[
+  tx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=6.4cm, align=center, minimum height=1.15cm,
+             font=\ttfamily\small},
+  bf/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=6.4cm, align=center, minimum height=1.15cm,
+             font=\ttfamily\small},
+  rw/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!22, text width=6.4cm, align=center,
+             minimum height=1.15cm, font=\ttfamily\small},
+  os/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+             text width=6.4cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\small},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  fl/.style={<->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.4) rectangle (15.0,-4.3);
+
+  \node[tx]  at (3.4, 3.4) {TextIOWrapper};
+  \node[bf]  at (3.4, 1.7) {BufferedReader / BufferedWriter};
+  \node[rw]  at (3.4, 0.0) {FileIO};
+  \node[os]  at (3.4,-1.7) {descritor do sistema (fileno)};
+  \node[os, draw=manualgray!60] at (3.4,-3.4) {disco, cano, socket};
+
+  \draw[fl] (3.4, 2.75) -- (3.4, 2.35);
+  \draw[fl] (3.4, 1.05) -- (3.4, 0.65);
+  \draw[fl] (3.4,-0.65) -- (3.4,-1.15);
+  \draw[fl] (3.4,-2.25) -- (3.4,-2.85);
+
+  \node[lb, text width=7.4cm] at (7.2, 3.4)
+    {\textbf{decodifica} bytes em \texttt{str} e traduz quebras de linha ---
+     é o que \texttt{open(...)} devolve em modo texto};
+  \node[lb, text width=7.4cm] at (7.2, 1.7)
+    {\textbf{acumula} para não pedir dois bytes ao núcleo ---
+     \texttt{"rb"}, \texttt{"wb"}, \texttt{"rb+"} param aqui};
+  \node[lb, text width=7.4cm] at (7.2, 0.0)
+    {uma chamada de sistema por operação --- só com
+     \texttt{buffering=0}, e só em binário};
+  \node[lb, text width=7.4cm] at (7.2,-1.7)
+    {o inteiro que o processo guarda; \texttt{os.fsync} age aqui};
+  \node[lb, text width=7.4cm] at (7.2,-3.4)
+    {onde os bytes ficam de verdade};
+
+  \node[lb, text width=6.4cm, align=left, anchor=north west] at (-0.4,-3.9)
+    {De cima para baixo: \texttt{f.buffer} desce um degrau,
+     \texttt{f.buffer.raw} desce dois.};
+\end{tikzpicture}
+```
+As camadas do módulo `io`. Cada modo de `open` para num degrau diferente.
+:::
+
+E a pilha é visível a partir de qualquer nível:
+
+```python
+f = open("firmware.bin", "rb")
+print("objeto      :", f)
+print("f.raw       :", f.raw)
+print("fileno      :", f.fileno())
+
+t = open("texto.txt", encoding="utf-8")
+print("texto       :", t)
+print("t.buffer    :", t.buffer)
+print("t.buffer.raw:", t.buffer.raw)
+```
+
+```text
+objeto      : <_io.BufferedReader name='firmware.bin'>
+f.raw       : <_io.FileIO name='firmware.bin' mode='rb' closefd=True>
+fileno      : 3
+texto       : <_io.TextIOWrapper name='texto.txt' mode='r' encoding='utf-8'>
+t.buffer    : <_io.BufferedReader name='texto.txt'>
+t.buffer.raw: <_io.FileIO name='texto.txt' mode='rb' closefd=True>
+```
+
+Um arquivo de texto **é** um `BufferedReader` com um decodificador por cima. É por isso que `sys.stdout.buffer` existe: quando você precisa escrever bytes na saída padrão, desce um degrau.
+
+```python
+import sys
+sys.stdout.write("texto normal\n")
+sys.stdout.flush()
+sys.stdout.buffer.write(b"bytes crus: \xc3\xa7\xc3\xa3o\n")
+sys.stdout.buffer.flush()
+```
+
+```text
+texto normal
+bytes crus: ção
+```
+
+A camada de texto não existe sem buffer por baixo, e o Python recusa a combinação:
+
+```python
+open("texto.txt", "r", buffering=0, encoding="utf-8")
+```
+
+```text
+ValueError: can't have unbuffered text I/O
+```
+
+## Para que serve o buffer
+
+A camada do meio parece burocracia até você medir. Lendo 6,3 MiB de 64 em 64 bytes, com e sem ela:
+
+```python
+f = open("grande.bin", "rb", buffering=buffering)
+while bloco := f.read(64):
+    n += len(bloco)
+```
+
+```bash
+strace -c -e trace=read python3 contar.py cru
+strace -c -e trace=read python3 contar.py bufferizado
+```
+
+```text
+--- buffering=0 (FileIO cru) ---
+% time     seconds  usecs/call     calls    errors syscall
+100.00    2.014503          19    102437           read
+--- buffer padrao (BufferedReader) ---
+% time     seconds  usecs/call     calls    errors syscall
+100.00    0.025767          15      1637           read
+```
+
+Cento e dois mil chamadas de sistema contra mil seiscentas e trinta e sete. O `BufferedReader` pede 8192 bytes de uma vez (`io.DEFAULT_BUFFER_SIZE`) e serve os seus `read(64)` da memória. No relógio:
+
+```text
+buffering=0:
+  tempo: 0.135 s
+com buffer:
+  tempo: 0.032 s
+```
+
+Na escrita a economia é da mesma ordem — dois mil `write` de 64 bytes viram trinta e dois:
+
+```text
+--- buffering=0 ---
+100.00    0.033017          16      2000           write
+--- buffer padrao ---
+100.00    0.000442          13        32           write
+```
+
+Chamada de sistema é cara porque atravessa a fronteira entre o seu processo e o núcleo. Todo o trabalho do `BufferedReader` é fazer poucas e grandes em vez de muitas e pequenas.
+
+Isso tem a contrapartida que o capítulo anterior já mostrou, agora com as camadas nomeadas:
+
+```python
+import os
+
+f = open("camadas.bin", "wb")
+f.write(b"A" * 10)
+print("apos write     :", os.path.getsize("camadas.bin"), "bytes no disco")
+f.flush()
+print("apos flush     :", os.path.getsize("camadas.bin"), "bytes no disco")
+os.fsync(f.fileno())
+
+g = open("semb.bin", "wb", buffering=0)
+g.write(b"A" * 10)
+print("com buffering=0:", os.path.getsize("semb.bin"), "bytes no disco, sem flush")
+```
+
+```text
+apos write     : 0 bytes no disco
+apos flush     : 10 bytes no disco
+com buffering=0: 10 bytes no disco, sem flush
+```
+
+`flush` empurra do buffer do Python para o núcleo; `os.fsync` empurra do cache do núcleo para o dispositivo. São camadas diferentes, e só as duas juntas significam "está gravado".
+
+## Posição: `seek` e `tell`
+
+Em binário, a posição é um número de bytes, exato e confiável — ao contrário do modo texto, onde caractere não tem tamanho fixo. É isso que torna possível ler o cabeçalho de um arquivo de 4 GiB sem carregar 4 GiB.
+
+::: {#fig-seek-binario}
+```{.tikz}
+%%| filename: seek-binario
+%%| alt: A posicao dentro de um arquivo binario de 4112 bytes e os tres pontos de referencia do seek - inicio, posicao atual e fim - com os offsets do cabecalho do firmware
+\begin{tikzpicture}[
+  seg/.style={draw=manualblue, very thick, fill=manualblue!11,
+              minimum height=1.0cm, font=\ttfamily\scriptsize},
+  hdr/.style={draw=manualgreen, very thick, fill=manualgreen!14,
+              minimum height=1.0cm, font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west},
+  fl/.style={->,>=stealth, thick, manualred}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.3) rectangle (15.0,-4.6);
+
+  \node[hdr, minimum width=2.0cm] at (1.2, 0.0) {ONUFW\textbackslash x01};
+  \node[hdr, minimum width=1.4cm, fill=manualgreen!24] at (2.9, 0.0) {versão};
+  \node[hdr, minimum width=1.8cm, fill=manualgreen!24] at (4.5, 0.0) {tamanho};
+  \node[hdr, minimum width=1.8cm, fill=manualgreen!24] at (6.3, 0.0) {CRC};
+  \node[seg, minimum width=7.0cm] at (10.7, 0.0) {corpo do firmware};
+
+  \node[lb] at (1.2,-0.9) {6 bytes};
+  \node[lb] at (2.9,-0.9) {2};
+  \node[lb] at (4.5,-0.9) {4};
+  \node[lb] at (6.3,-0.9) {4};
+  \node[lb] at (10.7,-0.9) {4096 bytes};
+
+  \node[lb, font=\ttfamily\scriptsize] at (0.2,-1.6) {0};
+  \node[lb, font=\ttfamily\scriptsize] at (2.2,-1.6) {6};
+  \node[lb, font=\ttfamily\scriptsize] at (7.2,-1.6) {16};
+  \node[lb, font=\ttfamily\scriptsize] at (14.2,-1.6) {4112};
+
+  \draw[fl] (0.2, 1.9) -- (0.2, 0.6);
+  \node[lb, text width=3.4cm] at (1.6, 2.5) {\texttt{f.seek(0)}\\
+    ou \texttt{f.seek(0, 0)}};
+
+  \draw[fl] (7.2, 1.9) -- (7.2, 0.6);
+  \node[lb, text width=4.0cm] at (7.2, 2.6) {\texttt{f.seek(6)} e depois
+    \texttt{f.read(10)} deixam a posição aqui};
+
+  \draw[fl] (14.2, 1.9) -- (14.2, 0.6);
+  \node[lb, text width=3.2cm] at (13.4, 2.6) {\texttt{f.seek(-4, 2)}\\
+    conta do fim};
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.2)
+    {O segundo argumento de \texttt{seek} é o ponto de referência:
+     \texttt{os.SEEK\_SET} (0) é o início, \texttt{os.SEEK\_CUR} (1) é a posição
+     atual, \texttt{os.SEEK\_END} (2) é o fim --- e só faz sentido com
+     deslocamento negativo. Em modo \textbf{texto}, os pontos 1 e 2 só aceitam
+     deslocamento zero, e o argumento de \texttt{seek} não é contagem de
+     caractere: é um valor opaco que só o próprio \texttt{tell} produz.};
+\end{tikzpicture}
+```
+A posição dentro de um arquivo binário e os três pontos de referência do `seek`.
+:::
+
+Lendo o cabeçalho pelos deslocamentos:
+
+```python
+import struct
+
+with open("firmware.bin", "rb") as f:
+    print("assinatura :", f.read(5))
+    print("tell       :", f.tell())
+    f.seek(6)
+    versao, tamanho, crc = struct.unpack("<HII", f.read(10))
+    print(f"versao     : 0x{versao:04x}")
+    print(f"tamanho    : {tamanho}")
+    print(f"crc        : 0x{crc:08x}")
+    f.seek(-4, 2)
+    print("ultimos 4  :", f.read())
+    print("tell no fim:", f.tell())
+```
+
+```text
+assinatura : b'ONUFW'
+tell       : 5
+versao     : 0x0203
+tamanho    : 4096
+crc        : 0xdeadbeef
+ultimos 4  : b'\xfc\xfd\xfe\xff'
+tell no fim: 4112
+```
+
+Note que ler quatro mil e cento e doze bytes de firmware para descobrir a versão seria desperdício: `seek` mais `read(10)` resolvem com duas chamadas.
+
+O `struct` traduz entre bytes e números, e o primeiro caractere do formato é a ordem: `<` para *little endian* (o de x86 e ARM), `>` para *big endian* (o da rede):
+
+```python
+import struct
+print("int -> bytes :", struct.pack("<I", 4096))
+print("bytes -> int :", struct.unpack("<I", b"\x00\x10\x00\x00"))
+print("big endian   :", struct.pack(">I", 4096))
+print("calcsize <HII:", struct.calcsize("<HII"))
+```
+
+```text
+int -> bytes : b'\x00\x10\x00\x00'
+bytes -> int : (4096,)
+big endian   : b'\x00\x00\x10\x00'
+calcsize <HII: 10
+```
+
+Repare que `unpack` sempre devolve tupla, mesmo com um campo só. Para um inteiro isolado, os métodos de `int` dispensam o módulo:
+
+```python
+print("sem struct :", (4096).to_bytes(4, "little"))
+print("de volta   :", int.from_bytes(b"\x00\x10\x00\x00", "little"))
+```
+
+```text
+sem struct : b'\x00\x10\x00\x00'
+de volta   : 4096
+```
+
+O `struct` completo, com alinhamento e formatos de registro, é assunto do Volume 10.
+
+Em modo texto, o `seek` relativo é proibido — e a mensagem diz exatamente isso:
+
+```python
+with open("texto.txt", encoding="utf-8") as f:
+    f.seek(1, 1)
+```
+
+```text
+io.UnsupportedOperation: can't do nonzero cur-relative seeks
+```
+
+E `truncate` corta o arquivo no tamanho pedido:
+
+```python
+with open("corta.bin", "rb+") as f:
+    f.truncate(8)
+print(open("corta.bin", "rb").read())
+```
+
+```text
+b'\x00\x01\x02\x03\x04\x05\x06\x07'
+```
+
+## Ler em blocos
+
+Nenhum programa sério lê um arquivo binário grande com `read()` sem argumento. O padrão é o laço com o operador morsa (PEP 572, Python 3.8), que aproveita o fato de `read` devolver `b""` no fim:
+
+```python
+import hashlib
+
+BLOCO = 64 * 1024
+
+
+def resumo(caminho):
+    h = hashlib.sha256()
+    lidos = 0
+    with open(caminho, "rb") as f:
+        while pedaco := f.read(BLOCO):
+            h.update(pedaco)
+            lidos += 1
+    return h.hexdigest(), lidos
+```
+
+```text
+firmware.bin      1 bloco(s)  04680067f61e8deebb0986b92c036bc6...
+grande.bin      100 bloco(s)  8b60a4ab8149bc68261ab1a2c9eed6dd...
+```
+
+```bash
+sha256sum firmware.bin grande.bin
+```
+
+```text
+04680067f61e8deebb0986b92c036bc6
+8b60a4ab8149bc68261ab1a2c9eed6dd
+```
+
+Os mesmos resumos que a ferramenta do sistema calcula. E a diferença de memória entre as estratégias, no arquivo de 6,3 MiB:
+
+```text
+read() inteiro: 6.3 MiB de pico
+em blocos     : 0.1 MiB de pico
+readinto      : 69.5 KiB de pico
+```
+
+A terceira linha é o degrau seguinte. `read(n)` **aloca** um `bytes` novo a cada volta; `readinto` escreve num buffer que você já tem:
+
+```python
+buf = bytearray(16)
+with open("firmware.bin", "rb") as f:
+    n = f.readinto(buf)
+print("readinto devolveu:", n)
+print("buf              :", bytes(buf))
+```
+
+```text
+readinto devolveu: 16
+buf              : b'ONUFW\x01\x03\x02\x00\x10\x00\x00\xef\xbe\xad\xde'
+```
+
+O `bytearray` é a versão mutável de `bytes`, e o `memoryview` dá uma janela sobre ele sem copiar nada:
+
+```python
+vista = memoryview(buf)
+print("fatia sem copia :", bytes(vista[6:8]))
+vista[0:5] = b"XXXXX"
+print("buf alterado    :", bytes(buf))
+```
+
+```text
+fatia sem copia : b'\x03\x02'
+buf alterado    : b'XXXXX\x01\x03\x02\x00\x10\x00\x00\xef\xbe\xad\xde'
+```
+
+Fatiar `bytes` copia; fatiar `memoryview` não. Num laço que processa gibibytes em blocos, é a diferença entre alocar uma vez e alocar cem mil vezes:
+
+```python
+h = hashlib.sha256()
+buf = bytearray(65536)
+vista = memoryview(buf)
+with open("grande.bin", "rb") as f:
+    while n := f.readinto(buf):
+        h.update(vista[:n])
+```
+
+O detalhe que faz esse laço funcionar: `readinto` devolve **quantos** bytes foram lidos, e o último bloco quase nunca preenche o buffer inteiro. `h.update(buf)` sem o corte processaria lixo da volta anterior — é um bug clássico, silencioso, e que só aparece quando o tamanho do arquivo não é múltiplo do bloco.
+
+Isto é otimização, e vale a regra do @sec-cap028: escreva o laço com `read(BLOCO)` primeiro; troque por `readinto` quando a medição justificar.
+
+## Arquivos que não existem: `BytesIO` e `StringIO`
+
+O módulo `io` também oferece as duas camadas de topo sobre memória em vez de disco:
+
+```python
+import io
+
+buf = io.BytesIO()
+buf.write(b"ONUFW\x01")
+buf.write(b"\x03\x02")
+print("tipo      :", type(buf).__name__)
+print("posicao   :", buf.tell())
+print("getvalue():", buf.getvalue())
+buf.seek(0)
+print("read(5)   :", buf.read(5))
+
+texto = io.StringIO()
+print("linha 1", file=texto)
+print("linha 2", file=texto)
+print("StringIO  :", repr(texto.getvalue()))
+```
+
+```text
+tipo      : BytesIO
+posicao   : 8
+getvalue(): b'ONUFW\x01\x03\x02'
+read(5)   : b'ONUFW'
+StringIO  : 'linha 1\nlinha 2\n'
+```
+
+Eles têm exatamente a interface de um arquivo aberto — `read`, `write`, `seek`, `tell` —, e é isso que os torna úteis em dois lugares:
+
+**Em teste.** Uma função que recebe um objeto de arquivo em vez de um caminho pode ser testada sem tocar no disco:
+
+```python
+falso = io.BytesIO(b"\x89PNG\r\n\x1a\nresto")
+print("assinatura :", falso.read(8))
+```
+
+```text
+assinatura : b'\x89PNG\r\n\x1a\n'
+```
+
+**Em montagem de conteúdo.** Bibliotecas que geram `.zip`, imagem ou PDF costumam aceitar um objeto de arquivo; com `BytesIO`, o resultado sai pronto para ir a uma resposta HTTP sem passar por arquivo temporário.
+
+Escrever funções que recebem um objeto de arquivo, e não um nome de arquivo, é a decisão de projeto que torna o código testável e reutilizável — vale para o `sys.stdout` do @sec-cap035 pelo mesmo motivo.
+
+## Identificando o formato pelo conteúdo
+
+A extensão do arquivo é uma convenção que qualquer um pode mentir. O conteúdo, não: quase todo formato binário começa com uma assinatura fixa.
+
+```python
+ASSINATURAS = {
+    b"\x89PNG\r\n\x1a\n": "PNG",
+    b"\xff\xd8\xff": "JPEG",
+    b"PK\x03\x04": "ZIP (ou docx, xlsx, whl, jar)",
+    b"\x1f\x8b": "gzip",
+    b"ONUFW": "firmware de ONU (formato interno)",
+    b"%PDF-": "PDF",
+}
+
+
+def identificar(caminho):
+    with open(caminho, "rb") as f:
+        cabecalho = f.read(8)
+    for assinatura, nome in ASSINATURAS.items():
+        if cabecalho.startswith(assinatura):
+            return nome
+    return f"desconhecido ({cabecalho.hex(' ')})"
+```
+
+```text
+firmware.bin     firmware de ONU (formato interno)
+texto.txt        desconhecido (6f 69 0a)
+amostra.png      PNG
+amostra.gz       gzip
+```
+
+Oito bytes bastam para distinguir a maioria dos formatos, e é assim que o comando `file` do Unix trabalha. Repare no `ZIP`: `.docx`, `.xlsx`, `.whl` e `.jar` do @sec-cap032 são todos arquivos ZIP com nomes diferentes — a assinatura entrega.
+
+## `detach` e o fim da pilha
+
+Vale conhecer, ainda que raramente seja o que você quer: é possível arrancar a camada de baixo de dentro da de cima.
+
+```python
+t = open("texto.txt", encoding="utf-8")
+b = t.detach()
+print("depois do detach:", b)
+try:
+    t.read()
+except ValueError as e:
+    print("  ValueError:", e)
+```
+
+```text
+depois do detach: <_io.BufferedReader name='texto.txt'>
+  ValueError: underlying buffer has been detached
+```
+
+O `TextIOWrapper` fica inutilizável e o `BufferedReader` continua vivo, agora sob sua responsabilidade. O uso legítimo é trocar a camada de texto por outra — por exemplo, embrulhar `sys.stdin.buffer` num `TextIOWrapper` com outra codificação. Para o caso comum, `reconfigure` faz isso sem desmontar nada:
+
+```python
+import sys
+sys.stdout.reconfigure(encoding="latin-1")
+print("ção")
+```
+
+```bash
+python3 reconf.py | xxd
+```
+
+```text
+00000000: e7e3 6f0a                                ..o.
+```
+
+Contra os seis bytes que sairiam em UTF-8:
+
+```text
+00000000: c3a7 c3a3 6f0a                           ....o.
+```
+
+## Uma armadilha para fechar
+
+Arquivo binário também é iterável, e o resultado quase nunca é o que se quer:
+
+```python
+with open("firmware.bin", "rb") as f:
+    primeira = next(iter(f))
+print("primeira linha:", primeira[:40], "...")
+print("tamanho:", len(primeira))
+```
+
+```text
+primeira linha: b'ONUFW\x01\x03\x02\x00\x10\x00\x00\xef\xbe\xad\xde\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n' ...
+tamanho: 27
+```
+
+O iterador quebra no byte `0x0a`, que em texto seria `\n` e aqui é só o número dez. A "linha" tem 27 bytes porque foi aí que o dez apareceu. Em binário, `for linha in f` não significa nada — use `read(BLOCO)`.
+
+## 🐍 Jeito Pythônico
+
+**Modo binário para tudo que não é texto.** Copiar, calcular resumo, ler cabeçalho, transferir pela rede: `"rb"` e `"wb"`. `errors="replace"` para "não dar erro" em conteúdo binário corrompe em silêncio.
+
+```python
+# antipadrão
+with open(origem, encoding="utf-8", errors="replace") as e:
+    conteudo = e.read()
+```
+
+```python
+# pythônico
+with open(origem, "rb") as e:
+    conteudo = e.read()
+```
+
+**Leia em blocos, com o operador morsa.** É o laço idiomático desde o Python 3.8:
+
+```python
+while pedaco := f.read(65536):
+    h.update(pedaco)
+```
+
+**Não desligue o buffer sem motivo.** `buffering=0` multiplicou por sessenta o número de chamadas de sistema no exemplo deste capítulo. Ele existe para casos em que você mesmo controla o tamanho de cada operação.
+
+**`readinto` com `memoryview` só depois de medir.** É mais rápido e mais fácil de errar — não esqueça o corte `vista[:n]` no último bloco.
+
+**Receba objetos de arquivo, não caminhos**, nas funções de baixo nível. Assim elas funcionam com `open`, com `BytesIO` e com `sys.stdin.buffer`.
+
+**Identifique formato pela assinatura**, não pela extensão, quando o arquivo vem de fora.
+
+**`flush` e `os.fsync` são camadas diferentes.** O primeiro entrega ao núcleo; só o segundo garante o dispositivo.
+
+Sobre versões:
+
+- **Python 3.0** — a separação entre `str` e `bytes` deixa de ser opcional; o módulo `io` passa a ser a implementação de `open`.
+- **Python 3.1** — `io` reescrito em C, o que torna a camada bufferizada barata o bastante para ser o padrão.
+- **Python 3.5** — `os.sendfile` e a PEP 475 tornam as leituras resistentes a interrupção por sinal (`EINTR`), o que antes exigia laço de repetição à mão.
+- **Python 3.7** — `sys.stdout.reconfigure` e `TextIOWrapper.reconfigure` permitem mudar codificação sem `detach`.
+- **Python 3.8** — o operador morsa (PEP 572) torna o laço de blocos uma linha; `pickle` ganha o protocolo 5, com buffers fora de banda.
+- **Python 3.11** — `os.splice` e melhorias em `shutil.copyfileobj` aproveitam chamadas de sistema de cópia com zero cópia no Linux.
+
+## 🧪 Laboratório
+
+Objetivo: gerar um arquivo binário com cabeçalho, ler campos por deslocamento, medir o efeito do buffer com `strace`, comparar três estratégias de leitura e identificar formatos pela assinatura.
+
+**1. O arquivo.**
+
+```bash
+mkdir -p ~/lab36 && cd ~/lab36
+```
+
+`gerar.py`:
+
+```python
+import struct
+
+cabecalho = b"ONUFW\x01" + struct.pack("<HII", 0x0203, 4096, 0xDEADBEEF)
+corpo = bytes(range(256)) * 16
+with open("firmware.bin", "wb") as f:
+    f.write(cabecalho)
+    f.write(corpo)
+print("cabecalho:", cabecalho)
+print("tamanho  :", len(cabecalho) + len(corpo))
+```
+
+```bash
+python3 gerar.py && xxd -l 24 firmware.bin
+```
+
+```text
+cabecalho: b'ONUFW\x01\x03\x02\x00\x10\x00\x00\xef\xbe\xad\xde'
+tamanho  : 4112
+00000000: 4f4e 5546 5701 0302 0010 0000 efbe adde  ONUFW...........
+00000010: 0001 0203 0405 0607                      ........
+```
+
+**2. A cópia que corrompe.** Faça a cópia em modo texto com `errors="replace"` e a cópia binária, e compare:
+
+```bash
+ls -l firmware.bin copia-ruim.bin
+```
+
+```text
+-rw-r--r-- 1 vitor vitor 8210 Aug 11 20:34 copia-ruim.bin
+-rw-r--r-- 1 vitor vitor 4112 Aug 11 20:34 firmware.bin
+```
+
+Confirme com `filecmp.cmp(..., shallow=False)`: `False` para a ruim, `True` para a boa.
+
+**3. Os cinco tipos.** Rode o laço que imprime `type(f).__name__` para `"rb"`, `"wb"`, `"rb+"`, `"rb"` com `buffering=0` e `"r"`. Depois desça a pilha com `f.raw`, `t.buffer` e `t.buffer.raw`.
+
+**4. O cabeçalho por deslocamento.** Reproduza o bloco com `seek(6)`, `struct.unpack("<HII", ...)` e `seek(-4, 2)`:
+
+```text
+versao     : 0x0203
+tamanho    : 4096
+crc        : 0xdeadbeef
+ultimos 4  : b'\xfc\xfd\xfe\xff'
+```
+
+**5. O arquivo grande e o `strace`.**
+
+```bash
+python3 -c "
+with open('grande.bin', 'wb') as f:
+    f.write(bytes(1024) * 64 * 100)
+"
+```
+
+`contar.py`:
+
+```python
+import sys
+
+buffering = 0 if sys.argv[1] == "cru" else -1
+f = open("grande.bin", "rb", buffering=buffering)
+n = 0
+while bloco := f.read(64):
+    n += len(bloco)
+f.close()
+```
+
+```bash
+strace -c -e trace=read python3 contar.py cru
+strace -c -e trace=read python3 contar.py bufferizado
+```
+
+```text
+100.00    2.014503          19    102437           read
+100.00    0.025767          15      1637           read
+```
+
+Repita com `write` e o script de escrita: 2000 contra 32.
+
+**6. As três estratégias de memória.** Rode as três medições com `tracemalloc` — `read()` inteiro, blocos de 64 KiB e `readinto` com `memoryview`:
+
+```text
+read() inteiro: 6.3 MiB de pico
+em blocos     : 0.1 MiB de pico
+readinto      : 69.5 KiB de pico
+```
+
+**7. Os resumos.** Rode `blocos.py` e confira com `sha256sum`. Os dígitos têm de bater.
+
+**8. As assinaturas.** Gere um PNG mínimo e um `.gz` e rode `assinatura.py`:
+
+```text
+firmware.bin     firmware de ONU (formato interno)
+texto.txt        desconhecido (6f 69 0a)
+amostra.png      PNG
+amostra.gz       gzip
+```
+
+**9. `BytesIO` e `StringIO`.** Rode `memoria.py` e confirme que `BytesIO` responde a `write`, `tell`, `seek` e `read` como um arquivo.
+
+**10. As camadas do `flush`.** Rode `camadas.py`:
+
+```text
+apos write     : 0 bytes no disco
+apos flush     : 10 bytes no disco
+com buffering=0: 10 bytes no disco, sem flush
+```
+
+**11. A iteração que não faz sentido.** Confirme que `next(iter(f))` num binário devolve 27 bytes, cortados no primeiro `0x0a`.
+
+**12. `reconfigure`.** Compare os bytes de `print("ção")` com e sem `sys.stdout.reconfigure(encoding="latin-1")`, canalizando para `xxd`.
+
+## Resumo
+
+- O sufixo `"b"` remove a camada de decodificação: entra e sai `bytes`, sem `encoding` e sem tradução de quebra de linha. Copiar binário em modo texto corrompe — no exemplo, dobrou o tamanho do arquivo.
+- `bytes` não é `str`: indexar devolve `int`, fatiar devolve `bytes`, e não há concatenação implícita entre os dois.
+- O módulo `io` é uma pilha de três camadas: `FileIO` (cru), `Buffered*` (acumula) e `TextIOWrapper` (decodifica). O modo de `open` decide em qual delas você pega o objeto; `f.buffer` e `f.raw` descem.
+- O buffer existe para trocar muitas chamadas de sistema pequenas por poucas grandes: 102 437 contra 1637 leituras no mesmo trabalho.
+- `flush` entrega ao núcleo; `os.fsync` entrega ao dispositivo. São coisas diferentes.
+- Em binário a posição é exata: `seek(desl, whence)` com `SEEK_SET`, `SEEK_CUR` e `SEEK_END` permite ler o cabeçalho de um arquivo enorme com duas chamadas. Em texto, só `seek` absoluto vindo de um `tell`.
+- `struct.pack` e `struct.unpack` traduzem bytes em números com ordem de bytes explícita; para um inteiro isolado, `int.to_bytes` e `int.from_bytes` bastam.
+- O laço de blocos com o operador morsa é o padrão; `readinto` com `memoryview` evita a alocação por volta, ao custo de ter que lembrar do corte `vista[:n]`.
+- `BytesIO` e `StringIO` são arquivos em memória com a mesma interface — a ferramenta que torna testável qualquer função que receba um objeto de arquivo.
+- Formato se identifica pela assinatura nos primeiros bytes, não pela extensão.
