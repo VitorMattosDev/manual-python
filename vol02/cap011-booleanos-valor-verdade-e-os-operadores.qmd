@@ -1,3 +1,721 @@
 # Booleanos, valor-verdade e os operadores lógicos {#sec-cap011}
 
-*(em elaboracao)*
+O relatório de potência óptica descarta as leituras que não vieram. A função tem uma linha, é legível, passou na revisão e roda em produção há meses.
+
+```python
+LEITURAS = [
+    {"cliente": "sitio-mangueira", "nivel": -18.4},
+    {"cliente": "fazenda-boa-vista", "nivel": -21.7},
+    {"cliente": "chacara-do-ze", "nivel": 0.0},
+    {"cliente": "vila-sao-joao", "nivel": None},
+    {"cliente": "recanto-azul"},
+]
+
+
+def validas(leituras):
+    return [l for l in leituras if l.get("nivel")]
+
+
+niveis = [l["nivel"] for l in validas(LEITURAS)]
+print([l["cliente"] for l in validas(LEITURAS)])
+print(len(niveis), sum(niveis) / len(niveis))
+```
+
+```text
+['sitio-mangueira', 'fazenda-boa-vista']
+2 -20.049999999999997
+```
+
+O `chacara-do-ze` sumiu. A leitura dele é `0.0` — potência de exatamente zero dBm, que é um valor perfeitamente válido e, aliás, excelente. O filtro o tratou como ausente, e a média do relatório mudou de −13,37 para −20,05, uma diferença que não parece erro nenhum para quem lê.
+
+`if l.get("nivel")` não pergunta "veio a leitura?". Pergunta "o valor da leitura é verdadeiro?". São perguntas diferentes, e `0.0` responde `False` à segunda. Este capítulo é sobre a diferença.
+
+## `bool` é uma subclasse de `int`
+
+Antes de tudo, um fato que explica muita coisa:
+
+```python
+print(isinstance(True, int), issubclass(bool, int))
+print(True + True, True * 3, sum([True, False, True]))
+print([10, 20, 30][True])
+```
+
+```text
+True True
+2 3 2
+20
+```
+
+`bool` **é** `int`. `True` vale 1, `False` vale 0, e nada impede de usá-los como número. Isso é herança histórica: os booleanos só chegaram no Python 2.3, e antes disso a verdade era representada por 1 e 0 direto. Para não quebrar o código existente, o tipo novo foi feito subclasse do antigo.
+
+A consequência mais útil é `sum()` sobre uma sequência de comparações, que conta quantas são verdadeiras:
+
+```python
+print(sum(1 for l in LEITURAS if l.get("nivel") is not None))
+print(sum(l.get("nivel") is not None for l in LEITURAS))
+```
+
+```text
+3
+3
+```
+
+A consequência mais perigosa é em dicionários e conjuntos, onde `1` e `True` são a mesma chave:
+
+```python
+print({1: "a", True: "b"})
+print({0: "zero", False: "falso"})
+print(len({1, True, 1.0}))
+```
+
+```text
+{1: 'b'}
+{0: 'falso'}
+1
+```
+
+O dicionário guardou a **primeira** chave e o **último** valor, porque `hash(True) == hash(1)` e `True == 1`: para o dicionário, é a mesma chave sendo sobrescrita. E `{1, True, 1.0}` tem um elemento só, porque os três são iguais. O Volume 4 explora o mecanismo; aqui basta saber que misturar `0`/`False` ou `1`/`True` como chaves é receita de dado desaparecido.
+
+## Todo objeto tem valor-verdade
+
+Em Python, qualquer objeto pode aparecer num `if`. Não existe "só booleanos são condições" — existe uma regra que converte qualquer coisa em verdadeiro ou falso.
+
+A lista dos que são **falsos** é curta e vale decorar:
+
+```python
+valores = [0, 0.0, "", [], {}, set(), (), None, range(0), b""]
+for v in valores:
+    print(f"{v!r:<12} {bool(v)}")
+```
+
+```text
+0            False
+0.0          False
+''           False
+[]           False
+{}           False
+set()        False
+()           False
+None         False
+range(0, 0)  False
+b''          False
+```
+
+Zero de qualquer tipo numérico, coleção vazia de qualquer tipo, e `None`. Todo o resto é verdadeiro — inclusive coisas que enganam:
+
+```text
+'0'          True
+'False'      True
+[0]          True
+(0,)         True
+{0}          True
+-1           True
+b'\x00'      True
+```
+
+A string `"False"` é verdadeira porque é uma string não vazia; o conteúdo dela não é lido. Uma lista contendo um zero é verdadeira porque tem um elemento. É a diferença entre o recipiente e o conteúdo, e ela derruba muito código de leitura de configuração.
+
+Por baixo, existe um protocolo com três degraus:
+
+::: {#fig-protocolo-verdade}
+```{.tikz}
+%%| filename: protocolo-verdade
+%%| alt: Fluxo de decisao do valor-verdade: o Python procura o metodo dunder bool, depois dunder len, e se nao achar nenhum considera o objeto verdadeiro
+\begin{tikzpicture}[
+  qs/.style={draw=manualgray, thick, rounded corners, fill=manualgray!6,
+             text width=4.1cm, align=center, minimum height=1.0cm,
+             font=\scriptsize},
+  rs/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=3.7cm, align=center, minimum height=0.95cm,
+             font=\scriptsize},
+  rv/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+             text width=3.7cm, align=center, minimum height=0.95cm,
+             font=\scriptsize},
+  ini/.style={draw=manualgray, very thick, fill=white, rounded corners,
+              text width=3.2cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  eg/.style={font=\tiny, text=manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[ini] (i)  at (0, 3.7) {if obj:};
+  \node[qs]  (q1) at (0, 2.2) {a classe define\\\texttt{\_\_bool\_\_}?};
+  \node[qs]  (q2) at (0,-0.1) {a classe define\\\texttt{\_\_len\_\_}?};
+  \node[rv]  (r3) at (0,-2.3) {\textbf{verdadeiro}};
+
+  \node[rs] (r1) at (5.6, 2.2) {usa o que ele devolver};
+  \node[rs] (r2) at (5.6,-0.1) {verdadeiro se\\\texttt{len(obj) != 0}};
+
+  \draw[fl] (i)  -- (q1);
+  \draw[fl] (q1) -- node[eg,above]{sim} (r1);
+  \draw[fl] (q2) -- node[eg,above]{sim} (r2);
+  \draw[fl] (q1) -- node[eg,right]{não} (q2);
+  \draw[fl] (q2) -- node[eg,right]{não} (r3);
+
+  \node[eg, anchor=west, text width=3.6cm] at (7.7, 2.2)
+    {é o degrau de \texttt{bool}, \texttt{int}, \texttt{float} e das classes suas};
+  \node[eg, anchor=west, text width=3.6cm] at (7.7,-0.1)
+    {é o degrau de \texttt{str}, \texttt{list}, \texttt{dict}, \texttt{set}, \texttt{tuple}};
+  \node[eg, anchor=west, text width=3.6cm] at (7.7,-2.3)
+    {objeto comum sem os dois é sempre verdadeiro --- inclusive uma exceção};
+\end{tikzpicture}
+```
+Como o Python decide se um objeto é verdadeiro.
+:::
+
+Dá para conferir os três degraus com quatro classes:
+
+```python
+class Vazio:
+    pass
+
+
+class ComLen:
+    def __len__(self):
+        return 0
+
+
+class ComBool:
+    def __bool__(self):
+        return False
+
+
+class Ambos:
+    def __len__(self):
+        return 0
+
+    def __bool__(self):
+        return True
+
+
+print(bool(Vazio()), bool(ComLen()), bool(ComBool()), bool(Ambos()))
+```
+
+```text
+True False False True
+```
+
+`Vazio` não define nenhum dos dois e é verdadeiro. `Ambos` define os dois, e `__bool__` ganha — a ordem da figura vale mesmo. É por isso que um objeto de negócio recém-criado é verdadeiro por padrão, e por que dar `__len__` a uma classe a torna falsa quando estiver vazia, muitas vezes sem que o autor perceba.
+
+## `and` e `or` não devolvem booleanos
+
+Esta é a segunda surpresa do capítulo:
+
+```python
+print(1 and 2, 0 and 2)
+print(1 or 2, 0 or 2)
+print(type(1 and 2))
+```
+
+```text
+2 0
+1 2
+<class 'int'>
+```
+
+`1 and 2` devolve `2`, não `True`. Os operadores lógicos de Python devolvem **um dos operandos**, não um booleano. A regra:
+
+- `a and b` — avalia `a`. Se `a` for falso, devolve `a` sem olhar `b`. Senão, devolve `b`.
+- `a or b` — avalia `a`. Se `a` for verdadeiro, devolve `a` sem olhar `b`. Senão, devolve `b`.
+
+Só `not` devolve booleano de verdade:
+
+```python
+print(not 1, not 0, type(not 1))
+```
+
+```text
+False True <class 'bool'>
+```
+
+O "sem olhar `b`" é o **curto-circuito**, e é comportamento garantido, não otimização:
+
+```python
+def efeito(nome, retorno):
+    print("avaliou", nome)
+    return retorno
+
+
+print(efeito("A", False) and efeito("B", True))
+```
+
+```text
+avaliou A
+False
+```
+
+`B` nunca rodou. Isso permite escrever guardas em uma linha — `if dados and dados[0] > 0` não estoura em lista vazia, porque a segunda parte só é avaliada quando a primeira é verdadeira.
+
+::: {#fig-and-or}
+```{.tikz}
+%%| filename: and-or
+%%| alt: Diagrama de o que and e or devolvem: and devolve o primeiro operando falso, or devolve o primeiro verdadeiro, e em ambos o segundo operando pode nao ser avaliado
+\begin{tikzpicture}[
+  cx/.style={draw=manualgray, thick, rounded corners, fill=manualgray!4,
+             minimum width=6.2cm, minimum height=3.5cm},
+  ti/.style={font=\small\bfseries\ttfamily, align=center},
+  op/.style={draw=manualblue, thick, rounded corners, fill=manualblue!10,
+             minimum width=1.15cm, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  opd/.style={draw=manualgray, dashed, rounded corners, fill=white,
+              minimum width=1.15cm, minimum height=0.6cm,
+              font=\ttfamily\scriptsize, text=manualgray},
+  rt/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!12,
+             minimum width=1.15cm, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  nt/.style={font=\tiny, text=manualgray, align=center, text width=5.6cm},
+  fl/.style={->,>=stealth, thick, manualgray}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \node[cx] at (-3.3,0) {};
+  \node[ti] at (-3.3, 1.55) {a and b};
+  \node[op]  (a1) at (-5.1, 0.65) {a};
+  \node[rt]  (v1) at (-2.4, 0.65) {a};
+  \node[nt]  at (-3.3, 0.05) {se \texttt{a} é \textbf{falso}: devolve \texttt{a}, \texttt{b} nem roda};
+  \node[op]  (a2) at (-5.1,-0.75) {a};
+  \node[rt]  (v2) at (-2.4,-0.75) {b};
+  \node[nt]  at (-3.3,-1.35) {se \texttt{a} é \textbf{verdadeiro}: devolve \texttt{b}};
+  \draw[fl] (a1) -- (v1);
+  \draw[fl] (a2) -- (v2);
+
+  \node[cx] at ( 3.3,0) {};
+  \node[ti] at ( 3.3, 1.55) {a or b};
+  \node[op]  (b1) at ( 1.5, 0.65) {a};
+  \node[rt]  (w1) at ( 4.2, 0.65) {a};
+  \node[nt]  at ( 3.3, 0.05) {se \texttt{a} é \textbf{verdadeiro}: devolve \texttt{a}, \texttt{b} nem roda};
+  \node[op]  (b2) at ( 1.5,-0.75) {a};
+  \node[rt]  (w2) at ( 4.2,-0.75) {b};
+  \node[nt]  at ( 3.3,-1.35) {se \texttt{a} é \textbf{falso}: devolve \texttt{b}};
+  \draw[fl] (b1) -- (w1);
+  \draw[fl] (b2) -- (w2);
+
+  \node[nt, text width=11.5cm] at (0,-2.35)
+    {o resultado é sempre \textbf{um dos operandos}, nunca \texttt{True} ou \texttt{False} ---
+     só \texttt{not} devolve booleano};
+\end{tikzpicture}
+```
+`and` e `or` devolvem um operando e podem não avaliar o segundo.
+:::
+
+Daí nasce o idioma `valor or padrao`, que é conveniente e é uma armadilha:
+
+```python
+def conectar(porta=None):
+    porta = porta or 8080
+    return porta
+
+
+print(conectar(), conectar(9090), conectar(0))
+```
+
+```text
+8080 9090 8080
+```
+
+`conectar(0)` devolveu 8080. A porta 0 é válida em soquete — significa "escolha uma porta livre" —, e o `or` a comeu, pela mesma razão que o filtro da abertura comeu a leitura zero. A versão correta pergunta o que realmente interessa:
+
+```python
+def conectar(porta=None):
+    if porta is None:
+        porta = 8080
+    return porta
+
+
+print(conectar(), conectar(9090), conectar(0))
+```
+
+```text
+8080 9090 0
+```
+
+O mesmo vale para dicionários: `cfg.get("timeout") or 30` devolve 30 quando o timeout configurado é 0; `cfg.get("timeout", 30)` devolve 0, que é o valor que a pessoa escreveu.
+
+## Precedência
+
+De mais forte para mais fraco: aritmética, comparações, `not`, `and`, `or`.
+
+```python
+print(True or False and False)
+print((True or False) and False)
+```
+
+```text
+True
+False
+```
+
+Sem parênteses, `and` agrupa primeiro: `True or (False and False)`. E `not` é mais forte que `and`/`or`, mas **mais fraco que as comparações**:
+
+```python
+print(not 1 == 2)
+print((not 1) == 2)
+```
+
+```text
+True
+False
+```
+
+`not 1 == 2` é `not (1 == 2)`, que é o que quase todo mundo quer. Ainda assim, em expressão com três ou mais operadores lógicos, ponha parênteses: eles não custam nada e o leitor não precisa consultar tabela.
+
+## Comparação encadeada
+
+Python permite escrever a desigualdade como na matemática:
+
+```python
+x = 5
+print(1 < x < 10)
+print(3 > 2 > 1, 3 > 2 > 5)
+```
+
+```text
+True
+True False
+```
+
+`a < b < c` é açúcar para `a < b and b < c`, com uma diferença importante: **`b` é avaliado uma vez só**. Isso importa quando `b` é uma chamada cara ou tem efeito colateral — `1 < proxima_leitura() < 10` lê o sensor uma vez, enquanto a versão com `and` leria duas.
+
+O encadeamento vale para qualquer operador de comparação, incluindo `==`, `is` e `in` — e é aí que ele pode surpreender:
+
+```python
+print(False == False in [False])
+```
+
+```text
+True
+```
+
+Isso é `(False == False) and (False in [False])`, que é `True and True`. Não é `False == (False in [False])`, que seria `False == True`, ou seja, `False`. Encadear `==` com `in` é legal e ilegível; não faça.
+
+## `all` e `any`
+
+Duas embutidas que resumem uma sequência inteira, com curto-circuito:
+
+```python
+print(all([1, 2, 0]), any([0, 0, 3]))
+print(all(nivel < 0 for nivel in [-18.4, -21.7, 0.0]))
+```
+
+```text
+False True
+False
+```
+
+O caso das sequências vazias merece atenção, porque não é intuitivo e é definido:
+
+```python
+print(all([]), any([]))
+```
+
+```text
+True False
+```
+
+`all([])` é verdadeiro — "todos os elementos de um conjunto vazio satisfazem qualquer coisa" é verdade vacuamente, a mesma convenção da lógica matemática. `any([])` é falso, porque não há nenhum que satisfaça. Na prática: `if all(validacoes)` com a lista vazia deixa passar, e isso já causou incidente em mais de um sistema de checagem.
+
+Com um gerador em vez de lista, `all` e `any` param no primeiro que decide — e isso é a diferença entre percorrer três itens e percorrer três milhões.
+
+## 🐍 Jeito Pythônico
+
+**Pergunte o que você quer saber.** Este é o capítulo inteiro numa frase:
+
+```python
+# antipadrão: pergunta "é verdadeiro?" quando quer saber "existe?"
+if not leitura.get("nivel"):
+    continue
+```
+
+```python
+# pythônico: pergunta exatamente o que interessa
+if leitura.get("nivel") is None:
+    continue
+```
+
+`is None` para ausência, `== 0` para zero, `if not lista` para coleção vazia. Cada um responde a uma pergunta diferente, e usar o teste de verdade genérico para todas é o que produz o bug da abertura. A regra prática: **valor-verdade é seguro para coleções, perigoso para números e para valores que podem ser `None`.**
+
+**Para coleção vazia, use o valor-verdade.** É o idioma da linguagem e a PEP 8 é explícita:
+
+```python
+# antipadrão
+if len(itens) > 0:
+if itens != []:
+```
+
+```python
+# pythônico
+if itens:
+if not itens:
+```
+
+Funciona com qualquer coleção, é mais rápido (não constrói lista nem chama `len` desnecessariamente) e não assume o tipo.
+
+**Nunca compare com `True` ou `False`.** A PEP 8 chama isso de "pior ainda":
+
+```python
+# antipadrão
+if pronto == True:
+if pronto is True:
+```
+
+```python
+# pythônico
+if pronto:
+```
+
+`== True` falha para qualquer valor verdadeiro que não seja exatamente 1 — a lista `[1, 2]` é verdadeira e `[1, 2] == True` é falso. E `is True` é pior, porque exige o objeto singleton.
+
+**Prefira `dict.get(chave, padrao)` a `dict.get(chave) or padrao`.** A primeira substitui só a chave ausente; a segunda substitui também `0`, `""` e `[]`.
+
+**Não converta para `bool` sem necessidade.** `bool(x)` num `if` é redundante — o `if` já faz isso. O lugar onde `bool()` é útil é quando você precisa do valor booleano como **dado**: numa chave de dicionário, num campo de JSON, num retorno de função que promete `bool`.
+
+**Evite `bool` como parâmetro posicional.** `criar(True, False)` não diz nada na chamada. Use argumento nomeado, e o Volume 3 mostra como forçar isso com `*`:
+
+```python
+criar(usuario, ativo=True, notificar=False)
+```
+
+Sobre versões e detalhes que valem lembrar:
+
+- **Python 2.3** — `bool`, `True` e `False` passaram a existir como tipo. Antes eram 1 e 0.
+- **Python 3.0** — `True` e `False` viraram palavras reservadas; antes eram nomes que se podia reatribuir (e havia código que fazia isso).
+- `bool` **não pode** ser herdado (`class Meu(bool)` levanta `TypeError`), justamente para que `True` e `False` continuem sendo os dois únicos objetos do tipo.
+- `^` entre booleanos é o "ou exclusivo" (`True ^ False` é `True`), mas **não tem curto-circuito** — é o operador bit a bit do @sec-cap009 agindo sobre 0 e 1. Não existe `xor` lógico na linguagem; quando precisar, `bool(a) != bool(b)` é mais claro.
+
+## 🧪 Laboratório
+
+Objetivo: mapear os valores falsos, ver o protocolo de verdade nos três degraus, provar que `and` e `or` devolvem operandos, e consertar o filtro que engoliu a leitura zero.
+
+**1. Ambiente.**
+
+```bash
+mkdir -p ~/lab11 && cd ~/lab11
+python3 -m venv .venv && source .venv/bin/activate
+python --version
+```
+
+```text
+Python 3.13.12
+```
+
+**2. Reproduza o bug.** Crie `relatorio.py` com o código da abertura e rode:
+
+```bash
+python relatorio.py
+```
+
+```text
+['sitio-mangueira', 'fazenda-boa-vista']
+2 -20.049999999999997
+```
+
+Confirme na lista que `chacara-do-ze` tem `"nivel": 0.0` e sumiu mesmo assim.
+
+**3. Monte a tabela de verdade dos nativos.**
+
+```bash
+python -c "
+valores = [0, 1, -1, 0.0, 0.1, '', '0', 'False', [], [0], {}, {'a': 1},
+           set(), {0}, (), (0,), None, range(0), range(1), b'', b'\x00']
+for v in valores:
+    print(f'{v!r:<12} {bool(v)}')
+"
+```
+
+```text
+0            False
+1            True
+-1           True
+0.0          False
+0.1          True
+''           False
+'0'          True
+'False'      True
+[]           False
+[0]          True
+{}           False
+{'a': 1}     True
+set()        False
+{0}          True
+()           False
+(0,)         True
+None         False
+range(0, 0)  False
+range(0, 1)  True
+b''          False
+b'\x00'      True
+```
+
+Marque as sete que enganam: `-1`, `'0'`, `'False'`, `[0]`, `{0}`, `(0,)` e `b'\x00'`.
+
+**4. Confirme os três degraus.** Crie `degraus.py` com as quatro classes do capítulo e rode:
+
+```text
+True False False True
+```
+
+Depois acrescente um `print` dentro de `__len__` de `Ambos` e rode de novo: ele **não** é chamado, porque `__bool__` respondeu primeiro.
+
+**5. `bool` é `int`.**
+
+```bash
+python -c "
+print(issubclass(bool, int), True + True, sum([True, False, True]))
+print({1: 'a', True: 'b'})
+print(len({1, True, 1.0}))
+"
+```
+
+```text
+True 2 2
+{1: 'b'}
+1
+```
+
+A segunda linha é a que assusta: a chave `True` sobrescreveu o valor de `1` e o dicionário ficou com um par só.
+
+**6. `and` e `or` devolvem operandos.**
+
+```bash
+python -c "
+print(1 and 2, 0 and 2, 1 or 2, 0 or 2)
+print('' or 'padrao', 'valor' or 'padrao')
+print(type(1 and 2), type(not 1))
+"
+```
+
+```text
+2 0 1 2
+padrao valor
+<class 'int'> <class 'bool'>
+```
+
+**7. Veja o curto-circuito.** Crie `curto.py` com a função `efeito` do capítulo, e rode as duas expressões. Em `A and B` com `A` falso, e em `A or B` com `A` verdadeiro, o `B` não aparece na saída:
+
+```text
+avaliou A
+False
+---
+avaliou A
+True
+```
+
+**8. Precedência.**
+
+```bash
+python -c "
+print(True or False and False, (True or False) and False)
+print(not 1 == 2, (not 1) == 2)
+"
+```
+
+```text
+True False
+True False
+```
+
+**9. Encadeamento avalia o meio uma vez.**
+
+```bash
+python -c "
+def leitura():
+    print('leu o sensor')
+    return 5
+print(1 < leitura() < 10)
+print('---')
+print(1 < leitura() and leitura() < 10)
+"
+```
+
+```text
+leu o sensor
+True
+---
+leu o sensor
+leu o sensor
+True
+```
+
+Duas leituras na versão com `and`, uma na encadeada.
+
+**10. Sequência vazia em `all` e `any`.**
+
+```bash
+python -c "
+print(all([]), any([]))
+print(all([1, 2, 0]), any([0, 0, 3]))
+print(all(n < 0 for n in [-18.4, -21.7, 0.0]))
+"
+```
+
+```text
+True False
+False True
+False
+```
+
+Pense no que `if all(validacoes):` faz quando `validacoes` chega vazia por engano.
+
+**11. O `or` que come o zero.**
+
+```bash
+python -c "
+cfg = {'timeout': 0, 'retries': 3}
+print(cfg.get('timeout') or 30)
+print(cfg.get('timeout', 30))
+print(cfg.get('proxy') or 'nenhum')
+print(cfg.get('proxy', 'nenhum'))
+"
+```
+
+```text
+30
+0
+nenhum
+nenhum
+```
+
+As duas primeiras linhas divergem porque a chave **existe** com valor falso; as duas últimas coincidem porque a chave não existe. É exatamente a distinção que `or` não sabe fazer.
+
+**12. Conserte o relatório.** Reescreva `validas` e confira a média:
+
+```python
+def validas(leituras):
+    return [l for l in leituras if l.get("nivel") is not None]
+```
+
+```bash
+python relatorio.py
+```
+
+```text
+['sitio-mangueira', 'fazenda-boa-vista', 'chacara-do-ze']
+3 -13.366666666666665
+```
+
+Três clientes e a média certa. Agora escreva uma terceira versão que também recuse leituras fora da faixa física plausível, usando encadeamento:
+
+```python
+def validas(leituras):
+    return [
+        l
+        for l in leituras
+        if (n := l.get("nivel")) is not None and -40 <= n <= 10
+    ]
+```
+
+O `:=` do @sec-cap006 evita chamar `get` duas vezes, e o encadeamento `-40 <= n <= 10` avalia `n` uma vez. Confirme que o resultado continua com os três clientes.
+
+**13. Feche com `deactivate`.**
+
+## Resumo
+
+- `bool` é subclasse de `int`: `True` vale 1 e `False` vale 0. Dá para somar comparações para contar; e `1`/`True` (ou `0`/`False`) colidem como chave de dicionário e como elemento de conjunto.
+- Todo objeto tem valor-verdade. São falsos: zero de qualquer tipo numérico, coleção vazia de qualquer tipo e `None`. Todo o resto é verdadeiro, inclusive `"0"`, `"False"`, `[0]` e `b"\x00"`.
+- O protocolo tem três degraus: `__bool__`, depois `__len__`, e na ausência dos dois o objeto é verdadeiro.
+- `and` e `or` devolvem **um dos operandos**, não booleano, e fazem curto-circuito garantido. Só `not` devolve `bool`.
+- `valor or padrao` e `dict.get(k) or padrao` substituem também `0`, `""` e `[]` — use `is None` ou `dict.get(k, padrao)` quando o zero for legítimo.
+- Precedência: comparações, depois `not`, depois `and`, depois `or`. Comparação encadeada (`a < b < c`) avalia o operando do meio uma vez só.
+- `all([])` é `True` e `any([])` é `False`, por convenção lógica. Ambos fazem curto-circuito, o que só rende com geradores.
+- Pergunte o que você quer saber: `is None` para ausência, `== 0` para zero, `if colecao` para vazio. Nunca `== True`.
