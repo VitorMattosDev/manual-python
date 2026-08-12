@@ -1,3 +1,476 @@
 # Descritores, `__slots__` e o acesso a atributos {#sec-cap053}
 
-*(em elaboracao)*
+A `Leitura` do coletor tem três campos numéricos, e cada um precisa de faixa validada: potência entre -40 e -8 dBm, temperatura entre -10 e 85 °C, corrente entre 0 e 100 mA. Com a `property` do @sec-cap042, isso é:
+
+```python
+class Leitura:
+    @property
+    def potencia(self):
+        return self._potencia
+
+    @potencia.setter
+    def potencia(self, valor):
+        if not -40.0 <= valor <= -8.0:
+            raise ValueError(f"potencia={valor} fora de faixa")
+        self._potencia = valor
+
+    @property
+    def temperatura(self):
+        return self._temperatura
+
+    # ... e mais doze linhas idênticas, com dois números diferentes
+```
+
+Trinta linhas para expressar três faixas. A lógica é a mesma nas três; só mudam dois números e um nome. É o mesmo problema que os decoradores resolveram para funções — comportamento transversal, copiado — só que agora sobre **atributos**.
+
+E há uma dívida acumulada. O @sec-cap052 deixou três coisas sem explicação: por que `cached_property` grava no `__dict__` da instância e por isso não é consultada de novo; por que `@staticmethod` produz um objeto que se comporta de um jeito quando acessado pela classe e de outro pela instância; e por que `__slots__` quebra o `cached_property`. As três respostas são a mesma: o protocolo de descritor.
+
+## O protocolo
+
+Um descritor é um objeto que define pelo menos um de `__get__`, `__set__` ou `__delete__`, e que é atribuído a um **atributo de classe**. Quando o Python acessa esse atributo numa instância, ele não devolve o objeto — ele chama o método correspondente.
+
+Com isso, a validação vira uma classe escrita uma vez:
+
+```python
+class Faixa:
+    def __init__(self, minimo, maximo, unidade=""):
+        self.minimo = minimo
+        self.maximo = maximo
+        self.unidade = unidade
+
+    def __set_name__(self, dono, nome):
+        self.nome_publico = nome
+        self.nome_privado = "_" + nome
+
+    def __get__(self, obj, dono=None):
+        if obj is None:
+            return self
+        return getattr(obj, self.nome_privado)
+
+    def __set__(self, obj, valor):
+        if not isinstance(valor, (int, float)):
+            raise TypeError(f"{self.nome_publico} precisa ser numero")
+        if not self.minimo <= valor <= self.maximo:
+            raise ValueError(
+                f"{self.nome_publico}={valor}{self.unidade} fora de "
+                f"[{self.minimo}, {self.maximo}]"
+            )
+        setattr(obj, self.nome_privado, valor)
+
+
+class Leitura:
+    potencia = Faixa(-40.0, -8.0, " dBm")
+    temperatura = Faixa(-10.0, 85.0, " C")
+    corrente = Faixa(0.0, 100.0, " mA")
+```
+
+```text
+  [__set_name__: Leitura.potencia]
+  [__set_name__: Leitura.temperatura]
+  [__set_name__: Leitura.corrente]
+
+leitura ok : -29.8 42.0 18.5
+no __dict__: {'onu': 'onu-00043', '_potencia': -29.8, '_temperatura': 42.0, '_corrente': 18.5}
+  ValueError: potencia=-55.0 dBm fora de [-40.0, -8.0]
+  ValueError: temperatura=120.0 C fora de [-10.0, 85.0]
+  TypeError: corrente precisa ser numero
+
+acesso pela classe devolve o descritor: Faixa
+```
+
+Três linhas declarativas na classe, e as trinta linhas de `property` sumiram. As mensagens de erro nomeiam o campo, a unidade e a faixa — porque o descritor sabe as três coisas.
+
+Três detalhes do código merecem atenção.
+
+`__set_name__` (Python **3.6**) é chamado automaticamente durante a criação da classe, com o nome sob o qual o descritor foi atribuído. Antes dele, era preciso repetir o nome na chamada (`potencia = Faixa("potencia", ...)`) — redundância clássica em código antigo. O `print` da saída mostra que ele roda três vezes, uma por campo, na definição da classe.
+
+`if obj is None: return self` trata o acesso **pela classe**. `Leitura.potencia` passa `obj=None`, e devolver o próprio descritor é a convenção — é o que permite `Leitura.potencia.minimo` e o que faz `help()` funcionar em `property`.
+
+E o valor real vai para o `__dict__` **da instância**, sob um nome derivado. Essa escolha é a diferença entre um descritor que funciona e um que não.
+
+## Onde o descritor guarda o valor
+
+O erro é tentador, porque o descritor tem `self`:
+
+```python
+class FaixaRuim:
+    def __get__(self, obj, dono=None):
+        return self.valor
+
+    def __set__(self, obj, valor):
+        self.valor = valor          # no descritor, não na instância
+```
+
+```text
+a.potencia: -31.7
+b.potencia: -31.7
+as duas instancias compartilham o valor: True
+e o __dict__ de cada uma esta vazio de potencia:
+  a: {'onu': 'onu-00043'}
+  b: {'onu': 'onu-00045'}
+```
+
+Duas leituras diferentes, mesma potência — a da última que foi criada. O descritor é um **atributo de classe**: existe uma única instância dele, compartilhada por todos os objetos da classe. Guardar estado por instância nele é o mesmo erro do argumento padrão mutável do @sec-cap019, com o mesmo sintoma: funciona no teste com um objeto, corrompe dados com dois.
+
+O `self` de um descritor é do descritor; o estado por instância vai no `obj`.
+
+## A ordem de precedência
+
+Aqui está o coração do capítulo, e a regra que explica tudo o que ficou pendente:
+
+```python
+class ComDados:          # __get__ E __set__
+    def __get__(self, obj, dono=None):
+        return "veio do descritor de DADOS"
+
+    def __set__(self, obj, valor):
+        print("    [__set__ do descritor de dados interceptou]")
+
+
+class SemDados:          # só __get__
+    def __get__(self, obj, dono=None):
+        return "veio do descritor SEM dados"
+```
+
+```text
+antes de mexer no __dict__:
+  a.com : veio do descritor de DADOS
+  a.sem : veio do descritor SEM dados
+
+depois de por os dois no __dict__ da instancia:
+  a.com : veio do descritor de DADOS
+  a.sem : valor posto no __dict__
+  __dict__: {'com': 'valor posto no __dict__', 'sem': 'valor posto no __dict__'}
+
+    [__set__ do descritor de dados interceptou]
+  o __dict__ mudou? valor posto no __dict__
+
+property e descritor de dados? True
+cached_property tem __set__? False
+```
+
+Os dois valores estão no `__dict__` da instância. Um é ignorado, o outro vence. A diferença é ter `__set__`:
+
+- **Descritor de dados** (`__get__` **e** `__set__`) tem prioridade **sobre** o `__dict__` da instância. É impossível escondê-lo.
+- **Descritor sem dados** (só `__get__`) tem prioridade **abaixo** do `__dict__` da instância. Um valor gravado ali o desliga.
+
+E a última linha fecha a dívida do @sec-cap052: `cached_property` **não tem `__set__`**. Ela é um descritor sem dados de propósito. No primeiro acesso, calcula e grava no `__dict__` da instância; do segundo em diante, o `__dict__` vence e o descritor nunca mais é chamado. Não há verificação de cache, não há dicionário auxiliar — só a regra de precedência funcionando a favor. `property`, que tem `__set__`, é consultada em toda leitura, e por isso recalcula sempre.
+
+::: {#fig-precedencia-atributo}
+```{.tikz}
+%%| filename: precedencia-atributo
+%%| alt: A ordem em que o Python resolve obj.x - descritor de dados primeiro, depois o dicionario da instancia, depois descritor sem dados, depois atributo de classe e por fim getattr
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=6.0cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  cb/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=6.0cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=5.4cm, align=left, minimum height=0.95cm,
+             font=\scriptsize},
+  stg/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=3.0cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.8) rectangle (15.0,-9.0);
+
+  \node[stg] at (4.2, 3.2) {obj.x};
+
+  \node[bx] (p1) at (4.2, 1.9) {descritor de DADOS na classe?\\(\_\_get\_\_ e \_\_set\_\_)};
+  \node[bx] (p2) at (4.2, 0.3) {está em obj.\_\_dict\_\_ ?};
+  \node[bx] (p3) at (4.2,-1.3) {descritor SEM dados na classe?\\(só \_\_get\_\_)};
+  \node[bx] (p4) at (4.2,-2.9) {valor comum na classe ou no MRO?};
+  \node[cb] (p5) at (4.2,-4.5) {\_\_getattr\_\_ ou AttributeError};
+
+  \draw[fl] (4.2, 2.85) -- (p1);
+  \draw[fl] (p1) -- (p2);
+  \draw[fl] (p2) -- (p3);
+  \draw[fl] (p3) -- (p4);
+  \draw[fl] (p4) -- (p5);
+
+  \node[cx] at (11.0, 1.9) {chama \texttt{\_\_get\_\_} --- vence até o
+    \texttt{\_\_dict\_\_}. É a \texttt{property}.};
+  \node[cx] at (11.0, 0.3) {devolve o valor da instância};
+  \node[cx] at (11.0,-1.3) {chama \texttt{\_\_get\_\_}. É a função virando
+    método, e a \texttt{cached\_property}.};
+  \node[cx] at (11.0,-2.9) {devolve o atributo de classe};
+
+  \draw[fl] (p1) -- (8.3, 1.9);
+  \draw[fl] (p2) -- (8.3, 0.3);
+  \draw[fl] (p3) -- (8.3,-1.3);
+  \draw[fl] (p4) -- (8.3,-2.9);
+
+  \node[lb, anchor=west] at (4.4, 1.1) {não};
+  \node[lb, anchor=west] at (4.4,-0.5) {não};
+  \node[lb, anchor=west] at (4.4,-2.1) {não};
+  \node[lb, anchor=west] at (4.4,-3.7) {não};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.4)
+    {Ter ou não ter \texttt{\_\_set\_\_} decide tudo. Com ele, o descritor é
+     consultado em toda leitura e não pode ser escondido por um valor na
+     instância --- é o que uma \texttt{property} precisa. Sem ele, um valor
+     gravado no \texttt{\_\_dict\_\_} o desliga para sempre --- que é
+     exatamente como a \texttt{cached\_property} cacheia, sem guardar cache
+     nenhum.};
+\end{tikzpicture}
+```
+A ordem em que `obj.x` é resolvido. A presença de `__set__` muda o lugar na fila.
+:::
+
+## Tudo é descritor
+
+A afirmação parece exagero até a saída:
+
+```text
+funcao no dict da classe : function
+tem __get__?             : True
+tem __set__?             : False
+
+acesso pela instancia    : method
+acesso pela classe       : function
+o __get__ e quem vincula : <bound method Coletor.sondar of <__main__.Coletor object at 0x70e6dc9e7230>>
+self ja embutido         : True
+
+sondar    function        __get__=True __set__=False
+validar   staticmethod    __get__=True __set__=False
+criar     classmethod     __get__=True __set__=False
+resumo    property        __get__=True __set__=True
+```
+
+(O endereço muda a cada execução.) Uma função comum é um descritor sem dados. `c.sondar` não devolve a função — devolve um `method`, produzido por `function.__get__(c, Coletor)`, com o `self` já embutido. Toda a mecânica de método vinculado do @sec-cap041 é este protocolo, e nada além dele.
+
+`staticmethod` é um descritor cujo `__get__` devolve a função crua, sem vincular nada — é isso e só isso que ele faz. `classmethod` devolve a função vinculada à **classe** em vez da instância. `property` é o único dos quatro com `__set__`, e por isso o único que intercepta atribuição.
+
+Isso também explica, retroativamente, o erro do @sec-cap051: uma classe com `__call__` usada como decorador de método não funciona porque **classes comuns não têm `__get__`**. O objeto fica no dicionário da classe, o acesso pela instância o devolve como está, e ninguém injeta o `self`.
+
+## `__getattr__` e `__getattribute__`
+
+Dois ganchos com nomes parecidos e papéis opostos:
+
+```text
+atributo que existe : valor real
+    [__getattr__('naoexiste')]
+atributo que nao ha : inventado: naoexiste
+
+    [__getattribute__('existe')]
+atributo que existe : valor real
+
+erro classico: RecursionError - maximum recursion depth exceeded
+```
+
+`__getattr__` é o **último recurso**: só é chamado quando toda a busca da figura falhou. É barato e é o que se usa para *proxies* e atributos dinâmicos.
+
+`__getattribute__` intercepta **todo** acesso, inclusive os que teriam sucesso. Ele é quem implementa a ordem de precedência inteira. Sobrescrevê-lo é raro e perigoso: qualquer acesso a `self.qualquer_coisa` dentro dele chama a si mesmo, e o resultado é o `RecursionError` da última linha. Se precisar mesmo, delegue a `object.__getattribute__(self, nome)`.
+
+## `__slots__`
+
+Por padrão, cada instância carrega um dicionário para os seus atributos — flexível e caro. `__slots__` troca esse dicionário por posições fixas, declaradas na classe:
+
+```python
+class ComSlots:
+    __slots__ = ("onu", "potencia")
+```
+
+```text
+200000 instancias, sem strings distintas
+  com __dict__ :   18.3 MiB (96 bytes por instancia)
+  com __slots__:   10.7 MiB (56 bytes por instancia)
+  economia     : 42%
+
+getsizeof do objeto  : dict 48 | slots 48
+getsizeof do __dict__: 88
+```
+
+Quarenta bytes a menos por instância, 42% do total. (A medição usa a mesma string em todas as instâncias, de propósito: com textos distintos, eles dominam o total e a economia aparente cai para 27% — a economia é sobre o **objeto**, não sobre o que ele referencia.) Em duzentas mil instâncias a diferença é de megabytes; em um cache de milhões de registros, é a diferença entre caber e não caber.
+
+O mecanismo é o mesmo do capítulo: `__slots__` cria um **descritor de dados** por nome declarado, cada um lendo e escrevendo numa posição fixa da estrutura do objeto. Não é uma otimização mágica — é o protocolo de descritor aplicado a espaços pré-alocados.
+
+O que se perde:
+
+```text
+tem __dict__? False
+atributo novo: 'ComSlots' object has no attribute 'novo_campo' and no __dict__ for setting new attributes
+weakref      : cannot create weak reference to 'ComSlots' object
+com __weakref__ declarado: True
+
+subclasse sem __slots__ reganha o __dict__: True
+cached_property + slots: No '__dict__' attribute on 'ComCache' instance to cache 'media' property.
+```
+
+Quatro consequências, todas derivadas de não haver `__dict__`. Atributo não declarado deixa de ser possível — o que às vezes é a razão de usar `__slots__`, já que pega erro de digitação em atribuição. Referência fraca deixa de funcionar, a menos que `"__weakref__"` entre na lista. `cached_property` para de funcionar, porque não tem onde gravar. E — a pegadinha — **uma subclasse que não declara `__slots__` recria o dicionário**, anulando a economia para as instâncias dela. Toda a hierarquia precisa declarar.
+
+::: {#fig-layout-slots}
+```{.tikz}
+%%| filename: layout-slots
+%%| alt: Comparacao do layout de memoria de uma instancia com dicionario e de uma com slots, com os tamanhos medidos
+\begin{tikzpicture}[
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  obj/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.4cm, align=center, minimum height=1.6cm,
+              font=\ttfamily\scriptsize},
+  dic/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=3.4cm, align=center, minimum height=1.6cm,
+              font=\ttfamily\scriptsize},
+  slt/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.4cm, align=center, minimum height=1.6cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-7.0);
+
+  \node[ttl] at (4.0, 2.7) {sem \_\_slots\_\_};
+  \node[ttl] at (11.4, 2.7) {com \_\_slots\_\_};
+
+  \node[obj] (o1) at (1.8, 1.0) {instância\\48 B\\ponteiro para\\o dicionário};
+  \node[dic] (d1) at (6.2, 1.0) {\_\_dict\_\_\\88 B\\'onu'\\'potencia'};
+  \draw[fl] (o1) -- (d1);
+
+  \node[slt] (o2) at (11.4, 1.0) {instância\\56 B\\onu\\potencia};
+
+  \node[lb, text width=6.0cm, text=manualred] at (4.0,-0.6)
+    {96 bytes por instância};
+  \node[lb, text width=6.0cm, text=manualgreen!55!black] at (11.4,-0.6)
+    {56 bytes por instância --- 42\% menos};
+
+  \node[nt, text width=15.0cm] at (-0.4,-1.6)
+    {Cada nome em \texttt{\_\_slots\_\_} vira um descritor de dados que lê e
+     escreve numa posição fixa do objeto --- não há mágica, é o mesmo protocolo
+     do resto do capítulo. O preço é não haver \texttt{\_\_dict\_\_}: some o
+     atributo não declarado, some a referência fraca (a menos que
+     \texttt{\_\_weakref\_\_} seja declarado), some a
+     \texttt{cached\_property}, e uma subclasse que esquecer de declarar
+     \texttt{\_\_slots\_\_} traz o dicionário de volta.};
+\end{tikzpicture}
+```
+O dicionário por instância trocado por posições fixas.
+:::
+
+`__slots__` é otimização, e otimização se aplica com medida. A pergunta não é "esta classe pode ter `__slots__`?", é "existem instâncias dela em quantidade suficiente para que 40 bytes importem?". Para uma classe de configuração, criada uma vez, é ruído. Para o registro que se instancia um milhão de vezes num laço de importação, é decisivo.
+
+## 🐍 Jeito Pythônico
+
+**`property` primeiro; descritor quando a lógica se repete.** Uma validação em um campo é `property`. A mesma validação em cinco campos, ou em várias classes, é descritor.
+
+**`__set_name__` em vez de repetir o nome.** Desde o 3.6 não há razão para `Faixa("potencia", ...)`.
+
+**O estado por instância vai no `obj`, nunca no `self` do descritor.** O descritor é único e compartilhado.
+
+```python
+# antipadrão: todas as instâncias compartilham o valor
+def __set__(self, obj, valor):
+    self.valor = valor
+```
+
+```python
+# pythônico: o valor mora na instância
+def __set__(self, obj, valor):
+    setattr(obj, self.nome_privado, valor)
+```
+
+**`if obj is None: return self`** no `__get__`, para que o acesso pela classe devolva o descritor.
+
+**`__set__` decide a precedência.** Com ele, a leitura sempre passa pelo descritor; sem ele, um valor na instância o desliga — que é como `cached_property` funciona.
+
+**`__getattr__` para o que falta; `__getattribute__` quase nunca.** E, se for inevitável, delegue a `object.__getattribute__`.
+
+**`__slots__` só com medida, e em toda a hierarquia.** Uma subclasse sem declaração recria o `__dict__` e anula a economia.
+
+**Antes de escrever um descritor de validação, considere `@dataclass` com `__post_init__`, ou Pydantic** quando o projeto já o usa — assunto do Volume 14. Descritor é a ferramenta certa quando a validação precisa valer em classes que não compartilham base.
+
+Sobre versões:
+
+- **Python 2.2** — o protocolo de descritor, `property`, `staticmethod` e `classmethod` como conhecemos, junto com as classes de novo estilo.
+- **Python 3.6** — `__set_name__` (PEP 487), que elimina a repetição do nome.
+- **Python 3.8** — `cached_property`, um descritor sem dados por desenho.
+- **Python 3.10** — `staticmethod` passa a ser chamável diretamente, além de ser descritor.
+- **Python 3.11** — `__slots__` ganha suporte melhor em `dataclasses` (`@dataclass(slots=True)`), que gera a classe já com os espaços declarados.
+- **Python 3.12** — `cached_property` deixa de usar um bloqueio compartilhado por classe, que serializava acessos entre *threads*.
+
+## 🧪 Laboratório
+
+Objetivo: escrever um descritor de validação reutilizável, provar a regra de precedência com um experimento, e medir o que `__slots__` custa e economiza.
+
+**1. O descritor.**
+
+```bash
+mkdir -p ~/lab53 && cd ~/lab53
+```
+
+Em `descritor.py`, escreva `Faixa` com `__set_name__`, `__get__` e `__set__`, e use-a em três campos. Confirme as três mensagens de erro e o conteúdo do `__dict__`:
+
+```text
+no __dict__: {'onu': 'onu-00043', '_potencia': -29.8, '_temperatura': 42.0, '_corrente': 18.5}
+```
+
+Depois remova o `__set_name__` e descubra o que quebra.
+
+**2. O estado compartilhado.** Em `onde_guarda.py`, grave o valor em `self.valor` dentro do `__set__`. Crie duas instâncias e confirme:
+
+```text
+as duas instancias compartilham o valor: True
+```
+
+**3. A precedência.** Em `precedencia.py`, escreva um descritor com `__set__` e outro sem. Ponha valores no `__dict__` da instância **na mão** e confirme qual vence:
+
+```text
+  a.com : veio do descritor de DADOS
+  a.sem : valor posto no __dict__
+```
+
+Depois acrescente um `__set__` vazio ao segundo descritor e confirme que ele passa a vencer também.
+
+**4. `cached_property` explicada.** Confirme que `cached_property` não tem `__set__` e releia o item anterior. Escreva a sua própria `cached_property` em oito linhas, usando só `__set_name__` e `__get__`.
+
+**5. Método é descritor.** Em `tudo_e_descritor.py`, chame `Classe.__dict__["metodo"].__get__(obj, Classe)` na mão e confirme que o resultado é um método vinculado, com `__self__` apontando para o objeto.
+
+**6. A tabela dos quatro.** Confirme quais de `function`, `staticmethod`, `classmethod` e `property` têm `__set__`:
+
+```text
+resumo    property        __get__=True __set__=True
+```
+
+Relacione com o item 3 e explique por que só a `property` intercepta atribuição.
+
+**7. O decorador de método que não funciona.** Volte à classe `Contar` do @sec-cap051, confirme que ela não tem `__get__`, e conserte-a acrescentando um `__get__` que devolva `partial(self.__call__, obj)`. Teste num método de verdade.
+
+**8. Os dois ganchos.** Em `getattr_vs.py`, confirme que `__getattr__` só é chamado no que falta e que `__getattribute__` é chamado em tudo. Depois escreva o `__getattribute__` recursivo e leia o `RecursionError`.
+
+**9. A medida.** Em `slots.py`, crie 200 mil instâncias de cada versão com `tracemalloc`:
+
+```text
+  com __dict__ :   18.3 MiB (96 bytes por instancia)
+  com __slots__:   10.7 MiB (56 bytes por instancia)
+```
+
+Refaça com uma string distinta por instância e explique por que a economia percentual cai.
+
+**10. O que quebra.** Confirme os quatro efeitos: atributo novo, `weakref`, subclasse sem `__slots__` e `cached_property`. Depois declare `"__weakref__"` na tupla e confirme que a referência fraca volta.
+
+**11. `dataclass` com espaços.** Reescreva a classe como `@dataclass(slots=True)` e confirme, com `tracemalloc`, que a economia é a mesma — com muito menos código.
+
+## Resumo
+
+- Um descritor é um objeto com `__get__`, `__set__` ou `__delete__`, atribuído a um atributo de classe; o acesso pela instância chama o método em vez de devolver o objeto.
+- Descritor é a resposta certa quando a mesma lógica de atributo se repete em vários campos ou em várias classes — uma `property` por campo é duplicação.
+- `__set_name__` recebe o nome sob o qual o descritor foi atribuído, na criação da classe, e elimina a repetição do nome.
+- O descritor é único e compartilhado por todas as instâncias: o estado por instância vai no `obj`, nunca em `self`.
+- `if obj is None: return self` no `__get__` faz o acesso pela classe devolver o descritor.
+- A ordem de resolução de `obj.x` é: descritor de dados, `__dict__` da instância, descritor sem dados, atributo de classe, `__getattr__`, `AttributeError`.
+- Ter `__set__` põe o descritor **acima** do `__dict__` da instância; não ter põe **abaixo**. É por isso que `property` recalcula sempre e `cached_property` calcula uma vez.
+- Funções são descritores sem dados: `c.metodo` é `function.__get__(c, Classe)` produzindo um método vinculado. `staticmethod`, `classmethod` e `property` são as outras três variantes.
+- `__getattr__` é o último recurso; `__getattribute__` intercepta tudo e, mal escrito, produz `RecursionError`.
+- `__slots__` troca o dicionário por posições fixas — 96 para 56 bytes por instância na medição — criando um descritor de dados por nome.
+- O preço de `__slots__`: sem atributo não declarado, sem `weakref` (a menos que declarado), sem `cached_property`, e uma subclasse que não declara traz o `__dict__` de volta.
+
+O `__set_name__` deste capítulo é a primeira ferramenta que age **durante a criação da classe**, e não sobre ela depois de pronta. Ele é um dos ganchos que a PEP 487 introduziu; o outro é `__init_subclass__`, que resolve o problema deixado em aberto pelo @sec-cap052 — um decorador de classe não é herdado pelas subclasses. O @sec-cap054 fecha o volume com esses ganchos e com a máquina que está por trás deles: as metaclasses, e a explicação de por que quase nunca se deve usá-las.
