@@ -106,7 +106,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 061** - Expressões regulares com o módulo re - `vol10/cap061-expressoes-regulares-com-o-modulo-re.qmd`
 - [x] **cap 062** - JSON, CSV e formatos tabulares - `vol10/cap062-json-csv-e-formatos-tabulares.qmd`
 - [x] **cap 063** - YAML, TOML e arquivos de configuração - `vol10/cap063-yaml-toml-e-arquivos-de-configuracao.qmd`
-- [ ] **cap 064** - Serialização binária: pickle, struct e os riscos envolvidos - `vol10/cap064-serializacao-binaria-pickle-struct-e-os.qmd`
+- [x] **cap 064** - Serialização binária: pickle, struct e os riscos envolvidos - `vol10/cap064-serializacao-binaria-pickle-struct-e-os.qmd`
 - [ ] **cap 065** - SQLite e a DB-API: banco de dados sem servidor - `vol10/cap065-sqlite-e-a-db-api-banco-de-dados-sem-servidor.qmd`
 - [ ] **cap 066** - hashlib, secrets e o tratamento de dados sensíveis - `vol10/cap066-hashlib-secrets-e-o-tratamento-de-dados.qmd`
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (63 concluidos).
+**Total:** 104 capitulos em 16 volumes (64 concluidos).
 

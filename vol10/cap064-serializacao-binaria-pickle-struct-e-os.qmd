@@ -1,3 +1,564 @@
 # Serialização binária: pickle, struct e os riscos envolvidos {#sec-cap064}
 
-*(em elaboracao)*
+Os três capítulos anteriores trataram de formatos de texto. Todos têm a mesma virtude — abrir num editor e entender o que está lá — e todos cobram o mesmo preço: perdem tipos. O @sec-cap062 mostrou tupla virando lista e chave numérica virando string no JSON; o @sec-cap063 mostrou o YAML transformar `01310` em `712`.
+
+Serialização binária resolve isso. O `pickle` grava um objeto Python e devolve **o mesmo objeto**, com conjunto, `Decimal`, `datetime` e classes próprias intactos. Parece a resposta óbvia — e é por isso que este capítulo precisa começar pelo aviso.
+
+::: {.callout-warning}
+## `pickle.loads` executa código
+
+Ler um `pickle` de origem não confiável é equivalente a executar um programa que veio junto. Não é uma falha do módulo: é como ele funciona. Nunca desserialize dado que veio de um upload, de uma requisição, de um cache compartilhado ou de qualquer lugar que você não controla. A demonstração está na seção "O risco, demonstrado", com carga inofensiva.
+:::
+
+## `pickle`: fidelidade total
+
+```python
+import pickle
+
+original = {
+    "tupla": (1, 2, 3),
+    "conjunto": {3, 1, 2},
+    "quando": datetime.date(2026, 8, 12),
+    "exato": decimal.Decimal("0.1"),
+    "chave_int": {1: "um"},
+    "bytes": b"\x00\xff",
+}
+volta = pickle.loads(pickle.dumps(original))
+```
+
+```text
+igual? True
+  tupla      tuple
+  conjunto   set
+  quando     date
+  exato      Decimal
+  chave_int  dict
+  bytes      bytes
+```
+
+Tudo voltou como saiu. O mesmo dicionário, no JSON:
+
+```text
+json: Object of type set is not JSON serializable
+```
+
+Os quatro nomes são os mesmos do `json`: `dumps`, `loads`, `dump`, `load` — só que trabalham com `bytes`, não com `str`. E funcionam com classe própria sem nenhuma preparação:
+
+```python
+@dataclass
+class Leitura:
+    onu: str
+    potencia: float
+    alarmes: set
+
+pickle.loads(pickle.dumps(Leitura("onu-00043", -29.8, {"sinal"})))
+```
+
+```text
+volta: Leitura(onu='onu-00043', potencia=-29.8, alarmes={'sinal'})
+mesma classe? True
+```
+
+### O que está gravado ali
+
+Aqui começa a entender-se o resto do capítulo:
+
+```text
+b'\x80\x04\x95\\\x00\x00\x00\x00\x00\x00\x00\x8c\x08__main__\x94\x8c\x07Leitura\x94\x93\x94)\x81\x94}\x94(\x8c\x03onu\x94\x8c\tonu-00043\x94\x8c\x08'
+```
+
+No meio dos bytes estão as strings `__main__` e `Leitura`. O `pickle` **não** gravou a classe: gravou uma instrução dizendo *importe `Leitura` do módulo `__main__` e construa com estes dados*. Toda a fidelidade do formato vem daí — e todo o risco também.
+
+Duas consequências imediatas. A classe precisa existir, com o mesmo nome e no mesmo módulo, na hora de ler:
+
+```text
+PicklingError: Can't pickle <class 'modulo_que_nao_existe.Sumida'>: import of module 'modulo_que_nao_existe' failed
+```
+
+E o arquivo depende do código. Um `pickle` gravado semana passada, lido depois de alguém acrescentar um campo à classe:
+
+```text
+__dict__ da instancia: ['onu', 'potencia']
+obj.limite           : -30.0 (veio do atributo de CLASSE)
+a.acima()            : True -> funciona por acidente
+```
+
+O objeto restaurado **não tem** o campo novo no seu `__dict__`. Ele funcionou porque o campo tinha valor padrão, que é um atributo de classe. Tire o padrão e o defeito aparece:
+
+```text
+__dict__ da instancia: ['onu', 'potencia']
+AttributeError       : 'Leitura' object has no attribute 'limite'
+```
+
+A razão é que **`pickle` não chama `__init__`**: ele cria a instância vazia e injeta o `__dict__` gravado. Nenhum valor padrão, nenhuma validação e nenhuma normalização do construtor acontece. Quando é preciso migrar, `__setstate__` é o lugar:
+
+```python
+def __setstate__(self, estado):
+    self.__dict__.update({"limite": -30.0, **estado})
+```
+
+```text
+__dict__ da instancia: ['limite', 'onu', 'potencia']
+c.acima()            : True
+```
+
+O ponto geral: **`pickle` não é um formato de arquivo, é um despejo do estado interno de um programa.** Ele serve enquanto o programa dos dois lados for o mesmo. Como formato de arquivo de longo prazo, é uma bomba-relógio ligada ao seu próprio histórico de refatorações.
+
+### Protocolos
+
+```text
+DEFAULT_PROTOCOL: 4
+HIGHEST_PROTOCOL: 5
+```
+
+```text
+  protocolo 0:   80920 bytes
+  protocolo 1:   79270 bytes
+  protocolo 2:   79272 bytes
+  protocolo 3:   79272 bytes
+  protocolo 4:   58031 bytes
+  protocolo 5:   58031 bytes
+```
+
+O protocolo 4 (padrão desde a 3.8) é 28% menor que os antigos; o 5 acrescenta suporte a buffers fora de banda, que importa para NumPy e para transferência entre processos. Escrever com `protocol=pickle.HIGHEST_PROTOCOL` é o hábito certo — lembrando que um `pickle` de protocolo 5 não é legível por um Python 3.7.
+
+### O que ele ganha em troca
+
+```text
+pickle  escrita     4.8 ms  leitura     5.5 ms    580139 bytes
+json    escrita     8.8 ms  leitura     8.0 ms    820000 bytes
+```
+
+Vinte mil registros: cerca de 40% mais rápido e 30% menor que o JSON da biblioteca padrão. É uma vantagem real, mas não é enorme — e o `orjson`, mencionado no @sec-cap062, cobre boa parte dessa diferença sem nenhum dos riscos.
+
+## O risco, demonstrado
+
+O mecanismo é o método especial `__reduce__`, que qualquer classe pode definir para dizer ao `pickle` como se reconstruir. Ele devolve um **callable** e seus argumentos — e o `pickle.loads` chama esse callable.
+
+```python
+# DEMONSTRAÇÃO DE ATAQUE — carga inofensiva, só chama print.
+# Trocar print por os.system faz o mesmo mecanismo executar qualquer comando.
+class CargaDemonstrativa:
+    def __reduce__(self):
+        return (print, ("CODIGO EXECUTADO durante pickle.loads()",))
+
+malicioso = pickle.dumps(CargaDemonstrativa())
+pickle.loads(malicioso)          # só deveria LER dados
+```
+
+```text
+bytes recebidos: b"\x80\x04\x95D\x00\x00\x00\x00\x00\x00\x00\x8c\x08builtins\x94\x8c\x05print\x94\x93\x94\x8c'CODIGO EXECUTADO durante pickle.loads()\x94\x85\x94R\x94."
+--- agora o loads, que so deveria LER dados: ---
+CODIGO EXECUTADO durante pickle.loads()
+```
+
+Não houve nenhuma chamada a `print` no código que desserializa. O texto foi impresso porque estava **dentro dos dados**. Substituir `print` por `os.system` é uma edição de cinco caracteres, e o resultado é execução remota de código no processo que leu o arquivo.
+
+O `pickletools` mostra a instrução com todas as letras:
+
+```text
+   11: \x8c SHORT_BINUNICODE 'builtins'
+   22: \x8c SHORT_BINUNICODE 'print'
+   30: \x93 STACK_GLOBAL
+   32: \x8c SHORT_BINUNICODE 'CODIGO EXECUTADO durante pickle.loads()'
+   74: \x85 TUPLE1
+   76: R    REDUCE
+   78: .    STOP
+```
+
+`STACK_GLOBAL` resolve `builtins.print`; `REDUCE` o chama. Um `pickle` não é uma estrutura de dados: é uma **sequência de instruções para uma máquina virtual**, e `loads` é o interpretador dela.
+
+E, ao contrário do YAML, não há saída de emergência:
+
+```text
+pickle tem safe_load? False
+```
+
+Não existe `pickle.safe_load`, e não pode existir — a capacidade de chamar callables é o que faz o formato funcionar. O `Unpickler` permite restringir quais classes são aceitas, sobrescrevendo `find_class`, mas montar essa lista corretamente é difícil e sujeito a fuga por *gadgets* já presentes na biblioteca padrão. A resposta prática é mais simples: **se o dado atravessa uma fronteira de confiança, não use `pickle`.**
+
+Assinar o arquivo com `hmac` (@sec-cap066 trata do módulo) resolve o caso em que você mesmo gravou e quer verificar que ninguém alterou. Não resolve o caso em que a origem é outra pessoa.
+
+::: {#fig-pickle-execucao}
+```{.tikz}
+%%| filename: pickle-execucao
+%%| alt: O caminho de um arquivo pickle desde os bytes recebidos ate a chamada de uma funcao arbitraria pela instrucao REDUCE, comparado com o caminho de um formato de dados que so constroi valores
+\begin{tikzpicture}[
+  byt/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=2.9cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  vm/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=2.9cm, align=center, minimum height=0.9cm,
+             font=\ttfamily\scriptsize},
+  saf/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=2.9cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  fr/.style={->,>=stealth, very thick, manualred},
+  fv/.style={->,>=stealth, very thick, manualgreen},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.6) rectangle (15.6,-5.8);
+
+  \node[ttl] at (-0.4, 4.2) {ler dados contra executar instruções --- a
+                             diferença que o nome \texttt{loads} esconde};
+
+  \node[byt] (b1) at (1.8, 2.9) {bytes recebidos};
+
+  \node[vm]  (v1) at (5.7, 2.9) {pickle.loads\\máquina virtual};
+  \node[vm]  (v2) at (9.6, 2.9) {REDUCE\\chama o callable};
+  \node[vm]  (v3) at (13.5, 2.9) {os.system(...)};
+
+  \draw[fr] (b1) -- (v1);
+  \draw[fr] (v1) -- (v2);
+  \draw[fr] (v2) -- (v3);
+
+  \node[lb, text=manualred] at (-0.4, 1.9)
+    {\texttt{STACK\_GLOBAL} resolve qualquer nome importável;
+     \texttt{REDUCE} o chama com os argumentos que vieram no arquivo};
+
+  \node[byt] (b2) at (1.8, 0.6) {bytes recebidos};
+  \node[saf] (s1) at (5.7, 0.6) {json.loads\\analisador};
+  \node[saf] (s2) at (9.6, 0.6) {constrói dict,\\list, str, int};
+  \node[saf] (s3) at (13.5, 0.6) {nada é chamado};
+
+  \draw[fv] (b2) -- (s1);
+  \draw[fv] (s1) -- (s2);
+  \draw[fv] (s2) -- (s3);
+
+  \node[lb, text=manualgreen] at (-0.4,-0.4)
+    {o pior que um JSON hostil faz é consumir memória --- ele não tem
+     como nomear uma função};
+
+  \node[nt, text width=15.6cm] at (-0.4,-1.4)
+    {Não existe \texttt{pickle.safe\_load}, e não pode existir: chamar
+     \emph{callables} é justamente o que dá ao formato a fidelidade de tipos que
+     o JSON não tem. Restringir classes aceitas sobrescrevendo
+     \texttt{Unpickler.find\_class} reduz a superfície, mas montar a lista
+     corretamente é difícil e há fugas conhecidas por objetos já presentes na
+     biblioteca padrão. A regra prática é de fronteira, não de configuração: se
+     o dado veio de fora do seu controle --- upload, requisição, cache
+     compartilhado, arquivo de terceiro --- ele não entra em
+     \texttt{pickle.loads}. Assinar com HMAC prova que o arquivo é o que você
+     gravou; não prova que um arquivo de outra pessoa é seguro.};
+\end{tikzpicture}
+```
+`json.loads` constrói valores; `pickle.loads` executa instruções.
+:::
+
+### Onde `pickle` é a ferramenta certa
+
+Ele não é proibido — é de uso interno. Os casos legítimos têm todos a mesma forma: **os dois lados são o mesmo programa, na mesma máquina, na mesma versão**.
+
+O `multiprocessing` usa `pickle` para mandar argumentos e resultados entre processos (Volume 15), e o `concurrent.futures` idem. Um cache local de resultado caro, num arquivo que só o próprio programa escreve e lê, é aceitável. `shelve` é um dicionário persistente construído sobre `pickle`, e herda as mesmas restrições. E `copy.deepcopy` usa a mesma maquinaria por baixo.
+
+Fora disso: JSON ou JSON Lines para dados que atravessam processos ou tempo, e as ferramentas do próximo capítulo para dados que precisam ser consultados.
+
+## `struct`: bytes com layout combinado
+
+`pickle` é binário e automático. `struct` é binário e **explícito** — você declara exatamente quantos bytes cada campo ocupa e em que ordem. É a ferramenta para protocolo de rede, cabeçalho de arquivo e conversa com equipamento.
+
+```python
+import struct
+
+cab = struct.pack(">4sHHI", b"ONUF", 1, 43, 1274)
+```
+
+```text
+bytes: b'ONUF\x00\x01\x00+\x00\x00\x04\xfa'
+tamanho: 12 calcsize: 12
+volta: (b'ONUF', 1, 43, 1274)
+```
+
+A string de formato é a especificação inteira. `>` fixa a ordem dos bytes; `4s` são quatro bytes de texto; `H` é inteiro sem sinal de 2 bytes; `I` é de 4. Os códigos mais usados são `b`/`B` (1 byte), `h`/`H` (2), `i`/`I` (4), `q`/`Q` (8), `f` (4, ponto flutuante), `d` (8), `s` (bytes), `?` (booleano) e `x` (byte de preenchimento).
+
+::: {#fig-struct-layout}
+```{.tikz}
+%%| filename: struct-layout
+%%| alt: Os doze bytes de um cabecalho binario, agrupados nos quatro campos que a string de formato descreve, com os valores decodificados
+\begin{tikzpicture}[
+  bx/.style={draw=manualgray, very thick, fill=manualgray!6,
+             minimum width=1.1cm, minimum height=0.75cm,
+             font=\ttfamily\scriptsize},
+  g1/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.5cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\scriptsize},
+  g2/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=2.2cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\scriptsize},
+  g3/.style={draw=manualyellow!75!black, very thick, rounded corners,
+             fill=manualyellow!20, text width=4.5cm, align=center,
+             minimum height=0.75cm, font=\ttfamily\scriptsize},
+  seg/.style={manualgray, thick},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  ct/.style={font=\ttfamily\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.8) rectangle (15.6,-4.6);
+
+  \node[ttl] at (-0.4, 4.4) {\texttt{struct.pack(">4sHHI", b"ONUF", 1, 43, 1274)}
+                             --- doze bytes, quatro campos};
+
+  \node[ct, anchor=west] at (-0.4, 3.5) {byte};
+  \node[ct] at ( 1.2, 3.5) {0};
+  \node[ct] at ( 2.3, 3.5) {1};
+  \node[ct] at ( 3.4, 3.5) {2};
+  \node[ct] at ( 4.5, 3.5) {3};
+  \node[ct] at ( 5.6, 3.5) {4};
+  \node[ct] at ( 6.7, 3.5) {5};
+  \node[ct] at ( 7.8, 3.5) {6};
+  \node[ct] at ( 8.9, 3.5) {7};
+  \node[ct] at (10.0, 3.5) {8};
+  \node[ct] at (11.1, 3.5) {9};
+  \node[ct] at (12.2, 3.5) {10};
+  \node[ct] at (13.3, 3.5) {11};
+
+  \node[bx] at ( 1.2, 2.7) {4F};
+  \node[bx] at ( 2.3, 2.7) {4E};
+  \node[bx] at ( 3.4, 2.7) {55};
+  \node[bx] at ( 4.5, 2.7) {46};
+  \node[bx] at ( 5.6, 2.7) {00};
+  \node[bx] at ( 6.7, 2.7) {01};
+  \node[bx] at ( 7.8, 2.7) {00};
+  \node[bx] at ( 8.9, 2.7) {2B};
+  \node[bx] at (10.0, 2.7) {00};
+  \node[bx] at (11.1, 2.7) {00};
+  \node[bx] at (12.2, 2.7) {04};
+  \node[bx] at (13.3, 2.7) {FA};
+
+  \node[g1] at ( 2.85, 1.3) {4s};
+  \node[g2] at ( 6.15, 1.3) {H};
+  \node[g2] at ( 8.35, 1.3) {H};
+  \node[g3] at (11.65, 1.3) {I};
+
+  \node[g1] at ( 2.85, 0.3) {b"ONUF"};
+  \node[g2] at ( 6.15, 0.3) {1};
+  \node[g2] at ( 8.35, 0.3) {43};
+  \node[g3] at (11.65, 0.3) {1274};
+
+  \draw[seg] ( 0.65, 2.3) -- ( 0.65, 1.75);
+  \draw[seg] ( 5.05, 2.3) -- ( 5.05, 1.75);
+  \draw[seg] ( 7.25, 2.3) -- ( 7.25, 1.75);
+  \draw[seg] ( 9.45, 2.3) -- ( 9.45, 1.75);
+  \draw[seg] (13.85, 2.3) -- (13.85, 1.75);
+  \draw[seg] ( 0.65, 1.75) -- (13.85, 1.75);
+
+  \node[lb] at (-0.4,-0.7)
+    {O \texttt{>} do início fixa a ordem: o byte mais significativo primeiro.
+     Sem ele, o mesmo 1274 sairia como};
+  \node[lb] at (-0.4,-1.3)
+    {\texttt{FA 04 00 00} numa máquina Intel --- e o outro lado leria
+     4.194.304.000.};
+
+  \node[nt, text width=15.6cm] at (-0.4,-2.1)
+    {Cada byte tem posição e significado combinados de antemão, e é isso que
+     permite conversar com um equipamento ou com um programa escrito em outra
+     linguagem. O preço é que não há metadado nenhum: um arquivo \texttt{struct}
+     sem a string de formato é uma sequência de bytes sem sentido, então o
+     formato pertence à documentação do protocolo e não ao arquivo.};
+\end{tikzpicture}
+```
+A string de formato é a especificação: doze bytes, quatro campos, ordem fixa.
+:::
+
+### A ordem dos bytes, que é a armadilha do módulo
+
+```text
+big    >I: b'\x00\x00\x04\xfa'
+little <I: b'\xfa\x04\x00\x00'
+nativo  I: b'\xfa\x04\x00\x00'
+ordem da maquina: little
+```
+
+O mesmo número, três representações. O prefixo `>` é *big-endian*, ordem tradicional dos protocolos de rede (`!` é sinônimo); `<` é *little-endian*, a das máquinas Intel e ARM comuns; `=` é a nativa da máquina.
+
+Sem prefixo, o formato usa a ordem nativa **e o alinhamento do compilador C**:
+
+```text
+nativo com alinhamento '@' : 8
+sem alinhamento         '=': 7
+big-endian              '>': 7
+```
+
+Um byte de diferença, inserido como preenchimento invisível. Num arquivo que atravessa máquinas, é a diferença entre funcionar e não funcionar — e o defeito só aparece na máquina do outro.
+
+**Regra sem exceção: em qualquer dado que saia do processo, comece o formato com `>`, `<` ou `!`.** Formato sem prefixo é para conversar com uma biblioteca C na mesma máquina, e mais nada.
+
+### Erros, fluxo e desempenho
+
+```text
+estouro: 'H' format requires 0 <= number <= 65535
+tamanho: unpack requires a buffer of 4 bytes
+```
+
+`struct.error` avisa alto nos dois casos comuns: valor que não cabe no campo e buffer do tamanho errado. É um módulo honesto — ao contrário do `pickle`, aqui o que falha, falha.
+
+Para um fluxo de registros de tamanho fixo, `Struct` compilado com `iter_unpack` evita reanalisar o formato:
+
+```python
+S = struct.Struct(">4sHHI")
+for reg in S.iter_unpack(fluxo):
+    ...
+```
+
+```text
+fluxo de 48 bytes
+   (b'ONUF', 1, 0, 1000)
+   (b'ONUF', 1, 1, 1001)
+   (b'ONUF', 1, 2, 1002)
+   (b'ONUF', 1, 3, 1003)
+```
+
+O ganho de compilar é modesto — 10% em duzentas mil chamadas — porque o módulo também mantém um cache de formatos. O motivo real de usar `Struct` é o mesmo do `re.compile`: dar nome ao formato e declará-lo uma vez.
+
+Um último detalhe que morde em telemetria:
+
+```text
+float 32 bits: -29.799999237060547
+float 64 bits: -29.8
+```
+
+`f` tem 4 bytes e cerca de 7 dígitos significativos. Economizar metade do espaço custa precisão, e o valor que volta não é o que entrou — o assunto do @sec-cap010, agora no nível dos bytes.
+
+## Os outros da família
+
+`marshal` é usado internamente pelo Python para os arquivos `.pyc`. A documentação é explícita em dizer que **não** é para dados de usuário: o formato muda entre versões sem aviso e sem compatibilidade. Se aparecer numa busca como "pickle mais rápido", ignore.
+
+`shelve` é um dicionário persistente em disco, construído sobre `pickle` e `dbm`. Herda tudo — a conveniência e os riscos.
+
+`dbm` guarda pares de `bytes` e é seguro, mas primitivo. Para praticamente todo caso em que ele apareceria, um banco embutido faz melhor — e é o que vem agora.
+
+## 🐍 Jeito Pythônico
+
+**`pickle` só entre processos que você controla.** Fronteira de confiança atravessada, `pickle` sai.
+
+```python
+# antipadrão: dado de fora
+with open(arquivo_recebido, "rb") as f:
+    dados = pickle.load(f)     # execução de código arbitrário
+```
+
+```python
+# pythônico
+with open(arquivo_recebido, encoding="utf-8") as f:
+    dados = json.load(f)       # constrói valores, não chama nada
+```
+
+**`protocol=pickle.HIGHEST_PROTOCOL`** quando `pickle` for mesmo a escolha.
+
+**Não guarde `pickle` por muito tempo.** O arquivo depende das suas classes, e elas mudam.
+
+**`__setstate__` para migrar** o que já está gravado — lembrando que `__init__` não roda na restauração.
+
+**Prefixo de ordem em todo formato de `struct`** que saia do processo: `>`, `<` ou `!`, nunca o padrão nativo.
+
+**`struct.Struct` nomeado no nível do módulo,** como se faz com `re.compile`.
+
+**`d`, não `f`,** a menos que o espaço seja mesmo o problema.
+
+**`marshal` nunca**, para dado de usuário.
+
+**Se o formato precisa ser lido daqui a cinco anos, ele é de texto** — ou é Parquet, ou é um banco.
+
+Sobre versões:
+
+- **Python 3.4** — protocolo 4, com objetos grandes e nomes qualificados aninhados.
+- **Python 3.8** — protocolo 5 (PEP 574), com buffers fora de banda; e o protocolo 4 virou o padrão.
+- **Python 3.11** — `struct` mais rápido no caminho de formatos simples.
+- **Python 3.13** — `pickle` mantém o protocolo 4 como padrão, com o 5 disponível por escolha explícita.
+
+Do ecossistema, quando `pickle` parecer a resposta: `msgpack` é binário, compacto, multilinguagem e **não executa código**; `cloudpickle` serializa funções e lambdas que o `pickle` não alcança (usado por Dask e Ray, e com exatamente os mesmos riscos); e `pyarrow` cobre dados tabulares grandes com Parquet, no Volume 13.
+
+## 🧪 Laboratório
+
+Objetivo: ver a fidelidade do `pickle`, provocar as três formas de ele quebrar, e montar um cabeçalho binário com `struct`.
+
+::: {.callout-warning}
+Todo o laboratório roda em diretório descartável, com dados que você mesmo gera. Não desserialize nenhum arquivo baixado.
+:::
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab64 && cd ~/lab64
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. Fidelidade.** Serialize o dicionário com tupla, conjunto, `date`, `Decimal`, chave inteira e `bytes`. Confirme `==` na volta e o tipo de cada chave. Tente o mesmo com `json.dumps` e anote onde para.
+
+**3. O que está gravado.** Imprima os primeiros 60 bytes do `pickle` de uma `dataclass` e localize o nome do módulo e o da classe dentro deles.
+
+**4. A classe some.** Grave um objeto num script, apague a classe do arquivo e tente ler. Depois renomeie a classe e tente de novo.
+
+**5. A classe muda.** Grave com dois campos, acrescente um terceiro **com** valor padrão e leia. Confirme que `vars(obj)` não tem o campo, mas `obj.campo` funciona. Remova o padrão e confirme:
+
+```text
+AttributeError       : 'Leitura' object has no attribute 'limite'
+```
+
+Explique em uma frase por que `__init__` não corrigiu isso.
+
+**6. `__setstate__`.** Escreva a migração e confirme que o campo passa a existir no `__dict__`.
+
+**7. Protocolos.** Meça o tamanho do mesmo objeto nos protocolos 0 a 5:
+
+```text
+  protocolo 0:   80920 bytes
+  protocolo 4:   58031 bytes
+```
+
+**8. Comparação.** Meça `pickle` contra `json` em 20 mil registros, tempo e tamanho. Instale `orjson` e refaça a medida.
+
+**9. O ataque, com carga inofensiva.** Escreva a classe com `__reduce__` devolvendo `(print, ("...",))`, serialize e desserialize. Confirme que o texto aparece **sem** nenhuma chamada a `print` no seu código de leitura.
+
+Depois rode `pickletools.dis` sobre os bytes e localize `STACK_GLOBAL` e `REDUCE`:
+
+```text
+   30: \x93 STACK_GLOBAL
+   76: R    REDUCE
+```
+
+**Não** troque `print` por `os.system`. O ponto já está provado.
+
+**10. Sem saída.** Confirme que `pickle.safe_load` não existe. Leia a documentação de `Unpickler.find_class` e escreva por que uma lista de permissão é difícil de acertar.
+
+**11. `struct` básico.** Monte o cabeçalho `>4sHHI` e confirme os 12 bytes, o `calcsize` e a volta com `unpack`.
+
+**12. Ordem dos bytes.** Empacote 1274 com `>I`, `<I` e `I`. Compare com `sys.byteorder`. Depois compare `calcsize("@cHi")` com `calcsize("=cHi")` e explique o byte extra.
+
+**13. Erros.** Provoque o estouro de `H` com 70000 e o buffer curto no `unpack`.
+
+**14. Fluxo.** Gere quatro registros concatenados e leia com `Struct.iter_unpack`. Meça `struct.pack` contra `Struct.pack` em 200 mil chamadas.
+
+**15. Precisão.** Empacote `-29.8` como `f` e como `d`, desempacote os dois e compare:
+
+```text
+float 32 bits: -29.799999237060547
+float 64 bits: -29.8
+```
+
+## Resumo
+
+- `pickle` devolve o objeto **idêntico** — tupla, conjunto, `Decimal`, `datetime` e classes próprias — o que nenhum formato de texto faz.
+- Ele não grava a classe: grava a instrução de importá-la do módulo original, e é dessa indireção que vêm a fidelidade e o risco.
+- A classe precisa existir na leitura, com o mesmo nome e módulo, ou o `pickle` falha.
+- `pickle` **não chama `__init__`**: cria a instância vazia e injeta o `__dict__`, então campo novo não recebe valor padrão nem validação.
+- Campo novo com valor padrão de classe faz o defeito funcionar por acidente; sem padrão, sai `AttributeError`. `__setstate__` é onde a migração cabe.
+- O protocolo 4 é o padrão e é 28% menor que os antigos; o 5 acrescenta buffers fora de banda.
+- Contra o `json` da biblioteca padrão, `pickle` é cerca de 40% mais rápido e 30% menor — vantagem real, mas coberta por `orjson` sem os riscos.
+- `pickle.loads` executa código: `__reduce__` devolve um callable e o opcode `REDUCE` o chama. Um `pickle` é um programa, não uma estrutura de dados.
+- Não existe `pickle.safe_load` e não pode existir; `find_class` restringe, mas há fugas conhecidas. A regra é de fronteira: dado de fora não entra em `pickle`.
+- Usos legítimos têm todos a mesma forma — mesmo programa, mesma máquina, mesma versão: `multiprocessing`, `concurrent.futures`, cache local, `shelve`.
+- `struct` é binário explícito: a string de formato declara tamanho, tipo e ordem de cada campo, e serve para protocolo, cabeçalho e equipamento.
+- Prefixo `>`, `<` ou `!` em todo formato que saia do processo; sem prefixo vale a ordem nativa **e** o alinhamento do compilador, que muda o tamanho do registro.
+- `struct.error` avisa alto no estouro de campo e no buffer de tamanho errado.
+- `f` de 4 bytes tem ~7 dígitos significativos e devolve `-29.799999237060547` no lugar de `-29.8`; `d` preserva.
+- `marshal` é formato interno do CPython e muda entre versões — nunca para dado de usuário; `shelve` é `pickle` persistente e herda tudo.
+
+O próximo capítulo troca o arquivo pela consulta. Todos os formatos vistos até aqui exigem carregar o conteúdo para procurar dentro dele; SQLite inverte isso — o dado fica no disco e a pergunta vai até ele.
