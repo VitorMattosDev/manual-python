@@ -1,3 +1,530 @@
 # datetime, zoneinfo e o tratamento de tempo {#sec-cap056}
 
-*(em elaboracao)*
+O relatório diário fechava às 23h59 e somava tudo que tinha `data == hoje`. Funcionou por meses. Quando a aplicação migrou para um servidor configurado em UTC, o relatório começou a perder as três últimas horas de cada dia — e a ganhar três horas do dia anterior. Ninguém tinha mudado uma linha de código.
+
+O defeito estava numa chamada que parece a coisa mais inocente do módulo: `datetime.now()`. Ela devolve a hora do relógio da máquina **sem registrar de que relógio se trata**. O valor `2026-08-12 14:30` não é um instante: é a leitura de um mostrador. Sozinho, ele não diz se são 14:30 em São Paulo, em Lisboa ou em Tóquio — três instantes separados por horas. Guardar essa leitura num banco e lê-la de volta em outro fuso é somar erro em silêncio.
+
+Tempo é o tipo de dado em que a intuição atrapalha. Dias nem sempre têm 24 horas, minutos nem sempre têm 60 segundos, há horas que aconteceram duas vezes e horas que nunca existiram, e "somar um dia" tem pelo menos duas respostas defensáveis. Este capítulo separa as ideias que a linguagem cotidiana mistura e mostra a API que o Python oferece para cada uma.
+
+## Ingênuo e consciente
+
+A distinção que organiza o módulo inteiro é entre `datetime` **ingênuo** (*naive*, sem fuso) e **consciente** (*aware*, com fuso):
+
+```python
+from datetime import datetime, timezone
+
+agora = datetime.now()
+agora_utc = datetime.now(timezone.utc)
+
+print("now()            :", agora)
+print("  tzinfo         :", agora.tzinfo)
+print("now(timezone.utc):", agora_utc)
+print("  tzinfo         :", agora_utc.tzinfo)
+```
+
+```text
+now()            : 2026-08-12 12:17:19.809663
+  tzinfo         : None
+now(timezone.utc): 2026-08-12 15:17:19.809976+00:00
+  tzinfo         : UTC
+```
+
+O mesmo instante, duas leituras. A primeira é o mostrador local — e `tzinfo` vale `None`, o que significa "não sei a que fuso isto pertence". A segunda carrega o `+00:00` e pode ser convertida para qualquer lugar do mundo sem ambiguidade.
+
+Os dois tipos não se misturam, e o Python é rígido nisso:
+
+```text
+TypeError: can't subtract offset-naive and offset-aware datetimes
+comparacao: TypeError: can't compare offset-naive and offset-aware datetimes
+```
+
+Essa rigidez é um presente. Sem ela, subtrair um instante consciente de uma leitura ingênua devolveria um número plausível e errado. O `TypeError` obriga a decidir o que aquele valor sem fuso significava.
+
+::: {#fig-ingenuo-consciente}
+```{.tikz}
+%%| filename: ingenuo-consciente
+%%| alt: A esquerda uma leitura de relogio sem fuso apontando para tres instantes possiveis diferentes na linha do tempo em UTC; a direita a mesma leitura com fuso apontando para um unico instante
+\begin{tikzpicture}[
+  lei/.style={draw=manualred, very thick, rounded corners, fill=manualred!8,
+              text width=4.0cm, align=center, minimum height=1.0cm,
+              font=\ttfamily\scriptsize},
+  con/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=4.0cm, align=center,
+              minimum height=1.0cm, font=\ttfamily\scriptsize},
+  ins/.style={draw=manualgray, thick, rounded corners, fill=manualgray!8,
+              minimum height=0.6cm, inner xsep=4pt, font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualred},
+  fv/.style={->,>=stealth, very thick, manualgreen!65!black},
+  lna/.style={very thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-8.4);
+
+  \node[ttl] at (-0.4, 3.1) {ingênuo --- uma leitura de mostrador};
+  \node[lei] (l) at (2.2, 1.7) {2026-08-12 14:30};
+  \node[ins] (i1) at (9.6, 2.6) {17:30 UTC \quad se for São Paulo};
+  \node[ins] (i2) at (9.6, 1.7) {13:30 UTC \quad se for Lisboa};
+  \node[ins] (i3) at (9.6, 0.8) {05:30 UTC \quad se for Tóquio};
+  \draw[fl] (l) -- (i1);
+  \draw[fl] (l) -- (i2);
+  \draw[fl] (l) -- (i3);
+  \node[lb, text=manualred, anchor=west] at (12.6, 1.7) {qual?};
+
+  \node[ttl] at (-0.4,-1.4) {consciente --- um instante};
+  \node[con] (c) at (2.2,-2.8) {2026-08-12 14:30-03:00};
+  \node[ins] (u) at (9.6,-2.8) {17:30 UTC};
+  \draw[fv] (c) -- (u);
+  \node[lb, text=manualgreen!55!black, anchor=west] at (12.6,-2.8) {sem dúvida};
+
+  \draw[lna] (0.6,-4.6) -- (13.4,-4.6);
+  \node[lb, anchor=north] at (0.9,-4.8) {passado};
+  \node[lb, anchor=north] at (13.1,-4.8) {futuro};
+  \fill[manualgreen!65!black] (9.6,-4.6) circle (3.2pt);
+  \node[lb, anchor=south, text=manualgreen!55!black] at (9.6,-4.45) {17:30 UTC};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.6)
+    {Um instante é um ponto na linha do tempo, e existe um só. A leitura de
+     mostrador é uma projeção desse ponto num lugar do planeta --- guardá-la sem
+     dizer qual lugar é perder informação que ninguém consegue recuperar depois.
+     Por isso o Python recusa comparar os dois tipos: a comparação exigiria
+     adivinhar o fuso que não foi informado.};
+\end{tikzpicture}
+```
+Sem fuso, a mesma leitura corresponde a instantes diferentes; com fuso, a um só.
+:::
+
+### `utcnow` está aposentada
+
+Havia uma armadilha na biblioteca que enganou uma geração inteira:
+
+```text
+utcnow()      : 2026-08-12 15:17:19.828936 | tzinfo: None
+  -> DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+now(utc)      : 2026-08-12 15:17:19.829026+00:00 | tzinfo: UTC
+```
+
+`datetime.utcnow()` devolvia a hora em UTC **como ingênua** — o pior dos dois mundos, porque o valor está em UTC mas nada no objeto registra isso, e qualquer conversão posterior o trata como hora local. Desde a 3.12 ela emite `DeprecationWarning`, e a substituta é `datetime.now(timezone.utc)`. Se estiver na 3.11 ou mais recente, `datetime.UTC` é um apelido mais curto de `timezone.utc`.
+
+## `zoneinfo`: o mundo real dos fusos
+
+`timezone.utc` e `timezone(timedelta(hours=-3))` representam deslocamentos fixos. Fuso horário de verdade não é fixo: é uma **regra política**, que muda com o tempo e por decisão de governo. Desde o Python 3.9 (PEP 615), `zoneinfo` lê a base de dados IANA — a mesma que o sistema operacional usa:
+
+```python
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+instante = datetime(2026, 8, 12, 14, 30, tzinfo=timezone.utc)
+
+for nome in ["UTC", "America/Sao_Paulo", "America/New_York",
+             "Europe/Lisbon", "Asia/Tokyo"]:
+    local = instante.astimezone(ZoneInfo(nome))
+    print(f"{nome:20} {local:%Y-%m-%d %H:%M %Z} (offset {local.utcoffset()})")
+```
+
+```text
+UTC                  2026-08-12 14:30 UTC (offset 0:00:00)
+America/Sao_Paulo    2026-08-12 11:30 -03 (offset -1 day, 21:00:00)
+America/New_York     2026-08-12 10:30 EDT (offset -1 day, 20:00:00)
+Europe/Lisbon        2026-08-12 15:30 WEST (offset 1:00:00)
+Asia/Tokyo           2026-08-12 23:30 JST (offset 9:00:00)
+
+mesmo instante? {1786545000.0}
+```
+
+Cinco leituras de mostrador, um único instante — o conjunto de *timestamps* tem um elemento só, que é a prova. `astimezone` nunca muda o instante; ela troca a projeção.
+
+O `-1 day, 21:00:00` no deslocamento de São Paulo assusta e é só a forma como `timedelta` normaliza valores negativos: `-1 dia + 21 horas = -3 horas`. É legível com `-1 day` na frente, mas o valor está certo.
+
+Repare também que Nova York aparece como `EDT` e não `EST`: em agosto, o horário de verão do hemisfério norte está em vigor, e `zoneinfo` sabe disso. É o tipo de detalhe que nenhum deslocamento fixo acerta.
+
+::: {.callout-warning}
+## No Windows, `zoneinfo` precisa do pacote `tzdata`
+
+O Windows não traz a base IANA. Sem ela, o mesmo código falha:
+
+```text
+zonas disponiveis: 0
+zoneinfo falhou: ZoneInfoNotFoundError: 'No time zone found with key America/Sao_Paulo'
+```
+
+No Linux usado para os exemplos deste capítulo, `available_timezones()` devolve **599** entradas. A correção é declarar a dependência:
+
+```bash
+pip install tzdata
+```
+
+Vale declará-la no `pyproject.toml` de qualquer projeto que use `zoneinfo` e possa rodar no Windows — inclusive porque contêineres mínimos (`alpine`, `distroless`) também costumam vir sem a base.
+:::
+
+## O horário de verão e as duas horas patológicas
+
+A base IANA guarda o histórico, e o Brasil oferece um caso perfeito para estudo: houve horário de verão até 2019, e as regras antigas continuam lá.
+
+Na virada de 2018, à meia-noite do dia 4 de novembro, os relógios de São Paulo pularam direto para 1h. A hora entre 00:00 e 01:00 **não existiu**. O que o Python faz quando se pede uma hora que não aconteceu:
+
+```python
+SP = ZoneInfo("America/Sao_Paulo")
+inexistente = datetime(2018, 11, 4, 0, 30, tzinfo=SP)
+print("hora que nao existiu:", inexistente)
+print("  offset            :", inexistente.utcoffset())
+print("  volta para SP     :", inexistente.astimezone(ZoneInfo("UTC")).astimezone(SP))
+```
+
+```text
+hora que nao existiu: 2018-11-04 00:30:00-03:00
+  offset            : -1 day, 21:00:00
+  volta para SP     : 2018-11-04 01:30:00-02:00
+```
+
+Não houve erro. O Python aceitou a data, escolheu o deslocamento anterior à virada e seguiu em frente — mas a ida e volta pelo UTC **não** devolveu o valor original: `00:30` virou `01:30`. Um objeto que não sobrevive a `astimezone(utc).astimezone(local)` é um objeto que representa um instante inexistente, e todo cálculo feito com ele carrega esse desvio.
+
+O outro lado é a hora repetida. Em 16 de fevereiro de 2019, à meia-noite, os relógios voltaram para 23h — de modo que as 23h daquele dia aconteceram **duas vezes**. O atributo `fold` (PEP 495, Python 3.6) é o que distingue as duas:
+
+```python
+ambigua_a = datetime(2019, 2, 16, 23, 30, tzinfo=SP, fold=0)
+ambigua_b = datetime(2019, 2, 16, 23, 30, tzinfo=SP, fold=1)
+```
+
+```text
+hora ambigua fold=0 : 2019-02-16 23:30:00-02:00 offset -1 day, 22:00:00
+hora ambigua fold=1 : 2019-02-16 23:30:00-03:00 offset -1 day, 21:00:00
+sao o mesmo instante? True
+diferenca real       : 3600.0 s
+```
+
+Leia as duas últimas linhas com atenção, porque elas são o cúmulo da estranheza: os dois objetos comparam como **iguais**, e mesmo assim seus *timestamps* diferem em exatamente uma hora. Isso é intencional — a PEP 495 preservou a semântica de comparação anterior para não quebrar código existente, e `fold` só é considerado na conversão para outro fuso. A consequência prática: **um conjunto ou dicionário chaveado por `datetime` local vai colapsar as duas ocorrências numa só**, e uma hora de dados desaparece uma vez por ano.
+
+::: {#fig-salto-verao}
+```{.tikz}
+%%| filename: salto-verao
+%%| alt: Duas linhas do tempo comparando a hora local com o UTC, mostrando o buraco de uma hora na entrada do horario de verao e a hora repetida na saida
+\begin{tikzpicture}[
+  hra/.style={draw=manualblue, thick, rounded corners, fill=manualblue!11,
+              minimum height=0.62cm, minimum width=1.5cm,
+              font=\ttfamily\scriptsize},
+  vaz/.style={draw=manualred, very thick, dashed, rounded corners,
+              fill=manualred!7, minimum height=0.62cm, minimum width=1.5cm,
+              font=\ttfamily\scriptsize, text=manualred},
+  rep/.style={draw=manualyellow!75!black, very thick, rounded corners,
+              fill=manualyellow!22, minimum height=0.62cm, minimum width=1.5cm,
+              font=\ttfamily\scriptsize},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.4) rectangle (15.0,-8.0);
+
+  \node[ttl] at (-0.4, 3.9) {entrada do horário de verão --- 04/11/2018};
+  \node[lb] at (-0.4, 2.1) {local};
+  \node[hra] at (2.4, 2.1) {22:00};
+  \node[hra] at (4.1, 2.1) {23:00};
+  \node[hra] at (5.8, 2.1) {01:00};
+  \node[hra] at (7.5, 2.1) {02:00};
+  \node[hra] at (9.2, 2.1) {03:00};
+  \node[vaz] at (4.95, 3.0) {00:00};
+  \node[lb, text=manualred] at (10.4, 2.1) {o relógio pulou 00:00};
+  \node[lb, text=manualred] at (5.9, 3.0) {esta hora não existiu};
+
+  \node[lb] at (-0.4, 1.1) {UTC};
+  \node[hra] at (2.4, 1.1) {01:00};
+  \node[hra] at (4.1, 1.1) {02:00};
+  \node[hra] at (5.8, 1.1) {03:00};
+  \node[hra] at (7.5, 1.1) {04:00};
+  \node[hra] at (9.2, 1.1) {05:00};
+  \node[lb] at (10.4, 1.1) {segue de hora em hora};
+
+  \node[ttl] at (-0.4,-0.9) {saída do horário de verão --- 16/02/2019};
+  \node[lb] at (-0.4,-1.9) {local};
+  \node[hra] at (2.4,-1.9) {22:00};
+  \node[rep] at (4.1,-1.9) {23:00};
+  \node[rep] at (5.8,-1.9) {23:00};
+  \node[hra] at (7.5,-1.9) {00:00};
+  \node[hra] at (9.2,-1.9) {01:00};
+  \node[lb, text=manualyellow!55!black] at (10.4,-1.9) {a mesma hora, duas vezes};
+
+  \node[lb] at (-0.4,-2.9) {UTC};
+  \node[hra] at (2.4,-2.9) {00:00};
+  \node[hra] at (4.1,-2.9) {01:00};
+  \node[hra] at (5.8,-2.9) {02:00};
+  \node[hra] at (7.5,-2.9) {03:00};
+  \node[hra] at (9.2,-2.9) {04:00};
+  \node[lb] at (10.4,-2.9) {segue de hora em hora};
+
+  \node[lb, text=manualyellow!55!black, anchor=north] at (4.1,-3.6) {fold=0};
+  \node[lb, text=manualyellow!55!black, anchor=north] at (5.8,-3.6) {fold=1};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.7)
+    {A linha do UTC nunca salta nem repete --- é por isso que ela é o formato de
+     armazenamento certo. O salto e a repetição existem só na projeção local, e é
+     por isso que agendar tarefa por hora local exige decidir, por escrito, o que
+     fazer com a hora que não existiu e com a que aconteceu duas vezes.};
+\end{tikzpicture}
+```
+O horário de verão abre um buraco na entrada e repete uma hora na saída.
+:::
+
+## Aritmética: `timedelta` e a hora que some
+
+`timedelta` é a diferença entre dois instantes, e opera com naturalidade:
+
+```python
+inicio = datetime(2026, 8, 12, 9, 0)
+fim = datetime(2026, 8, 14, 17, 30)
+d = fim - inicio
+```
+
+```text
+diferenca   : 2 days, 8:30:00
+repr        : datetime.timedelta(days=2, seconds=30600)
+total_seconds: 203400.0
+dias        : 2 | segundos: 30600
+em horas    : 56.5
+quantos turnos de 8h cabem: 7
+
+dias entre datas: 135
+proxima segunda : 2026-08-17
+weekday/isoweekday: 2 3
+```
+
+Três detalhes que evitam erro:
+
+**`d.days` não é a duração em dias.** É o componente inteiro; `d.seconds` é o resto **dentro do dia**, não o total. Quem quer a duração usa `total_seconds()` ou divide por um `timedelta`: `d / timedelta(hours=1)` dá 56,5 horas, e `d // timedelta(hours=8)` dá quantos turnos cabem. Essa divisão entre `timedelta` é a operação mais subutilizada do módulo.
+
+**`weekday()` conta de 0 (segunda) e `isoweekday()` conta de 1.** Misturar os dois desloca tudo em um dia; a quarta-feira 12/08/2026 aparece como `2` e `3`.
+
+**Aritmética com `datetime` consciente é feita no mostrador, não na linha do tempo.** Este é o ponto que mais custa caro:
+
+```python
+SP = ZoneInfo("America/Sao_Paulo")
+antes = datetime(2018, 11, 3, 20, 0, tzinfo=SP)
+
+mais_1d = antes + timedelta(days=1)
+correto = (antes.astimezone(ZoneInfo("UTC")) + timedelta(days=1)).astimezone(SP)
+```
+
+```text
+antes        : 2018-11-03 20:00:00-03:00 -1 day, 21:00:00
++ 24 horas   : 2018-11-04 20:00:00-02:00 -1 day, 22:00:00
++ 1 dia      : 2018-11-04 20:00:00-02:00 -1 day, 22:00:00
+horas reais no '+1 dia': 23.0
+
+via UTC (+1 dia): 2018-11-04 21:00:00-02:00 -1 day, 22:00:00
+horas reais     : 24.0
+```
+
+Somar um dia atravessando a entrada do horário de verão deu `20:00` do dia seguinte — mesma hora no mostrador — mas passaram-se **23 horas reais**. Fazer a mesma soma em UTC e converter de volta dá `21:00` e 24 horas exatas.
+
+Nenhuma das duas está errada: elas respondem a perguntas diferentes. "Mesma hora amanhã" (a consulta médica, o alarme) é aritmética de mostrador. "Daqui a 24 horas" (o *timeout*, o vencimento contratual) é aritmética de instante. O erro é não escolher.
+
+E repare, na primeira e na segunda linha da saída, que `+ 24 horas` e `+ 1 dia` deram idêntico. Não é coincidência:
+
+```text
+timedelta(days=1) == timedelta(hours=24)? True
+repr dos dois: datetime.timedelta(days=1) datetime.timedelta(days=1)
+```
+
+Em Python, `timedelta` guarda uma quantidade absoluta de tempo, e 24 horas **são** um dia — os dois objetos são indistinguíveis. Não existe um `timedelta` que signifique "um dia de calendário". Quem precisa de "mesmo dia do mês que vem" ou "próxima terça" está pedindo aritmética de calendário, que `timedelta` não faz: é o território de `dateutil.relativedelta` (pacote externo) ou de contas explícitas com `calendar.monthrange`.
+
+## Texto: ISO 8601 antes de qualquer outra coisa
+
+```python
+d = datetime(2026, 8, 12, 14, 30, 15, tzinfo=ZoneInfo("America/Sao_Paulo"))
+print("isoformat     :", d.isoformat())
+print("iso segundos  :", d.isoformat(timespec="seconds"))
+print("iso com espaco:", d.isoformat(sep=" ", timespec="minutes"))
+```
+
+```text
+isoformat     : 2026-08-12T14:30:15-03:00
+iso segundos  : 2026-08-12T14:30:15-03:00
+iso com espaco: 2026-08-12 14:30-03:00
+str()         : 2026-08-12 14:30:15-03:00
+date/time     : 2026-08-12 14:30:15
+```
+
+ISO 8601 é o formato para **trocar e armazenar** datas: ordena corretamente como texto, não tem ambiguidade entre dia e mês, e carrega o deslocamento. `fromisoformat` faz o caminho de volta e ficou bem mais tolerante na 3.11:
+
+```text
+2026-08-12T14:30:15-03:00    -> datetime.datetime(2026, 8, 12, 14, 30, 15, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=75600)))
+2026-08-12 14:30:15          -> datetime.datetime(2026, 8, 12, 14, 30, 15)
+2026-08-12                   -> datetime.datetime(2026, 8, 12, 0, 0)
+20260812T143015Z             -> datetime.datetime(2026, 8, 12, 14, 30, 15, tzinfo=datetime.timezone.utc)
+```
+
+A forma compacta e o sufixo `Z` só passaram a ser aceitos na 3.11; antes disso, `fromisoformat` só lia exatamente o que `isoformat` produzia. Repare também que o objeto reconstruído tem um `timezone` de deslocamento fixo, e **não** o `ZoneInfo` original: o texto guarda `-03:00`, não a regra política de São Paulo. Isso basta para saber o instante, mas não para fazer aritmética de mostrador que cruze uma virada de horário de verão — para isso, guarde o nome do fuso num campo separado.
+
+`strftime` e `strptime` continuam necessários para formato humano e para ler entrada de terceiros:
+
+```text
+strftime pt   : 12/08/2026 as 14:30
+strptime      : 2026-08-12 14:30:00
+strptime erro : time data '2026-13-01' does not match format '%Y-%m-%d'
+```
+
+Uma armadilha silenciosa mora aqui, e ela não levanta erro nenhum:
+
+```text
+strftime com %Z : 2026-08-12 14:30 UTC
+strptime de volta: datetime.datetime(2026, 8, 12, 14, 30)
+```
+
+Formatar com `%Z` escreveu `UTC` no texto; ler de volta com `%Z` **descartou** a informação e devolveu um objeto ingênuo. Nomes de fuso são ambíguos (`CST` é usado por três fusos diferentes) e `strptime` não tenta adivinhar. Para ida e volta confiável, `%z` (deslocamento numérico, minúsculo) ou, melhor ainda, `isoformat` e `fromisoformat`.
+
+## Dois relógios diferentes
+
+Medir duração e marcar um momento são tarefas distintas, e usam funções distintas:
+
+```text
+time.time()      : 0.1079 s
+time.monotonic() : 0.1080 s
+perf_counter()   : 0.1080 s
+
+resolucao monotonic: 1e-09
+monotonic ajustavel? False
+time ajustavel?      True
+```
+
+A última linha explica tudo. `time.time()` lê o relógio de parede, que é **ajustável**: o NTP corrige o desvio da máquina, o administrador muda o fuso, e o valor pode andar para trás. Uma medição de duração feita com ele pode dar negativa, e isso acontece em produção mais do que parece.
+
+`time.monotonic()` nunca anda para trás — é a função certa para *timeout*, intervalo entre tentativas e qualquer "quanto tempo faz". `time.perf_counter()` é a mesma garantia com a maior resolução disponível, e é o que `timeit` usa (assunto do Volume 15).
+
+A regra é curta: **relógio de parede para dizer *quando*, monotônico para dizer *quanto tempo*.**
+
+A ponte entre os dois mundos é o *timestamp* Unix — segundos desde 1970-01-01 em UTC:
+
+```text
+epoch agora      : 1786547840.073
+de epoch p/ aware: 2026-08-06 07:06:40+00:00
+de aware p/ epoch: 1786555800.0
+```
+
+Note o `tz=timezone.utc` na conversão: `datetime.fromtimestamp(x)` sem fuso devolve um objeto ingênuo no fuso da máquina, que é o mesmo defeito do começo do capítulo, agora com máscara.
+
+## 🐍 Jeito Pythônico
+
+**Consciente sempre, ingênuo nunca** — a menos que o valor genuinamente não tenha fuso (uma data de nascimento, um horário de funcionamento). Uma guarda de três linhas na fronteira do sistema evita a classe inteira de erro:
+
+```python
+def exigir_aware(d: datetime) -> datetime:
+    if d.tzinfo is None or d.tzinfo.utcoffset(d) is None:
+        raise ValueError(f"datetime ingenuo nao aceito: {d!r}")
+    return d.astimezone(timezone.utc)
+```
+
+```text
+2026-08-12 15:17:20.090779+00:00
+ValueError: datetime ingenuo nao aceito: datetime.datetime(2026, 8, 12, 14, 30)
+```
+
+**Armazene em UTC, exiba em local.** O banco, o log e a API guardam UTC; a conversão para o fuso do usuário acontece na borda de apresentação. Quando a regra de negócio for de mostrador ("todo dia às 8h no fuso da filial"), guarde o nome IANA do fuso num campo à parte — o deslocamento sozinho não basta.
+
+**`datetime.now(timezone.utc)`, nunca `datetime.utcnow()`.** A segunda está depreciada desde a 3.12 e sempre foi uma armadilha.
+
+**ISO 8601 para trocar dados, `strftime` só para humano.**
+
+```python
+# antipadrão: formato ambíguo e frágil na fronteira do sistema
+requisicao = {"quando": d.strftime("%d/%m/%Y %H:%M")}
+```
+
+```python
+# pythônico
+requisicao = {"quando": d.isoformat()}
+```
+
+**`monotonic`/`perf_counter` para medir duração**, `time()` só para registrar o momento.
+
+**Decida entre aritmética de mostrador e de instante** e escreva a decisão no código. "Mais um dia" e "mais 24 horas" são a mesma operação em Python e podem dar resultados diferentes no relógio.
+
+**Não chaveie dicionário nem conjunto por `datetime` local.** Uma vez por ano, duas ocorrências diferentes colapsam numa só.
+
+**Declare `tzdata` como dependência** se o projeto usa `zoneinfo` e pode rodar em Windows ou em contêiner mínimo.
+
+Sobre versões:
+
+- **Python 3.6** — `fold` e a PEP 495, que dá nome às duas ocorrências da hora repetida.
+- **Python 3.7** — `datetime.fromisoformat`, `time.monotonic_ns` e afins com precisão em nanossegundos.
+- **Python 3.9** — `zoneinfo` (PEP 615) na biblioteca padrão; `pytz` deixa de ser necessário.
+- **Python 3.11** — `fromisoformat` aceita a maior parte do ISO 8601, incluindo o sufixo `Z`; `datetime.UTC` como apelido.
+- **Python 3.12** — `datetime.utcnow()` e `utcfromtimestamp()` passam a emitir `DeprecationWarning`.
+- **Python 3.13** — `datetime.strptime` fica mais rígido com formatos inconsistentes.
+
+Uma nota sobre `pytz`: ele foi a solução antes da 3.9 e tem uma API diferente e traiçoeira — exige `localize()` em vez de `tzinfo=`, e usar `tzinfo=pytz.timezone(...)` direto produz um deslocamento histórico esquisito (o famoso `LMT -03:06`). Em código novo, `zoneinfo`.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir os três erros clássicos de tempo — ingênuo versus consciente, a hora que sumiu e a duração medida com o relógio errado.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab56 && cd ~/lab56
+python3 -m venv .venv && source .venv/bin/activate
+python3 -m pip install tzdata   # obrigatório no Windows
+```
+
+**2. Ingênuo e consciente.** Imprima `datetime.now()` e `datetime.now(timezone.utc)` e confirme a diferença de fuso e o `tzinfo: None`. Tente subtrair um do outro:
+
+```text
+TypeError: can't subtract offset-naive and offset-aware datetimes
+```
+
+**3. A depreciação.** Rode `python3 -W always -c "from datetime import datetime; datetime.utcnow()"` e leia o `DeprecationWarning` inteiro.
+
+**4. Um instante, cinco mostradores.** Converta o mesmo instante para cinco fusos e confirme que o conjunto de `timestamp()` tem um elemento só. Troque a data para janeiro e confirme que Nova York vira `EST`.
+
+**5. A hora que não existiu.** Construa `datetime(2018, 11, 4, 0, 30, tzinfo=ZoneInfo("America/Sao_Paulo"))`, converta para UTC e volte:
+
+```text
+hora que nao existiu: 2018-11-04 00:30:00-03:00
+  volta para SP     : 2018-11-04 01:30:00-02:00
+```
+
+Escreva uma função `existe_de_verdade(d)` que devolve `False` quando a ida e volta pelo UTC não preserva o valor.
+
+**6. A hora repetida.** Construa as duas versões de `2019-02-16 23:30` com `fold=0` e `fold=1`. Confirme o desconcertante:
+
+```text
+sao o mesmo instante? True
+diferenca real       : 3600.0 s
+```
+
+Depois ponha as duas num `set` e confirme que ele tem **um** elemento. Escreva uma frase explicando por que isso apaga dados.
+
+**7. Mostrador contra instante.** Some um dia a `2018-11-03 20:00` em São Paulo das duas formas e compare as horas reais decorridas:
+
+```text
+horas reais no '+1 dia': 23.0
+horas reais     : 24.0
+```
+
+**8. `timedelta` de verdade.** Calcule a diferença entre dois `datetime` e obtenha a duração em horas de três maneiras: `total_seconds() / 3600`, `d / timedelta(hours=1)` e `d.days * 24 + d.seconds / 3600`. Confirme que as três batem — e depois faça `d.days` sozinho errar, usando uma diferença de 2 dias e 8 horas.
+
+**9. Ida e volta em texto.** Formate com `%Z`, leia de volta com `%Z` e confirme que o fuso sumiu sem erro. Refaça com `isoformat`/`fromisoformat` e confirme que sobrevive.
+
+**10. O relógio certo.** Meça a mesma operação com `time.time()` e com `time.perf_counter()`. Depois consulte `time.get_clock_info` para os dois e confirme qual é ajustável.
+
+**11. A guarda.** Implemente `exigir_aware` e ponha-a na entrada de uma função `registrar_evento(quando, texto)`. Escreva um teste que passa um `datetime.now()` cru e confirma o `ValueError`.
+
+## Resumo
+
+- `datetime` ingênuo não tem fuso e não representa um instante: é a leitura de um mostrador, e o mesmo valor corresponde a instantes diferentes em lugares diferentes.
+- Python recusa comparar ou subtrair ingênuo com consciente, e essa rigidez é o que impede erro silencioso.
+- `datetime.utcnow()` devolve UTC como ingênuo e está depreciada desde a 3.12; a substituta é `datetime.now(timezone.utc)`.
+- `zoneinfo` (3.9+) lê a base IANA e conhece as regras históricas de cada fuso; no Windows e em contêiner mínimo, exige o pacote `tzdata`.
+- `astimezone` nunca muda o instante — muda a projeção. Cinco fusos do mesmo instante têm o mesmo `timestamp()`.
+- A entrada do horário de verão cria uma hora que não existiu; o Python aceita construí-la sem erro, e a ida e volta pelo UTC não preserva o valor.
+- A saída cria uma hora que aconteceu duas vezes; `fold` distingue as duas, mas elas comparam como iguais e colapsam em `set` e `dict`.
+- Aritmética com `datetime` consciente é feita no mostrador: somar um dia através de uma virada pode passar 23 ou 25 horas reais. Somar em UTC dá a duração exata.
+- `timedelta(days=1)` e `timedelta(hours=24)` são o mesmo objeto: não existe `timedelta` de calendário, e "mês que vem" exige outra ferramenta.
+- `d.days` e `d.seconds` são componentes, não a duração; use `total_seconds()` ou divisão por `timedelta`.
+- ISO 8601 para armazenar e trocar; `strptime` com `%Z` descarta o fuso em silêncio, e `%z` não.
+- `time.time()` é ajustável e pode andar para trás; `monotonic` e `perf_counter` não, e são os únicos corretos para medir duração.
+
+O tempo era o primeiro dos tipos de dado em que a estrutura certa muda tudo. O @sec-cap057 continua nessa direção com o módulo `collections`: as cinco estruturas que resolvem, em uma linha, problemas que com `list` e `dict` puros custam dez — e uma delas, a `deque`, transforma uma operação quadrática em linear.
