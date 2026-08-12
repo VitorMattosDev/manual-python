@@ -1,3 +1,541 @@
 # logging: registrando o que o programa faz {#sec-cap060}
 
-*(em elaboracao)*
+O coletor rodou a noite inteira e gravou 40 mil leituras. De manhã, faltavam três horas de dados no relatório. A pergunta óbvia — *o que aconteceu entre 2h e 5h?* — não tinha resposta, porque o programa não deixou rastro nenhum.
+
+Não é que não houvesse diagnóstico no código. Havia dezenas de `print`. O problema é o que o `print` **não** faz: não registra quando aconteceu, não diz de qual módulo veio, não distingue "conectando ao equipamento" de "não consegui gravar no banco", não pode ser silenciado sem editar o código, não vai para arquivo sem redirecionar tudo — e, quando alguém redirecionou a saída para capturar os dados, o diagnóstico foi junto e corrompeu o CSV, exatamente como o @sec-cap055 previu.
+
+`logging` responde a essas seis perguntas de uma vez. Ele tem fama de complicado, e a fama vem quase toda de um mal-entendido sobre um único mecanismo — o de níveis em dois estágios. Este capítulo mostra o mecanismo, e depois a configuração de produção que se escreve uma vez e não se toca mais.
+
+## Os cinco níveis, e o padrão que engana
+
+```python
+import logging
+
+logging.debug("detalhe de diagnostico")
+logging.info("processando lote 3")
+logging.warning("potencia abaixo do limite")
+logging.error("falha ao abrir a origem")
+logging.critical("banco inacessivel, encerrando")
+```
+
+```text
+WARNING:root:potencia abaixo do limite
+ERROR:root:falha ao abrir a origem
+CRITICAL:root:banco inacessivel, encerrando
+```
+
+Cinco chamadas, três linhas. As duas primeiras **sumiram** — e é aqui que começa a maior parte da frustração com o módulo. O nível padrão é `WARNING`, então `debug` e `info` são descartados até que alguém configure outra coisa.
+
+Redirecionando a saída padrão, confirma-se a segunda diferença em relação ao `print`:
+
+```text
+### basico-so-stdout
+(nada acima: logging escreve no stderr)
+```
+
+O `logging` escreve no `stderr` por padrão, que é o canal correto para diagnóstico. Dado no `stdout`, narrativa no `stderr`.
+
+Os cinco níveis têm significados que vale respeitar, porque é deles que depende o alarme de madrugada:
+
+| Nível | Valor | Quando usar |
+|---|---|---|
+| `DEBUG` | 10 | Detalhe para diagnosticar um problema; desligado em produção |
+| `INFO` | 20 | Marco do fluxo normal: iniciou, processou N, terminou |
+| `WARNING` | 30 | Algo inesperado, mas o programa segue |
+| `ERROR` | 40 | Uma operação falhou; o programa continua vivo |
+| `CRITICAL` | 50 | O programa não tem como continuar |
+
+O erro de calibragem mais comum é registrar como `ERROR` tudo que é exceção capturada e tratada. Se o programa se recuperou e o resultado está correto, é `WARNING`. `ERROR` é o que alguém precisa olhar.
+
+## A configuração mínima
+
+```python
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+log = logging.getLogger("coletor")
+```
+
+```text
+12:37:51 DEBUG    coletor conectando em 10.0.0.1
+12:37:51 INFO     coletor 3 ONUs lidas
+12:37:51 WARNING  coletor onu-00045 em -31.7 dBm
+12:37:51 ERROR    coletor timeout na onu-00052
+```
+
+Duas decisões nessas cinco linhas resolvem 80% dos casos.
+
+A primeira é `basicConfig`, que instala um `StreamHandler` no `stderr` com o formato pedido. Ela só tem efeito **na primeira chamada** — se algo já configurou o `root`, as chamadas seguintes são ignoradas em silêncio (o `force=True`, da 3.8, contorna isso). Por isso `basicConfig` pertence ao ponto de entrada do programa, junto do `if __name__ == "__main__":` do @sec-cap034, e nunca a um módulo importado.
+
+A segunda é `logging.getLogger("coletor")` em vez das funções de módulo. `logging.info(...)` escreve no *logger* `root`; um *logger* nomeado permite filtrar, redirecionar e silenciar por origem. A convenção universal é `logging.getLogger(__name__)`, que dá a cada módulo um *logger* com o nome do módulo, de graça.
+
+Os campos de formato mais úteis são `%(asctime)s`, `%(levelname)s`, `%(name)s`, `%(message)s`, `%(funcName)s`, `%(lineno)d`, `%(process)d` e `%(threadName)s`. Os quatro primeiros são o mínimo aceitável em produção.
+
+## A hierarquia de nomes é o recurso principal
+
+Nomes com ponto formam uma árvore, e um *logger* herda a configuração do pai:
+
+```python
+raiz = logging.getLogger("coletor")
+leitura = logging.getLogger("coletor.leitura")
+banco = logging.getLogger("coletor.banco")
+```
+
+```text
+coletor                INFO     iniciando
+coletor.leitura        INFO     lendo onu-00043
+coletor.banco          INFO     gravando 3 registros
+--- silenciando so o subsistema de banco ---
+coletor.leitura        INFO     lendo onu-00045
+coletor.banco          WARNING  mas esta sim
+pai de coletor.banco: coletor
+```
+
+Uma linha — `banco.setLevel(logging.WARNING)` — silenciou o subsistema de banco e deixou o resto intacto. É isso que torna `logging.getLogger(__name__)` valioso: a árvore de *loggers* espelha a árvore de módulos, e dá para calar uma biblioteca ruidosa (`logging.getLogger("urllib3").setLevel(logging.WARNING)`) sem tocar em nada mais.
+
+::: {#fig-hierarquia-loggers}
+```{.tikz}
+%%| filename: hierarquia-loggers
+%%| alt: A arvore de loggers com nomes pontilhados, o registro subindo pelos pais ate a raiz e os handlers ligados na raiz recebendo tudo
+\begin{tikzpicture}[
+  lg/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.5cm, align=center, minimum height=0.85cm,
+             font=\ttfamily\scriptsize},
+  mud/.style={draw=manualred, very thick, rounded corners, fill=manualred!8,
+              text width=3.5cm, align=center, minimum height=0.85cm,
+              font=\ttfamily\scriptsize},
+  hd/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.3cm, align=center, minimum height=0.85cm,
+             font=\ttfamily\scriptsize},
+  seg/.style={manualgray, thick},
+  sub/.style={->,>=stealth, very thick, manualblue},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.2) rectangle (15.0,-7.6);
+
+  \node[ttl] at (-0.4, 3.8) {a árvore de \emph{loggers} espelha a árvore de módulos};
+
+  \node[lg]  (r)  at (2.6, 1.9) {root};
+  \node[lg]  (c)  at (2.6, 0.5) {coletor};
+  \node[lg]  (cl) at (2.6,-0.9) {coletor.leitura};
+  \node[mud] (cb) at (2.6,-2.3) {coletor.banco};
+
+  \draw[seg] (r) -- (c);
+  \draw[seg] (c) -- (cl);
+  \draw[seg] (c.west) -- (0.55, 0.5) -- (0.55,-2.3) -- (cb.west);
+
+  \draw[sub] (cl.east) -- (5.6,-0.9) -- (5.6, 1.9) -- (r.east);
+  \node[lb, text=manualblue] at (5.9, 0.5) {o registro sobe pelos pais};
+
+  \node[hd] (h1) at (11.0, 1.9) {StreamHandler\\stderr --- WARNING};
+  \node[hd] (h2) at (11.0, 0.4) {RotatingFileHandler\\arquivo --- DEBUG};
+  \draw[sub] (r.north) -- (2.6, 2.8) -- (11.0, 2.8) -- (h1.north);
+  \draw[sub] (h1.south) -- (h2.north);
+
+  \node[lb, text=manualred] at (-0.4,-3.4)
+    {\texttt{banco.setLevel(WARNING)} silencia só este ramo --- os irmãos
+     continuam em DEBUG};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.2)
+    {Os \emph{handlers} ficam num lugar só, normalmente na raiz, e todo registro
+     sobe até eles. Por isso a configuração de destino é feita uma vez, no ponto
+     de entrada, enquanto cada módulo só chama
+     \texttt{logging.getLogger(\_\_name\_\_)} e emite. Pôr \emph{handler} em
+     \emph{logger} de módulo é a causa mais comum de linha duplicada: o registro
+     é tratado ali e sobe para ser tratado de novo na raiz.};
+\end{tikzpicture}
+```
+Registros sobem pela árvore; os destinos ficam na raiz.
+:::
+
+## Os dois portões: nível do *logger* e nível do *handler*
+
+Aqui mora a confusão que dá ao módulo a fama de difícil. Um registro precisa passar por **dois** filtros de nível: o do *logger* que o emitiu e o do *handler* que o escreveria.
+
+```python
+log.setLevel(logging.DEBUG)          # o logger deixa passar tudo
+
+console = logging.StreamHandler(sys.stderr)
+console.setLevel(logging.WARNING)    # o console só mostra WARNING+
+
+arquivo = RotatingFileHandler("coletor.log", maxBytes=2000, backupCount=3)
+arquivo.setLevel(logging.DEBUG)      # o arquivo guarda tudo
+```
+
+```text
+### destinos-console
+WARNING  onu-00045 em -31.7 dBm
+ERROR    timeout na onu-00052
+```
+
+No console apareceram duas linhas. No arquivo, as 42:
+
+```text
+2026-08-12 12:38:37,527 coletor DEBUG <module>:21 detalhe 39 da varredura
+2026-08-12 12:38:37,527 coletor WARNING <module>:22 onu-00045 em -31.7 dBm
+2026-08-12 12:38:37,527 coletor ERROR <module>:23 timeout na onu-00052
+```
+
+Esse é exatamente o arranjo que se quer em produção: o operador vê só o que exige atenção, e o histórico completo fica em disco para quando a pergunta aparecer às 8h da manhã.
+
+O sintoma clássico do mal-entendido é "configurei `DEBUG` e não aparece nada". A causa quase sempre é o *logger* estar em `WARNING` — e o `DEBUG` do *handler* não adianta, porque o registro morre no primeiro portão. A regra: **o nível do *logger* é o teto**; nenhum *handler* recebe o que ele barrou.
+
+```text
+nivel efetivo do logger 'coletor': DEBUG
+o logger tem nivel proprio? 0 (0 = NOTSET, herda)
+```
+
+Um *logger* com nível `NOTSET` (o valor `0`, que é o padrão) não decide nada: ele sobe a árvore até achar um ancestral com nível definido. Por isso ajustar o `root` costuma bastar, e por isso `getEffectiveLevel()` é a função que responde "por que isto não aparece".
+
+::: {#fig-caminho-registro}
+```{.tikz}
+%%| filename: caminho-registro
+%%| alt: O caminho de um registro passando pelo nivel do logger, pelos filtros, subindo a arvore e passando pelo nivel de cada handler antes de ser formatado e escrito
+\begin{tikzpicture}[
+  et/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.0cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  prt/.style={draw=manualyellow!75!black, very thick, rounded corners,
+              fill=manualyellow!22, text width=3.0cm, align=center,
+              minimum height=1.0cm, font=\scriptsize},
+  dst/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=3.0cm, align=center,
+              minimum height=1.0cm, font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  dsc/.style={->,>=stealth, thick, manualred},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-7.4);
+
+  \node[ttl] at (-0.4, 2.9) {os dois portões de nível que todo registro atravessa};
+
+  \node[et]  (a) at (1.6, 1.4) {log.debug(...)};
+  \node[prt] (b) at (5.4, 1.4) {1º portão\\nível do \emph{logger}};
+  \node[prt] (c) at (9.2, 1.4) {2º portão\\nível do \emph{handler}};
+  \node[dst] (d) at (13.0, 1.4) {formata\\e escreve};
+
+  \draw[fl] (a) -- (b);
+  \draw[fl] (b) -- (c);
+  \draw[fl] (c) -- (d);
+
+  \draw[dsc] (5.4,0.9) -- (5.4,-0.3);
+  \node[lb, text=manualred, anchor=north] at (5.4,-0.4) {descartado\\aqui não custa nada};
+  \draw[dsc] (9.2,0.9) -- (9.2,-0.3);
+  \node[lb, text=manualred, anchor=north] at (9.2,-0.4) {descartado\\já criou o registro};
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.2)
+    {O nível do \emph{logger} é o teto: o que ele barra não chega a
+     \emph{handler} nenhum, e é por isso que ``configurei o \emph{handler} em
+     DEBUG e não aparece nada'' é a dúvida mais frequente do módulo. Os dois
+     portões existem para permitir um arranjo comum em produção --- \emph{logger}
+     em DEBUG, console em WARNING e arquivo em DEBUG ---, em que o operador vê só
+     o que exige ação e o histórico completo fica em disco.};
+\end{tikzpicture}
+```
+Dois filtros de nível, e o do *logger* vem primeiro.
+:::
+
+## Exceções: `log.exception`, nunca `str(e)`
+
+```python
+try:
+    dividir(1, 0)
+except ZeroDivisionError:
+    log.error("falhou sem contexto: %s", "divisao por zero")
+
+try:
+    dividir(1, 0)
+except ZeroDivisionError:
+    log.exception("falhou COM traceback")
+```
+
+```text
+ERROR falhou sem contexto: divisao por zero
+ERROR falhou COM traceback
+Traceback (most recent call last):
+  File "/home/vitor/lab60/excecao.py", line 15, in <module>
+    dividir(1, 0)
+    ~~~~~~~^^^^^^
+  File "/home/vitor/lab60/excecao.py", line 7, in dividir
+    return a / b
+           ~~^~~
+ZeroDivisionError: division by zero
+```
+
+A primeira linha é o que a maioria escreve, e ela joga fora a informação inteira: qual arquivo, qual linha, qual cadeia de chamadas. A segunda usa `log.exception`, que é `log.error` com `exc_info=True` e só funciona dentro de um `except`.
+
+Repare que o traceback traz os marcadores `~~~^^^` de posição exata da 3.11 — o registro guarda o objeto de exceção, não uma string, e é formatado no destino.
+
+Fora de um bloco `except`, o equivalente é `log.error("...", exc_info=True)`. E `stack_info=True` acrescenta a pilha mesmo sem exceção, o que ajuda a descobrir *quem* chamou um caminho inesperado.
+
+## Formatação preguiçosa: o que ela economiza de verdade
+
+O conselho repetido é "use `%s` em vez de f-string no `logging`". Ele está certo, e a razão costuma ser explicada errado. Com argumento barato, medindo 500 mil chamadas de `debug` **desligado**:
+
+```text
+argumento barato (so a interpolacao muda):
+  f-string :   0.192 s
+  %s       :   0.060 s
+  economia :  69.0%
+```
+
+Três vezes mais rápido, porque a interpolação da f-string acontece **antes** da chamada, mesmo quando o registro será descartado, enquanto o `%s` só é aplicado se algum *handler* for escrever.
+
+Mas quando o argumento é caro de calcular, os dois empatam:
+
+```text
+argumento caro (a chamada e que domina):
+  f-string        :   2.117 s
+  %s              :   2.215 s
+  com isEnabledFor:   0.001 s
+```
+
+A chamada `caro()` é avaliada nos dois casos, porque é um argumento da chamada — a preguiça do `logging` não alcança isso. Só o `isEnabledFor` evita, e a diferença é de duas mil vezes.
+
+A regra em duas linhas: **use `%s` sempre** (é grátis e ajuda muito quando o `debug` está desligado); use `if log.isEnabledFor(logging.DEBUG):` em volta quando montar o argumento for caro — serializar uma estrutura, consultar algo, percorrer uma coleção grande.
+
+Um bônus do `%s`: ferramentas de agregação (Sentry, Loki, Datadog) recebem o *template* e os argumentos separados, e conseguem agrupar mil ocorrências de "timeout na %s" como um evento só. Com f-string, cada uma é uma mensagem diferente.
+
+## Configuração de produção: `dictConfig`
+
+Espalhar `setLevel` e `addHandler` pelo código é o caminho para uma configuração que ninguém entende. `dictConfig` declara tudo num dicionário — que pode vir de um arquivo TOML ou YAML e mudar sem tocar no programa:
+
+```python
+CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "simples": {"format": "%(levelname)-8s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": "WARNING",
+            "formatter": "simples",
+        },
+    },
+    "loggers": {
+        "coletor": {"level": "DEBUG", "handlers": ["console"], "propagate": False},
+        "coletor.ruidoso": {"level": "ERROR"},
+    },
+    "root": {"level": "WARNING", "handlers": ["console"]},
+}
+
+logging.config.dictConfig(CONFIG)
+```
+
+```text
+WARNING  coletor: aviso do coletor
+WARNING  coletor.leitura: aviso da leitura
+ERROR    coletor.ruidoso: mas o erro passa
+```
+
+O `aviso da leitura` apareceu sem `coletor.leitura` estar declarado — ele herdou de `coletor`. E o `warning` do `coletor.ruidoso` foi suprimido por uma linha de configuração, sem tocar no código que o emite. É esse desacoplamento que justifica o módulo inteiro.
+
+Duas chaves merecem atenção. `"version": 1` é obrigatória e é a única versão que existe. E `disable_existing_loggers` vale `True` por padrão, o que **desliga** todo *logger* já criado por módulos importados antes da configuração — origem de uma classe inteira de "meu log sumiu". Em quase todo caso, `False` é o que se quer.
+
+Sobre `propagate`: pôr um *handler* num *logger* de módulo **e** deixar a propagação ligada é a causa mais comum de linha duplicada — o registro é escrito ali e sobe para ser escrito de novo na raiz.
+
+### Rotação, e por onde os registros saem
+
+`RotatingFileHandler` troca de arquivo ao atingir um tamanho e mantém `backupCount` cópias:
+
+```text
+### destinos-arquivos
+coletor.log
+coletor.log.1
+```
+
+`TimedRotatingFileHandler` faz o mesmo por tempo (diário, à meia-noite). Ambos evitam o disco cheio, que é uma forma clássica de derrubar um serviço com o próprio diagnóstico.
+
+Existem ainda `SysLogHandler`, `SMTPHandler`, `HTTPHandler` e `QueueHandler` — este último importante em programa concorrente, porque desacopla a escrita (lenta) do caminho de execução. Em contêiner, porém, o padrão mudou: escreva no `stderr` e deixe a plataforma coletar. Arquivo dentro de contêiner efêmero é log que se perde.
+
+### JSON, que é o formato que a máquina lê
+
+Um `Formatter` próprio transforma o registro em uma linha estruturada:
+
+```python
+class JSONFormatter(logging.Formatter):
+    def format(self, registro):
+        dados = {
+            "ts": self.formatTime(registro, "%Y-%m-%dT%H:%M:%S"),
+            "nivel": registro.levelname,
+            "logger": registro.name,
+            "msg": registro.getMessage(),
+        }
+        if registro.exc_info:
+            dados["erro"] = self.formatException(registro.exc_info)
+        dados.update(getattr(registro, "extra_campos", {}))
+        return json.dumps(dados, ensure_ascii=False)
+```
+
+```text
+{"ts": "2026-08-12T12:38:37", "nivel": "INFO", "logger": "coletor", "msg": "leitura concluida", "onu": "onu-00043", "potencia": -29.8}
+{"ts": "2026-08-12T12:38:37", "nivel": "WARNING", "logger": "coletor", "msg": "abaixo do limite", "onu": "onu-00045"}
+```
+
+O `extra=` de cada chamada leva campos próprios para dentro do registro, e é assim que se anexa identificador de requisição, de usuário ou de equipamento sem enfiá-los na mensagem. Buscar `onu = "onu-00045"` num agregador é então uma consulta, não uma expressão regular.
+
+Cuidado: chaves de `extra` colidem com os atributos internos do registro (`message`, `asctime`, `name`, `args`) e o conflito levanta `KeyError`. Aninhar tudo sob uma chave própria, como no exemplo, evita o problema.
+
+Uma advertência que vale mais que qualquer detalhe técnico: **log não é lugar de dado sensível.** Senha, *token*, CPF, número de cartão e conteúdo de requisição costumam ir parar em arquivo de retenção longa, indexado, acessível a muita gente. Registrar "usuário X autenticou" é útil; registrar o que ele digitou é um incidente esperando acontecer.
+
+## Biblioteca não configura logging
+
+Uma biblioteca deve emitir registros e **não** decidir para onde vão — quem decide é a aplicação:
+
+```text
+aviso sem nenhuma configuracao
+handlers do logger: []
+lastResort: <_StderrHandler <stderr> (WARNING)>
+```
+
+O aviso apareceu mesmo sem *handler* nenhum, graças ao `lastResort` (3.2+), que escreve `WARNING` e acima no `stderr` como rede de segurança. Uma biblioteca bem-comportada faz três coisas: usa `logging.getLogger(__name__)`, nunca chama `basicConfig` nem `dictConfig`, e nunca adiciona *handler* — no máximo, um `NullHandler` para evitar mensagens de "no handlers could be found" em versões antigas.
+
+E um detalhe útil: `logging.captureWarnings(True)` redireciona o módulo `warnings` para o *logger* `py.warnings`, colocando os `DeprecationWarning` no mesmo lugar que o resto:
+
+```text
+WARNING py.warnings /home/vitor/lab60/warnings_capture.py:6: DeprecationWarning: esta funcao sera removida
+  warnings.warn("esta funcao sera removida", DeprecationWarning)
+```
+
+## 🐍 Jeito Pythônico
+
+**`logging.getLogger(__name__)` em cada módulo, no topo do arquivo.** Um nome por módulo dá a árvore inteira de graça.
+
+```python
+# antipadrão: sem origem, sem nível, sem controle
+print(f"processando {arquivo}")
+print(f"ERRO: {e}")
+```
+
+```python
+# pythônico
+import logging
+log = logging.getLogger(__name__)
+
+log.info("processando %s", arquivo)
+log.exception("falha ao processar %s", arquivo)
+```
+
+**Configure uma vez, no ponto de entrada.** `basicConfig` para script, `dictConfig` para aplicação — nunca dentro de módulo importado.
+
+**`log.exception` dentro de `except`,** nunca `log.error(str(e))`. O traceback é a informação, e o `str(e)` a joga fora.
+
+**`%s` em vez de f-string,** e `isEnabledFor` quando montar o argumento custar caro.
+
+**Calibre os níveis pelo que exigem de ação.** Recuperou-se e o resultado está correto? `WARNING`. Alguém precisa olhar? `ERROR`.
+
+**`disable_existing_loggers: False`** em `dictConfig`, quase sempre.
+
+**Um *handler* só, na raiz,** e `propagate` ligado nos demais — ou o registro sai duplicado.
+
+**Biblioteca não configura destino.** Emite e cala.
+
+**No `stderr` em contêiner; em arquivo com rotação em máquina própria.**
+
+**Nada de segredo no log.** Se não pode aparecer numa captura de tela, não vai para o registro.
+
+Sobre versões:
+
+- **Python 3.2** — `dictConfig` (PEP 391) e o `lastResort`, que acabou com o "no handlers could be found".
+- **Python 3.4** — `handlers=` em `basicConfig`.
+- **Python 3.8** — `force=True` em `basicConfig`, que permite reconfigurar; e `stacklevel=`, para o registro apontar para quem chamou o *wrapper*, e não para o *wrapper*.
+- **Python 3.11** — `logging.getLevelNamesMapping()`, e tracebacks com marcador de posição exata.
+- **Python 3.12** — `dictConfig` aceita instâncias já construídas de *filter* e *formatter*.
+- **Python 3.13** — melhorias de desempenho no caminho de descarte, que é justamente o mais percorrido.
+
+Sobre alternativas: `structlog` e `loguru` são populares e resolvem bem o registro estruturado com menos cerimônia. Ambos, porém, interoperam com o `logging` da biblioteca padrão — que é o que toda biblioteca de terceiros usa. Entender o módulo padrão não é opcional, mesmo escolhendo outro para a aplicação.
+
+## 🧪 Laboratório
+
+Objetivo: sair do `print` e chegar a uma configuração de produção com dois destinos, JSON e rotação.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab60 && cd ~/lab60
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. O padrão que engana.** Emita os cinco níveis sem configurar nada e confirme que só três aparecem:
+
+```text
+WARNING:root:potencia abaixo do limite
+```
+
+Depois rode com `2>/dev/null` e confirme que **nada** aparece — prova de que o destino é o `stderr`.
+
+**3. Formato.** Configure `basicConfig` com `asctime`, `levelname`, `name` e `message`. Acrescente `funcName` e `lineno` e confirme que apontam para a linha certa.
+
+**4. Os dois portões.** Ponha o *logger* em `WARNING` e um *handler* em `DEBUG`. Confirme que o `debug` não aparece. Inverta e confirme que passa a aparecer. Escreva num comentário qual dos dois é o teto, e imprima `getEffectiveLevel()` nos dois casos.
+
+**5. Hierarquia.** Crie `coletor`, `coletor.leitura` e `coletor.banco`. Silencie só o `banco`:
+
+```text
+coletor.leitura        INFO     lendo onu-00045
+coletor.banco          WARNING  mas esta sim
+```
+
+**6. A duplicata.** Adicione um `StreamHandler` ao `coletor` **sem** mexer em `propagate`, tendo já um na raiz. Confirme que cada linha sai duas vezes. Corrija de duas formas diferentes (com `propagate = False` e removendo o *handler* da raiz) e escreva qual das duas prefere.
+
+**7. Exceção.** Compare `log.error(str(e))` com `log.exception(...)` num `ZeroDivisionError` aninhado em duas funções. Confirme que só o segundo mostra as duas linhas do traceback.
+
+**8. A medida da preguiça.** Reproduza as duas medições, com `debug` desligado:
+
+```text
+argumento barato: f-string 0.192 s | %s 0.060 s
+argumento caro  : f-string 2.117 s | %s 2.215 s | isEnabledFor 0.001 s
+```
+
+Explique por que o `%s` não ajudou no segundo caso.
+
+**9. Dois destinos.** Monte console em `WARNING` e `RotatingFileHandler` em `DEBUG` com `maxBytes=2000` e `backupCount=3`. Gere 40 registros e confirme que os arquivos rotacionaram:
+
+```text
+coletor.log
+coletor.log.1
+```
+
+**10. JSON com contexto.** Implemente o `JSONFormatter` e emita registros com `extra=`. Confirme a linha:
+
+```text
+{"ts": "...", "nivel": "INFO", "logger": "coletor", "msg": "leitura concluida", "onu": "onu-00043", "potencia": -29.8}
+```
+
+Depois provoque o `KeyError` usando `extra={"message": "x"}` e explique a colisão.
+
+**11. `dictConfig`.** Mova toda a configuração para um dicionário e carregue-o de um arquivo TOML com `tomllib`. Confirme que dá para silenciar um subsistema editando **só** o arquivo. Teste `disable_existing_loggers` nos dois valores e observe o log de um módulo importado antes sumir.
+
+**12. Biblioteca bem-comportada.** Escreva um módulo `sensor.py` que só usa `logging.getLogger(__name__)` e nunca configura nada. Importe-o de um `app.py` que configura tudo, e confirme que os registros do módulo aparecem no formato da aplicação. Depois rode `sensor.py` sozinho e confirme que o `lastResort` ainda mostra os avisos.
+
+## Resumo
+
+- `print` não tem nível, origem, horário, destino configurável nem forma de ser desligado; escreve no `stdout` e corrompe a saída de dados de quem redireciona.
+- O nível padrão do `logging` é `WARNING`, e é por isso que `debug` e `info` "não funcionam" antes de qualquer configuração.
+- O destino padrão é o `stderr`, que é o canal correto para diagnóstico.
+- `logging.getLogger(__name__)` em cada módulo constrói uma árvore de *loggers* que espelha a árvore de módulos, e permite silenciar ou detalhar um subsistema com uma linha.
+- Todo registro atravessa dois portões de nível — o do *logger* e o do *handler* — e o do *logger* é o teto: o que ele barra não chega a *handler* nenhum.
+- Um *logger* em `NOTSET` herda o nível do ancestral mais próximo que tenha um; `getEffectiveLevel()` responde por que algo não aparece.
+- `log.exception` dentro de um `except` registra o traceback completo; `log.error(str(e))` joga essa informação fora.
+- Formatação com `%s` é três vezes mais rápida que f-string quando o registro é descartado, mas não evita o custo de calcular o argumento — para isso, `isEnabledFor`.
+- `%s` também preserva o *template* separado dos argumentos, o que permite a um agregador agrupar ocorrências do mesmo evento.
+- `dictConfig` declara níveis, formatos e destinos fora do código; `disable_existing_loggers` vale `True` por padrão e costuma precisar ser `False`.
+- *Handler* em *logger* de módulo com `propagate` ligado duplica cada linha.
+- `RotatingFileHandler` e `TimedRotatingFileHandler` impedem que o diagnóstico encha o disco; em contêiner, o padrão é escrever no `stderr` e deixar a plataforma coletar.
+- Um `Formatter` próprio produz JSON, e `extra=` anexa campos estruturados sem sujar a mensagem — evitando as chaves reservadas do registro.
+- Biblioteca emite e não configura: nada de `basicConfig`, nada de *handler*; o `lastResort` cobre o caso não configurado.
+- Log não é lugar de senha, *token* ou dado pessoal.
+
+Fecha aqui o Volume 9. Os seis capítulos percorreram o que a biblioteca padrão oferece antes de qualquer dependência externa: o sistema (@sec-cap055), o tempo (@sec-cap056), as estruturas (@sec-cap057), a composição (@sec-cap058), o cálculo (@sec-cap059) e o registro (este). O Volume 10 muda o eixo, do que o programa faz para o que ele lê e escreve: expressões regulares, JSON, CSV, TOML, serialização binária e SQLite — os formatos pelos quais um programa Python conversa com o resto do mundo.

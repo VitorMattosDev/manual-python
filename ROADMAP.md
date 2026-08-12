@@ -99,7 +99,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 057** - collections: deque, Counter, defaultdict e namedtuple - `vol09/cap057-collections-deque-counter-defaultdict-e.qmd`
 - [x] **cap 058** - itertools e functools: a caixa de ferramentas funcional - `vol09/cap058-itertools-e-functools-a-caixa-de-ferramentas.qmd`
 - [x] **cap 059** - math, statistics e random - `vol09/cap059-math-statistics-e-random.qmd`
-- [ ] **cap 060** - logging: registrando o que o programa faz - `vol09/cap060-logging-registrando-o-que-o-programa-faz.qmd`
+- [x] **cap 060** - logging: registrando o que o programa faz - `vol09/cap060-logging-registrando-o-que-o-programa-faz.qmd`
 
 ### Volume 10 — Texto, Dados e Serialização
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (54 concluidos).
+**Total:** 104 capitulos em 16 volumes (60 concluidos).
 
