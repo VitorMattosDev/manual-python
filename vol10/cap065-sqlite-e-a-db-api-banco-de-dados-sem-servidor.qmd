@@ -1,3 +1,558 @@
 # SQLite e a DB-API: banco de dados sem servidor {#sec-cap065}
 
-*(em elaboracao)*
+As 40 mil leituras do coletor estão num `.jsonl`, do jeito que o @sec-cap062 recomendou. O formato é bom: acrescenta ao fim, sobrevive a linha corrompida, qualquer ferramenta lê. Até chegar a pergunta:
+
+> Qual ONU teve mais respostas 504 entre 2h e 5h, nos últimos trinta dias?
+
+Responder isso significa abrir trinta arquivos, ler cada linha, converter cada data, filtrar, agrupar e ordenar — em memória, do zero, toda vez. Funciona com 40 mil linhas. Com 40 milhões, não.
+
+O que falta não é um formato melhor. É inverter a relação: em vez de carregar o dado para procurar dentro dele, deixar o dado no disco e **mandar a pergunta até ele**. Isso é um banco de dados, e o Python já traz um.
+
+## Um arquivo, nenhum servidor
+
+```python
+import sqlite3
+
+con = sqlite3.connect("coletor.db")
+con.execute("""
+    CREATE TABLE leitura (
+        id        INTEGER PRIMARY KEY,
+        onu       TEXT    NOT NULL,
+        potencia  REAL,
+        quando    TEXT    NOT NULL,
+        UNIQUE (onu, quando)
+    )
+""")
+con.commit()
+```
+
+```text
+SQLite  (motor) : 3.53.1
+arquivo criado: coletor.db 12288 bytes
+```
+
+Não há serviço para instalar, porta para abrir, usuário para criar nem senha para guardar. `sqlite3.connect` abre (ou cria) um arquivo, e a biblioteca do SQLite roda **dentro do seu processo**. É o banco de dados mais implantado do mundo — está em todo celular, todo navegador e todo avião — e vem embutido no CPython.
+
+O módulo `sqlite3` implementa a **DB-API 2.0** (PEP 249), a interface comum de todos os drivers de banco em Python. O que se aprende aqui é quase inteiramente transferível para PostgreSQL com `psycopg` ou MySQL com `mysqlclient`: `connect`, `cursor`, `execute`, `fetchone`, `commit`, `rollback`.
+
+### Inserir e consultar
+
+```python
+dados = [
+    ("onu-00043", -29.8, "2026-08-12T03:14:22"),
+    ("onu-00045", -31.7, "2026-08-12T03:14:23"),
+    ("onu-00052", None,  "2026-08-12T03:14:51"),
+    ("onu-00043", -29.9, "2026-08-12T04:14:22"),
+]
+con.executemany(
+    "INSERT INTO leitura (onu, potencia, quando) VALUES (?, ?, ?)", dados)
+con.commit()
+
+for linha in con.execute("SELECT onu, potencia FROM leitura WHERE potencia < -30"):
+    print(linha)
+```
+
+```text
+('onu-00045', -31.7)
+```
+
+`execute` devolve um cursor, e o cursor é iterável — o que traz as linhas sob demanda, sem carregar o resultado inteiro. `fetchone()` traz uma, `fetchall()` traz todas e `fetchmany(n)` traz um lote. Para um `SELECT` que pode devolver um milhão de linhas, iterar é a única forma que não estoura a memória.
+
+As linhas chegam como tuplas, o que é rápido e ilegível. `sqlite3.Row` resolve:
+
+```python
+con.row_factory = sqlite3.Row
+linha = con.execute("SELECT * FROM leitura LIMIT 1").fetchone()
+```
+
+```text
+por indice: onu-00043
+por nome  : onu-00043 -29.8
+colunas   : ['id', 'onu', 'potencia', 'quando']
+como dict : {'id': 1, 'onu': 'onu-00043', 'potencia': -29.8, 'quando': '2026-08-12T03:14:22'}
+```
+
+Acesso por nome **e** por índice, com `keys()` e conversão direta para dicionário. É uma linha de configuração, e deveria ser a primeira coisa depois de todo `connect`.
+
+## Injeção de SQL: o `?` não é opcional
+
+Esta é a parte do capítulo que importa mais que todas as outras juntas.
+
+A forma intuitiva de filtrar por um valor que veio de fora é montar a consulta com f-string. Funciona:
+
+```python
+# ERRADO — nunca monte SQL com interpolação de texto
+sql = f"SELECT count(*) FROM leitura WHERE onu = '{alvo}'"
+```
+
+```text
+consulta montada: SELECT count(*) FROM leitura WHERE onu = 'onu-00043'
+resultado       : 2
+```
+
+Duas leituras da `onu-00043`, correto. Agora o mesmo código com um valor diferente:
+
+```python
+entrada_hostil = "x' OR '1'='1"
+```
+
+```text
+consulta montada: SELECT count(*) FROM leitura WHERE onu = 'x' OR '1'='1'
+resultado       : 4 <- devolveu TUDO
+```
+
+O texto fechou a aspa, acrescentou um `OR` sempre verdadeiro e deixou a aspa final casando com a que o programa ia pôr. O filtro deixou de existir. Com `SELECT count(*)` o dano é vazamento; com `DELETE` ou `UPDATE` na mesma consulta, é destruição — e a mesma técnica lê a tabela de usuários de um sistema inteiro.
+
+A correção é passar o valor **separado da consulta**:
+
+```python
+con.execute("SELECT count(*) FROM leitura WHERE onu = ?", (entrada_hostil,))
+```
+
+```text
+resultado       : 0 <- correto: nenhuma
+```
+
+Zero, que é a resposta certa: nenhuma ONU se chama `x' OR '1'='1`. O `?` não é uma "interpolação mais segura" — é uma coisa diferente. A consulta vai ao motor **primeiro**, é analisada e vira um plano de execução; só então o valor é ligado a um espaço reservado. Não existe caminho pelo qual o valor vire estrutura, porque a estrutura já foi decidida.
+
+::: {#fig-injecao-sql}
+```{.tikz}
+%%| filename: injecao-sql
+%%| alt: O mesmo texto hostil percorrendo dois caminhos, um com interpolacao de string em que o texto vira estrutura da consulta e outro com parametro em que ele permanece um valor
+\begin{tikzpicture}[
+  ent/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=3.4cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  mau/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=6.4cm, align=center, minimum height=0.85cm,
+              font=\ttfamily\scriptsize},
+  bom/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=6.4cm, align=center,
+              minimum height=0.85cm, font=\ttfamily\scriptsize},
+  res/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=2.9cm, align=center, minimum height=0.85cm,
+              font=\ttfamily\scriptsize},
+  rok/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=2.9cm, align=center,
+              minimum height=0.85cm, font=\ttfamily\scriptsize},
+  fr/.style={->,>=stealth, very thick, manualred},
+  fv/.style={->,>=stealth, very thick, manualgreen},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 5.4) rectangle (15.6,-5.4);
+
+  \node[ttl] at (-0.4, 5.0) {a mesma entrada, dois caminhos --- e só um deles
+                             mantém o texto como valor};
+
+  \node[ent] at (2.0, 4.0) {x' OR '1'='1};
+  \node[lb, text=manualgray] at (4.2, 4.0) {o que o usuário digitou};
+
+  \node[lb, text=manualred] at (-0.4, 3.0)
+    {\textbf{com f-string:} o texto é concatenado antes de o motor ver a
+     consulta};
+  \node[mau] (m1) at (3.6, 2.1) {WHERE onu = 'x' OR '1'='1'};
+  \node[res] (m2) at (9.2, 2.1) {4 linhas};
+  \node[lb, text=manualred, text width=4.4cm] at (11.0, 2.1)
+    {o \texttt{OR} virou\\estrutura: não há mais filtro};
+  \draw[fr] (m1) -- (m2);
+
+  \node[lb, text=manualgreen] at (-0.4, 0.7)
+    {\textbf{com parâmetro:} a consulta é analisada primeiro, o valor entra
+     depois};
+  \node[bom] (b1) at (3.6,-0.2) {WHERE onu = ?};
+  \node[rok] (b2) at (9.2,-0.2) {0 linhas};
+  \node[lb, text=manualgreen, text width=4.4cm] at (11.0,-0.2)
+    {o texto continua sendo\\um valor procurado};
+  \draw[fv] (b1) -- (b2);
+
+  \node[nt, text width=15.6cm] at (-0.4,-1.5)
+    {O parâmetro não é uma interpolação mais cuidadosa: é outro mecanismo. A
+     consulta chega ao motor com o \texttt{?} no lugar, é analisada e vira um
+     plano de execução --- e só então o valor é ligado ao espaço reservado. Não
+     existe caminho pelo qual ele vire estrutura, porque a estrutura já foi
+     decidida. Escapar aspas à mão não substitui isso: as regras variam por
+     motor, por codificação e por tipo de campo, e cada rodada de correções
+     abre o próximo caso especial. A regra é sem exceção --- todo valor que não
+     esteja escrito literalmente no seu código-fonte entra por
+     \texttt{?} ou por \texttt{:nome}.};
+\end{tikzpicture}
+```
+Com interpolação, o texto vira estrutura; com parâmetro, ele continua sendo valor.
+:::
+
+Parâmetros também têm forma nomeada, que é melhor quando são muitos:
+
+```python
+con.execute(
+    "SELECT onu, potencia FROM leitura WHERE potencia < :limite AND onu LIKE :p",
+    {"limite": -29.85, "p": "onu-000%"})
+```
+
+```text
+[('onu-00045', -31.7), ('onu-00043', -29.9)]
+```
+
+E têm um limite que é importante conhecer:
+
+```text
+OperationalError: near "?": syntax error
+```
+
+**Parâmetro substitui valor, não identificador.** Nome de tabela, nome de coluna e direção de ordenação são estrutura, e não podem vir do usuário por `?`. Quando precisam ser dinâmicos, a única forma segura é validar contra uma lista fechada de nomes permitidos no seu código — nunca interpolar o que chegou.
+
+## Tipos, e a tipagem que não é bem tipagem
+
+```text
+  1            int
+  1.5          float
+  'texto'      str
+  b'\x00\xff'  bytes
+```
+
+O SQLite tem cinco tipos de armazenamento — `NULL`, `INTEGER`, `REAL`, `TEXT` e `BLOB` — e o módulo os mapeia para `None`, `int`, `float`, `str` e `bytes`. Não há `date`, `datetime`, `Decimal` nem booleano: datas se guardam como texto ISO-8601 (que ordena corretamente como string) ou como número, e booleanos como `0` e `1`.
+
+Agora a surpresa:
+
+```python
+con.execute("CREATE TABLE tipos (n INTEGER)")
+con.execute("INSERT INTO tipos VALUES (?)", ("isto nao e um numero",))
+```
+
+```text
+guardado numa coluna INTEGER: 'isto nao e um numero'
+```
+
+O SQLite tem **tipagem dinâmica**: o tipo declarado da coluna é uma sugestão de afinidade, não uma restrição. Texto numa coluna `INTEGER` entra sem reclamar. Quem vem de PostgreSQL leva um susto justificado aqui.
+
+Desde o SQLite 3.37 existe a saída:
+
+```python
+con.execute("CREATE TABLE estrito (n INTEGER NOT NULL) STRICT")
+con.execute("INSERT INTO estrito VALUES (?)", ("texto",))
+```
+
+```text
+IntegrityError: cannot store TEXT value in INTEGER column estrito.n
+```
+
+`STRICT` no fim do `CREATE TABLE` faz os tipos valerem. Em tabela nova, use sempre.
+
+### Restrições são validação que não se pode contornar
+
+```text
+IntegrityError: UNIQUE constraint failed: leitura.onu, leitura.quando
+```
+
+O `UNIQUE (onu, quando)` da definição impediu a leitura duplicada. Essa é uma diferença de fundo em relação a todos os formatos dos capítulos anteriores: `NOT NULL`, `UNIQUE`, `CHECK`, `PRIMARY KEY` e `FOREIGN KEY` são regras que o **dado** carrega, verificadas em toda escrita, por qualquer programa que use o arquivo. Validação em Python protege o caminho que passa pelo seu código; restrição no banco protege o arquivo.
+
+Uma pegadinha vale registro: chave estrangeira **não é verificada por padrão** no SQLite, por compatibilidade histórica. É preciso `PRAGMA foreign_keys = ON` em cada conexão.
+
+## Transações: `with con`, e o `commit` esquecido
+
+```python
+try:
+    with con:
+        con.execute("INSERT INTO leitura (onu, quando) VALUES (?, ?)",
+                    ("onu-99999", "2026-08-12T05:00:00"))
+        raise RuntimeError("falha no meio do lote")
+except RuntimeError as e:
+    print("erro:", e)
+```
+
+```text
+erro: falha no meio do lote
+a linha entrou? 0
+```
+
+`with con:` **não** fecha a conexão — ele delimita uma transação: `commit` na saída normal, `rollback` se escapar exceção. É a forma correta de escrever qualquer operação que precise ser tudo-ou-nada, e o motivo pelo qual um lote interrompido não deixa metade dos dados gravados.
+
+O contrário disso é o defeito silencioso mais comum do módulo:
+
+```python
+con = sqlite3.connect("esquecido.db")
+con.execute("CREATE TABLE t (x)")
+con.execute("INSERT INTO t VALUES (1)")
+con.close()          # sem commit
+```
+
+```text
+linhas apos close sem commit: 0
+```
+
+O `INSERT` foi executado, não deu erro nenhum, e o dado **não existe**. `close()` não faz `commit` — descarta a transação aberta. Programa que grava e não encontra o que gravou tem, quase sempre, exatamente esta causa.
+
+### Por que um `commit` por linha é catastrófico
+
+```text
+executemany + 1 commit :   0.015 s
+commit por linha       :  91.282 s
+6077x mais lento
+```
+
+Vinte mil linhas. Quinze milissegundos contra um minuto e meio.
+
+A razão é física. Cada `commit` precisa garantir que o dado sobreviva a uma queda de energia, e para isso pede ao sistema operacional que force a escrita ao disco de verdade. Uma transação custa quase o mesmo tenha ela uma linha ou vinte mil — o custo está na garantia, não no volume. Vinte mil `commits` são vinte mil esperas pelo disco.
+
+`executemany` com um `commit` no fim é a forma certa. E `commit` dentro de laço é um dos erros de desempenho mais caros e mais fáceis de cometer em Python.
+
+::: {#fig-transacao-commit}
+```{.tikz}
+%%| filename: transacao-commit
+%%| alt: A diferenca entre vinte mil commits, cada um esperando a gravacao fisica no disco, e um unico commit ao fim de um lote
+\begin{tikzpicture}[
+  ln/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+             minimum width=0.95cm, minimum height=0.55cm,
+             font=\ttfamily\tiny},
+  cmt/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              minimum width=0.95cm, minimum height=0.55cm,
+              font=\ttfamily\tiny},
+  cv/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             minimum width=1.5cm, minimum height=0.55cm,
+             font=\ttfamily\tiny},
+  dsc/.style={->,>=stealth, thick, manualred},
+  dsv/.style={->,>=stealth, thick, manualgreen},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 5.0) rectangle (15.6,-5.6);
+
+  \node[ttl] at (-0.4, 4.6) {onde vão os 91 segundos};
+
+  \node[lb, text=manualred] at (-0.4, 3.9)
+    {\texttt{commit} dentro do laço --- cada um espera o disco confirmar};
+
+  \node[ln] at (1.1, 3.1) {INSERT};
+  \node[cmt] at (2.2, 3.1) {commit};
+  \node[ln] at (3.3, 3.1) {INSERT};
+  \node[cmt] at (4.4, 3.1) {commit};
+  \node[ln] at (5.5, 3.1) {INSERT};
+  \node[cmt] at (6.6, 3.1) {commit};
+  \node[lb, text=manualred] at (7.3, 3.1) {\ldots\ 20.000 vezes};
+
+  \draw[dsc] (2.2, 2.8) -- (2.2, 2.2);
+  \draw[dsc] (4.4, 2.8) -- (4.4, 2.2);
+  \draw[dsc] (6.6, 2.8) -- (6.6, 2.2);
+  \node[lb, text=manualred] at (7.3, 2.0) {20.000 esperas pelo disco};
+  \node[lb, text=manualred] at (11.6, 3.1) {\textbf{91,282 s}};
+
+  \node[lb, text=manualgreen] at (-0.4, 1.0)
+    {\texttt{executemany} e um \texttt{commit} no fim};
+
+  \node[ln] at (1.1, 0.2) {INSERT};
+  \node[ln] at (2.2, 0.2) {INSERT};
+  \node[ln] at (3.3, 0.2) {INSERT};
+  \node[lb] at (4.0, 0.2) {\ldots\ 20.000 vezes};
+  \node[cv] at (8.3, 0.2) {commit};
+
+  \draw[dsv] (8.3,-0.1) -- (8.3,-0.7);
+  \node[lb, text=manualgreen] at (9.1,-0.7) {uma espera só};
+  \node[lb, text=manualgreen] at (11.6, 0.2) {\textbf{0,015 s}};
+
+  \node[nt, text width=15.6cm] at (-0.4,-1.6)
+    {Um \texttt{commit} não é ``salvar o que mudou'': é pedir ao sistema
+     operacional a garantia de que o dado sobrevive a uma queda de energia, o
+     que obriga a gravação física a terminar antes de a chamada retornar. O
+     custo é quase o mesmo para uma linha e para vinte mil --- está na
+     garantia, não no volume. Por isso \texttt{commit} dentro de laço é um dos
+     erros de desempenho mais caros que se comete em Python, e por isso
+     \texttt{with con:} em volta do lote inteiro é a forma certa: uma
+     transação, uma espera, e nada pela metade se algo falhar no meio.};
+\end{tikzpicture}
+```
+O custo de um `commit` está na garantia de durabilidade, não no número de linhas.
+:::
+
+## Índices, e como saber se o banco está usando um
+
+```text
+200 buscas sem indice:   2.627 s
+200 buscas com indice:   0.009 s
+289x mais rapido
+```
+
+Duzentas mil linhas, duzentas buscas. Sem índice, o motor lê a tabela inteira a cada busca; com índice, vai direto. A diferença é de quase 300 vezes, e cresce com o tamanho da tabela.
+
+Não é preciso adivinhar se o índice está sendo usado:
+
+```sql
+EXPLAIN QUERY PLAN SELECT potencia FROM t WHERE onu = ?
+```
+
+```text
+sem indice:  SCAN t
+com indice:  SEARCH t USING INDEX idx_onu (onu=?)
+```
+
+`SCAN` é a tabela inteira. `SEARCH ... USING INDEX` é a busca dirigida. Toda consulta lenta começa por essa linha, e ela responde a maior parte das perguntas sozinha.
+
+Índice não é grátis: ocupa espaço e torna a escrita mais lenta, porque precisa ser mantido. A regra é indexar as colunas que aparecem em `WHERE`, `JOIN` e `ORDER BY` das consultas que realmente se faz — não todas, por precaução.
+
+## O que se ganha de verdade
+
+A pergunta da abertura, agora:
+
+```sql
+SELECT onu, count(*) AS n, round(avg(potencia), 2) AS media
+FROM leitura
+WHERE potencia IS NOT NULL
+GROUP BY onu
+ORDER BY media
+```
+
+```text
+  ('onu-00045', 1, -31.7)
+  ('onu-00043', 2, -29.85)
+```
+
+Filtro, agrupamento, agregação e ordenação em cinco linhas — e o trabalho acontece em C, sobre dados que nunca precisaram caber na memória. Reescrever isso em Python sobre um `.jsonl` custa trinta linhas e é ordens de grandeza mais lento a partir de um certo tamanho.
+
+Dois recursos que costumam surpreender: o SQLite lê JSON com `json_extract`, o que permite guardar um campo semiestruturado numa coluna `TEXT` e ainda consultá-lo; e `:memory:` cria um banco que existe só na RAM, ideal para teste automatizado e para processamento intermediário.
+
+```text
+soma em memoria: 499500
+```
+
+## Quando SQLite, e quando não
+
+Ele é a resposta certa em muito mais casos do que a fama sugere: aplicação de um processo, ferramenta de linha de comando, aplicativo de desktop ou celular, cache local, formato de arquivo de aplicação, análise de dados de até dezenas de gigabytes, e teste automatizado de código que fala com banco.
+
+O limite é a **escrita concorrente**. O SQLite permite muitos leitores simultâneos, mas apenas um escritor por vez, com um bloqueio no nível do arquivo — o `OperationalError: database is locked` aparece quando dois processos tentam escrever ao mesmo tempo. O modo WAL (`PRAGMA journal_mode = WAL`) melhora bastante, permitindo leitura durante escrita, mas não muda o essencial.
+
+Quando há vários processos escrevendo com frequência, quando o banco precisa ficar num servidor separado dos clientes, ou quando são necessários controle de acesso por usuário e replicação, a resposta é PostgreSQL. A boa notícia é que a DB-API é a mesma, e o SQL muda pouco — o Volume 14 trata dessa transição com SQLAlchemy.
+
+E há o meio-termo que vale conhecer: `sqlite3` na biblioteca padrão é a interface crua. Para uma aplicação com muitas tabelas e relacionamentos, um mapeador objeto-relacional evita escrever SQL à mão para tudo — sem que isso dispense entender o que ele gera.
+
+## 🐍 Jeito Pythônico
+
+**Parâmetro `?` ou `:nome`, sempre.** Nenhum valor de fora entra na consulta por f-string, `%` ou `+`.
+
+```python
+# antipadrão: injeção de SQL
+con.execute(f"SELECT * FROM leitura WHERE onu = '{onu}'")
+```
+
+```python
+# pythônico
+con.execute("SELECT * FROM leitura WHERE onu = ?", (onu,))
+```
+
+Repare na vírgula em `(onu,)`: sem ela não é uma tupla, e o erro é `Incorrect number of bindings`.
+
+**`with con:` em volta de cada unidade de trabalho.** Delimita transação, não fecha conexão.
+
+**Um `commit` por lote, nunca por linha.** A diferença medida foi de 6.077 vezes.
+
+**`con.row_factory = sqlite3.Row`** logo depois de conectar.
+
+**`STRICT` em toda tabela nova,** e `PRAGMA foreign_keys = ON` em toda conexão.
+
+**Itere o cursor** em vez de `fetchall()` quando o resultado puder ser grande.
+
+**Deixe o banco agregar.** `GROUP BY` e `count()` no SQL, não laço em Python.
+
+**`EXPLAIN QUERY PLAN` antes de otimizar.** `SCAN` numa tabela grande é a resposta.
+
+**Datas em ISO-8601** (`2026-08-12T03:14:22`), que ordenam corretamente como texto.
+
+**`:memory:` nos testes,** para cada teste começar com um banco limpo.
+
+Sobre versões:
+
+- **Python 3.11** — `PRAGMA` de otimização e melhorias de desempenho no módulo.
+- **Python 3.12** — parâmetro `autocommit` na conexão, que finalmente permite controle explícito do modo de transação; e `sqlite3` ganhou uma interface de linha de comando (`python -m sqlite3`).
+- **Python 3.12** — os conversores implícitos de `datetime` (`detect_types`) foram depreciados: converta você mesmo, explicitamente.
+- **Python 3.14** — `sqlite3.version` (a versão do módulo, que nunca serviu para nada) foi removido; `sqlite3.sqlite_version` é o que interessa.
+- **SQLite 3.37** — tabelas `STRICT`, disponíveis conforme a biblioteca embutida no seu Python.
+
+## 🧪 Laboratório
+
+Objetivo: construir a tabela de leituras, provocar uma injeção de SQL controlada, e medir o custo de um `commit` mal colocado.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab65 && cd ~/lab65
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. Criação.** Crie `coletor.db` com a tabela `leitura`, incluindo `NOT NULL` e `UNIQUE (onu, quando)`. Confirme o tamanho do arquivo recém-criado.
+
+**3. Inserção.** Use `executemany` com as quatro leituras e um `commit`. Confirme a contagem.
+
+**4. Consulta e cursor.** Itere o cursor e compare com `fetchall()`. Depois configure `row_factory = sqlite3.Row` e acesse por nome, por índice e via `dict()`.
+
+**5. A injeção.** Monte a consulta com f-string e rode com `"onu-00043"`. Depois rode com `"x' OR '1'='1"` e confirme:
+
+```text
+consulta montada: SELECT count(*) FROM leitura WHERE onu = 'x' OR '1'='1'
+resultado       : 4 <- devolveu TUDO
+```
+
+Refaça com `?` e confirme o `0`. Escreva em uma frase por que o parâmetro não é "uma interpolação mais segura".
+
+**6. O limite do parâmetro.** Tente `con.execute("SELECT * FROM ?", ("leitura",))` e confirme o `OperationalError`. Escreva como você permitiria ordenar por uma coluna escolhida pelo usuário **sem** interpolar a escolha dele.
+
+**7. Tipagem dinâmica.** Insira texto numa coluna `INTEGER` e confirme que entra. Recrie a tabela com `STRICT` e confirme:
+
+```text
+IntegrityError: cannot store TEXT value in INTEGER column estrito.n
+```
+
+**8. Restrições.** Insira a mesma `(onu, quando)` duas vezes e observe o `IntegrityError`. Depois crie uma segunda tabela com `FOREIGN KEY`, insira uma referência inexistente e confirme que **passa**. Ligue `PRAGMA foreign_keys = ON` e confirme que passa a falhar.
+
+**9. Transação.** Rode um `with con:` que levanta exceção no meio e confirme que nada foi gravado.
+
+**10. O `commit` esquecido.** Insira, feche sem `commit`, reabra e confirme as zero linhas. Este é o passo que explica metade das dúvidas sobre o módulo.
+
+**11. A medida.** Insira 20 mil linhas das duas formas e compare:
+
+```text
+executemany + 1 commit :   0.015 s
+commit por linha       :  91.282 s
+```
+
+Explique de onde vem a diferença. (Seja paciente com a segunda medição.)
+
+**12. Índice e plano.** Com 200 mil linhas, meça 200 buscas antes e depois de `CREATE INDEX`. Rode `EXPLAIN QUERY PLAN` nas duas situações:
+
+```text
+sem indice:  SCAN t
+com indice:  SEARCH t USING INDEX idx_onu (onu=?)
+```
+
+Meça também o tamanho do arquivo antes e depois de criar o índice.
+
+**13. Agregação.** Escreva a consulta com `GROUP BY`, `count`, `avg` e `ORDER BY`. Depois escreva o equivalente em Python puro sobre a mesma origem e compare o número de linhas de código.
+
+**14. Concorrência.** Abra duas conexões, comece uma escrita numa e tente escrever pela outra. Provoque o `database is locked`. Ligue `PRAGMA journal_mode = WAL` e repita com um leitor no lugar do segundo escritor.
+
+**15. Migração do `.jsonl`.** Carregue um arquivo JSON Lines do @sec-cap062 para dentro da tabela e responda à pergunta da abertura do capítulo com uma consulta só.
+
+## Resumo
+
+- Formato de arquivo obriga a carregar tudo para procurar; banco de dados deixa o dado no disco e leva a pergunta até ele.
+- `sqlite3.connect` abre um arquivo e roda a biblioteca dentro do processo: sem servidor, sem porta, sem usuário.
+- O módulo implementa a DB-API 2.0 (PEP 249), então `connect`, `cursor`, `execute`, `fetchone` e `commit` valem também para PostgreSQL e MySQL.
+- O cursor é iterável e traz linhas sob demanda; `fetchall()` carrega tudo na memória.
+- `con.row_factory = sqlite3.Row` dá acesso por nome, `keys()` e conversão para dicionário, ao custo de uma linha.
+- Montar SQL com f-string permite que o texto do usuário vire **estrutura** da consulta: `x' OR '1'='1` apagou o filtro e devolveu a tabela inteira.
+- O parâmetro `?` é outro mecanismo, não uma interpolação mais cuidadosa: a consulta é analisada antes, e o valor é ligado a um espaço reservado depois.
+- Parâmetro substitui valor, nunca identificador; nome de tabela ou coluna dinâmico exige lista fechada de nomes permitidos no código.
+- O SQLite tem cinco tipos de armazenamento e nenhum de data; ISO-8601 em `TEXT` ordena corretamente.
+- A tipagem é dinâmica — texto entra em coluna `INTEGER` sem erro — e `STRICT` no `CREATE TABLE` é o que faz o tipo valer.
+- `NOT NULL`, `UNIQUE` e `CHECK` protegem o arquivo contra qualquer programa; validação em Python protege só o caminho que passa pelo seu código.
+- Chave estrangeira não é verificada sem `PRAGMA foreign_keys = ON`.
+- `with con:` delimita transação (não fecha conexão): `commit` na saída normal, `rollback` na exceção.
+- `close()` sem `commit` descarta a transação em silêncio, e é a causa mais comum de "gravei e sumiu".
+- Um `commit` por linha foi 6.077 vezes mais lento que um por lote, porque o custo está na garantia de durabilidade, não no volume.
+- Índice deu 289 vezes em 200 mil linhas; `EXPLAIN QUERY PLAN` mostra `SCAN` contra `SEARCH ... USING INDEX` e responde à maioria das perguntas de lentidão.
+- O limite do SQLite é escrita concorrente — um escritor por vez; WAL melhora, PostgreSQL resolve.
+
+O Volume 10 se fecha no próximo capítulo, com o que falta para o dado que atravessa todos esses formatos: como guardar uma senha sem guardá-la, como gerar um valor que ninguém consiga adivinhar, e como saber que um arquivo não foi alterado no caminho.
