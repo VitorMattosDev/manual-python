@@ -1,3 +1,607 @@
-# Dataclasses, NamedTuple e enumerações {#sec-cap046}
+# Dataclasses, `NamedTuple` e enumerações {#sec-cap046}
 
-*(em elaboracao)*
+Uma classe que é só três campos custa dezoito linhas quando escrita à mão com o mínimo aceitável:
+
+```python
+class Leitura:
+    def __init__(self, ident, potencia, porta):
+        self.ident = ident
+        self.potencia = potencia
+        self.porta = porta
+
+    def __repr__(self):
+        return (f"Leitura(ident={self.ident!r}, potencia={self.potencia!r}, "
+                f"porta={self.porta!r})")
+
+    def __eq__(self, outro):
+        if not isinstance(outro, Leitura):
+            return NotImplemented
+        return ((self.ident, self.potencia, self.porta)
+                == (outro.ident, outro.potencia, outro.porta))
+
+    def __hash__(self):
+        return hash((self.ident, self.potencia, self.porta))
+```
+
+```text
+Leitura(ident='onu-00042', potencia=-21.4, porta='1/1/1')
+igual: True
+```
+
+Cada nome de campo aparece cinco vezes. Acrescentar um quarto exige tocar em quatro lugares, e esquecer um deles produz um `__eq__` que ignora o campo novo — bug silencioso e clássico.
+
+O código é mecânico, então a biblioteca padrão o gera. Este capítulo cobre as três ferramentas que fazem isso, e principalmente o critério para escolher entre elas: `@dataclass` para o objeto de dados comum, `NamedTuple` para o registro imutável que se comporta como tupla, e `Enum` para o conjunto fechado de valores válidos.
+
+## `@dataclass`
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class Leitura:
+    ident: str
+    potencia: float
+    porta: str = "?"
+```
+
+```text
+Leitura(ident='onu-00042', potencia=-21.4, porta='1/1/1')
+igual   : True
+padrao  : Leitura(ident='onu-00043', potencia=-29.8, porta='?')
+asdict  : {'ident': 'onu-00042', 'potencia': -21.4, 'porta': '1/1/1'}
+astuple : ('onu-00042', -21.4, '1/1/1')
+replace : Leitura(ident='onu-00042', potencia=-30.0, porta='1/1/1')
+campos  : ['ident', 'potencia', 'porta']
+TypeError: unhashable type: 'Leitura'
+```
+
+Dezoito linhas viraram quatro, e ainda sobrou `asdict`, `astuple` e `replace`. As anotações de tipo são **obrigatórias** — é por elas que o decorador descobre os campos —, mas não são verificadas em tempo de execução: `Leitura("x", "não é float")` passa. Elas servem ao `mypy` (@sec-cap069) e a quem lê.
+
+::: {#fig-dataclass-gera}
+```{.tikz}
+%%| filename: dataclass-gera
+%%| alt: O que o decorador dataclass gera a partir dos campos anotados - init, repr e eq - e o efeito colateral de anular o hash herdado
+\begin{tikzpicture}[
+  src/.style={draw=manualblue!60, thick, rounded corners=1pt, fill=manualblue!6,
+              text width=5.0cm, align=left, font=\ttfamily\scriptsize,
+              inner xsep=6pt, inner ysep=4pt},
+  gen/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.4cm, align=center, minimum height=0.62cm,
+              font=\ttfamily\scriptsize},
+  kil/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=3.4cm, align=center, minimum height=0.62cm,
+              font=\ttfamily\scriptsize},
+  opt/.style={draw=manualyellow!80!black, very thick, rounded corners,
+              fill=manualyellow!18, text width=3.4cm, align=center,
+              minimum height=0.62cm, font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.6) rectangle (15.0,-6.2);
+
+  \node[src, anchor=north west] at (0.0, 2.1)
+    {@dataclass\\
+     class Leitura:\\
+     \ \ ident: str\\
+     \ \ potencia: float\\
+     \ \ porta: str = "?"};
+
+  \draw[fl] (5.3, 0.9) -- (6.6, 0.9);
+  \node[lb, text width=1.5cm] at (5.4, 1.4) {gera};
+
+  \node[gen] at (8.6, 1.85) {\_\_init\_\_};
+  \node[gen] at (8.6, 1.05) {\_\_repr\_\_};
+  \node[gen] at (8.6, 0.25) {\_\_eq\_\_};
+  \node[kil] at (8.6,-0.55) {\_\_hash\_\_ = None};
+
+  \node[lb, text width=4.0cm] at (10.5, 1.85) {três parâmetros, na ordem};
+  \node[lb, text width=4.0cm] at (10.5, 1.05) {\texttt{Leitura(ident=\ldots)}};
+  \node[lb, text width=4.0cm] at (10.5, 0.25) {compara campo a campo};
+  \node[lb, text width=4.0cm, text=manualred] at (10.5,-0.55)
+    {efeito colateral: não é hasheável};
+
+  \node[opt] at (8.6,-1.65) {frozen=True};
+  \draw[fl] (8.6,-0.9) -- (8.6,-1.35);
+  \node[lb, text width=4.0cm] at (10.5,-1.65)
+    {devolve o \texttt{\_\_hash\_\_} e recusa atribuição};
+
+  \node[opt] at (8.6,-2.45) {order=True};
+  \node[lb, text width=4.0cm] at (10.5,-2.45) {gera \texttt{<} \texttt{<=} \texttt{>} \texttt{>=}};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.35)
+    {As anotações de tipo são \textbf{obrigatórias} --- é por elas que o
+     decorador descobre os campos --- e \textbf{não são verificadas} em tempo de
+     execução. Um campo sem anotação simplesmente não vira campo. A regra do
+     hash é a mesma de escrever \texttt{\_\_eq\_\_} à mão: comparar por valor e
+     poder mudar são incompatíveis com estar dentro de um \texttt{set}.};
+\end{tikzpicture}
+```
+O que o decorador escreve por você a partir dos campos anotados — e o `__hash__` que ele tira.
+:::
+
+O `TypeError` no fim é a regra do @sec-cap041 reaparecendo: como `@dataclass` gerou `__eq__`, o `__hash__` foi anulado. Um objeto mutável e comparável por valor não pode ser chave de dicionário, porque mudar um campo mudaria o hash e o objeto sumiria da tabela. Se você precisa de hash, precisa de imutabilidade.
+
+## As opções que importam
+
+```python
+@dataclass(frozen=True, slots=True, order=True)
+class Coordenada:
+    lat: float
+    lon: float
+```
+
+```text
+frozen  : Coordenada(lat=-23.55, lon=-46.63)
+hashavel: 1
+ordenada: [Coordenada(lat=0, lon=5), Coordenada(lat=1, lon=1)]
+mudar campo: FrozenInstanceError: cannot assign to field 'lat'
+criar campo: TypeError: super(type, obj): obj (instance of Coordenada) is not an instance or subtype of type (Coordenada).
+tem __dict__? False
+```
+
+`frozen=True` recusa atribuição e **devolve o `__hash__`**, porque agora o valor não muda. `slots=True` (Python **3.10**) elimina o `__dict__` da instância, o que economiza memória e impede atributo digitado errado. `order=True` gera `<`, `<=`, `>` e `>=` comparando os campos na ordem de declaração — o que faz `sorted()` funcionar de graça.
+
+A segunda mensagem de erro é feia e vale a explicação: tentar criar um atributo novo numa dataclass `frozen` **e** com `slots` produz esse `TypeError` confuso em vez de um `AttributeError` limpo, por um detalhe da implementação. O efeito é o certo — o atributo não é criado —, só a mensagem é ruim.
+
+Duas outras opções aparecem com frequência:
+
+```python
+@dataclass(kw_only=True)
+class Config:
+    destino: str
+    limite: float = -28.0
+```
+
+```text
+kw_only : Config(destino='olt-01')
+TypeError: Config.__init__() takes 1 positional argument but 2 were given
+```
+
+`kw_only=True` (**3.10**) obriga a passar tudo por nome. Vale muito para classe com muitos campos, onde a posição é impossível de lembrar, e resolve de quebra o problema de não poder ter campo sem padrão depois de campo com padrão.
+
+| opção | o que faz | quando usar |
+|---|---|---|
+| `frozen=True` | recusa atribuição, devolve `__hash__` | valor, chave de dicionário, elemento de conjunto |
+| `slots=True` (3.10+) | sem `__dict__`, menos memória | objeto criado aos milhares |
+| `order=True` | gera `<`, `<=`, `>`, `>=` | precisa ordenar |
+| `kw_only=True` (3.10+) | tudo por nome | muitos campos, ou padrões no meio |
+| `eq=False` | mantém identidade e o `__hash__` herdado | objeto mutável que precisa ser chave |
+
+## O padrão mutável, de novo
+
+```python
+@dataclass
+class Ruim:
+    onus: list = []
+```
+
+```text
+ValueError: mutable default <class 'list'> for field onus is not allowed: use default_factory
+```
+
+A armadilha do @sec-cap019 e do @sec-cap041 aparece pela terceira vez — e desta vez o Python **recusa** o código, com a mensagem dizendo o que fazer. É uma das poucas situações em que a linguagem protege você desse erro.
+
+```python
+@dataclass
+class Bom:
+    onus: list = field(default_factory=list)
+    contador: dict = field(default_factory=dict)
+```
+
+```text
+x: ['onu-00042']  y: []  independentes: True
+```
+
+`default_factory` recebe um chamável e o executa a cada instância. Para um valor padrão que exige cálculo, vale um `lambda`: `field(default_factory=lambda: {"tentativas": 0})`.
+
+## `field` e `__post_init__`
+
+```python
+@dataclass
+class Leitura:
+    ident: str
+    potencia: float
+    critica: bool = field(init=False)
+    _origem: str = field(default="csv", repr=False, compare=False)
+
+    def __post_init__(self):
+        if not -40.0 <= self.potencia <= 0.0:
+            raise ValueError(f"{self.ident}: {self.potencia} fora da faixa")
+        self.critica = self.potencia < -28.0
+```
+
+```text
+Leitura(ident='onu-00042', potencia=-21.4, critica=False)
+Leitura(ident='onu-00043', potencia=-29.8, critica=True)
+derivada : False True
+compare ignora _origem: True
+ValueError: onu-00099: -80.0 fora da faixa
+```
+
+`__post_init__` roda logo depois do `__init__` gerado, e é onde vão validação e campos derivados. Os parâmetros de `field` dão controle fino: `init=False` tira o campo da assinatura do construtor, `repr=False` o esconde da representação, e `compare=False` o exclui do `__eq__` — repare que os dois objetos são iguais apesar de `_origem` diferente, que é exatamente o que se quer para metadados de proveniência.
+
+Vale notar o limite: aqui a validação roda só na construção. Atribuir `a.potencia = -80.0` depois passa direto, porque `@dataclass` não gera propriedades. Quando toda atribuição precisa ser validada, a `property` do @sec-cap042 continua sendo a resposta — ou uma biblioteca como o Pydantic (@sec-cap087).
+
+## `NamedTuple`
+
+```python
+from typing import NamedTuple
+
+
+class Ponto(NamedTuple):
+    lat: float
+    lon: float
+    rotulo: str = "sem nome"
+```
+
+```text
+repr      : Ponto(lat=-23.55, lon=-46.63, rotulo='sem nome')
+por nome  : -23.55
+por indice: -23.55
+desempacota: -23.55 -46.63 sem nome
+e uma tupla: True
+_replace  : Ponto(lat=-23.55, lon=-46.63, rotulo='sao paulo')
+_asdict   : {'lat': -23.55, 'lon': -46.63, 'rotulo': 'sem nome'}
+_fields   : ('lat', 'lon', 'rotulo')
+AttributeError: can't set attribute
+versao antiga: Velho(lat=1, lon=2)
+```
+
+O que caracteriza o `NamedTuple` é `isinstance(p, tuple)` dando `True`: ele **é** uma tupla, com todas as consequências. Indexa, fatia, desempacota, funciona onde uma tupla funciona, e é imutável de nascença. Os métodos utilitários vêm com sublinhado à frente (`_replace`, `_asdict`, `_fields`) justamente para não colidirem com nomes de campo.
+
+A forma antiga, `collections.namedtuple("Velho", "lat lon")`, ainda funciona e ainda aparece em código existente. A versão com classe é preferível: aceita anotações, aceita valores padrão de forma legível, aceita métodos e docstring.
+
+## Escolhendo entre os três
+
+```text
+dataclass         344 bytes  __dict__=True  mutavel=True
+dataclass slots    48 bytes  __dict__=False  mutavel=True
+NamedTuple         56 bytes  __dict__=False  mutavel=False
+
+NamedTuple e tupla, entao:
+  compara com tupla crua: True
+  dataclass nao         : False
+  desempacota           : 3
+```
+
+A diferença de memória é grande: 344 bytes contra 48 é o custo do `__dict__` por instância. Num programa com um objeto de configuração, é irrelevante; num que carrega meio milhão de leituras, decide.
+
+A diferença de comportamento é mais importante que a de tamanho. `NT(1, 2) == (1, 2)` dando `True` é conveniência ou bug, dependendo do que você quis. Um `NamedTuple` se compara igual a qualquer tupla com o mesmo conteúdo, e desempacota sozinho quando passado com `*` — ou, pior, quando alguém itera sobre ele sem querer.
+
+::: {#fig-escolha-registro}
+```{.tikz}
+%%| filename: escolha-registro
+%%| alt: Arvore de decisao entre dataclass, dataclass frozen, NamedTuple e classe comum, a partir das perguntas sobre mutabilidade, comportamento de tupla e quantidade de logica
+\begin{tikzpicture}[
+  q/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+            text width=4.6cm, align=center, minimum height=0.85cm,
+            font=\scriptsize},
+  r/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+            text width=4.0cm, align=center, minimum height=0.8cm,
+            font=\ttfamily\scriptsize},
+  b/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+            text width=4.0cm, align=center, minimum height=0.8cm,
+            font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.4) rectangle (15.0,-6.8);
+
+  \node[q] at (3.2, 1.7) {tem comportamento de verdade, não só dados?};
+
+  \draw[fl] (5.5, 1.7) -- (7.4, 1.7);
+  \node[lb] at (6.5, 1.95) {sim};
+  \node[b] at (9.6, 1.7) {class comum};
+  \node[lb, text width=4.2cm] at (13.2, 1.7) {métodos, estado, invariantes};
+
+  \draw[fl] (3.2, 1.25) -- (3.2, 0.5);
+  \node[lb] at (3.7, 0.9) {não};
+
+  \node[q] at (3.2, 0.05) {precisa mudar depois de criado?};
+
+  \draw[fl] (5.5, 0.05) -- (7.4, 0.05);
+  \node[lb] at (6.5, 0.3) {sim};
+  \node[r] at (9.6, 0.05) {@dataclass};
+  \node[lb, text width=4.2cm] at (13.2, 0.05) {não é hasheável};
+
+  \draw[fl] (3.2,-0.4) -- (3.2,-1.15);
+  \node[lb] at (3.7,-0.8) {não};
+
+  \node[q] at (3.2,-1.6) {deve se comportar como tupla (indexar, desempacotar)?};
+
+  \draw[fl] (5.5,-1.6) -- (7.4,-1.6);
+  \node[lb] at (6.5,-1.35) {sim};
+  \node[r] at (9.6,-1.6) {NamedTuple};
+  \node[lb, text width=4.2cm] at (13.2,-1.6) {compara igual a tupla crua};
+
+  \draw[fl] (3.2,-2.15) -- (3.2,-2.9);
+  \node[lb] at (3.7,-2.55) {não};
+
+  \node[r] at (3.2,-3.35) {@dataclass(frozen=True)};
+  \node[lb, text width=4.6cm] at (9.0,-3.35)
+    {hasheável, sem surpresa de tupla --- acrescente \texttt{slots=True} se
+     forem muitos objetos};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.4)
+    {O caso mais comum em código de aplicação é o \texttt{@dataclass} simples.
+     O \texttt{frozen=True} vira o padrão quando o objeto atravessa camadas ou
+     vai para dentro de um conjunto. \texttt{NamedTuple} é para o registro que
+     realmente \emph{é} uma tupla --- coordenada, resultado de função, linha de
+     resultado de banco.};
+\end{tikzpicture}
+```
+O critério de escolha entre classe comum, `dataclass`, `dataclass` congelada e `NamedTuple`.
+:::
+
+## `Enum`: o conjunto fechado
+
+Strings soltas para representar estado são a fonte de bug mais silenciosa que existe: `"suspensa"`, `"SUSPENSA"` e `"suspenso"` são três valores diferentes, e o `if` que compara com o errado simplesmente nunca é verdadeiro.
+
+```python
+from enum import Enum
+
+
+class Estado(Enum):
+    ATIVA = "ativa"
+    SUSPENSA = "suspensa"
+    DESLIGADA = "desligada"
+```
+
+```text
+membro   : Estado.ATIVA
+name     : ATIVA
+value    : ativa
+por valor: Estado.SUSPENSA
+por nome : Estado.DESLIGADA
+iteracao : ['ATIVA', 'SUSPENSA', 'DESLIGADA']
+identidade: True
+ValueError: 'inexistente' is not a valid Estado
+```
+
+Quatro ganhos de uma vez. O conjunto de valores válidos está escrito num lugar só e é iterável. Um valor inválido é recusado **na conversão**, com mensagem clara, em vez de virar um `if` que nunca casa. Os membros são objetos únicos, então `is` funciona e é a comparação idiomática. E o `repr` num log diz `Estado.SUSPENSA`, não `'suspensa'`.
+
+Duas variantes se misturam com os tipos embutidos:
+
+```text
+IntEnum compara: True
+e soma         : 15
+StrEnum (3.11+): gpon | gpon | True
+```
+
+`IntEnum` é um `int` de verdade — soma, compara, serializa como número. `StrEnum` (Python **3.11**) é uma `str`: interpola em f-string como o valor puro e compara igual à string. Ambos são a escolha certa quando o valor precisa atravessar uma fronteira que só entende tipos primitivos — JSON, banco de dados, cabeçalho HTTP. Fora disso, prefira `Enum` puro, porque a comparação acidental com um valor solto deixa de ser possível.
+
+`Flag` cobre o caso das combinações:
+
+```python
+class Alarme(Flag):
+    NENHUM = 0
+    POTENCIA = auto()
+    TEMPERATURA = auto()
+    SINAL = auto()
+```
+
+```text
+combinado : Alarme.POTENCIA|TEMPERATURA
+contem pot: True
+contem sin: False
+iteracao  : ['POTENCIA', 'TEMPERATURA']
+valor     : 3
+soma tudo : Alarme.POTENCIA|TEMPERATURA|SINAL
+nenhum    : Alarme.NENHUM False
+```
+
+Os operadores `|`, `&` e `in` funcionam, o valor é a máscara de bits, e um membro combinado é iterável. É o substituto legível para o conjunto de constantes inteiras somadas à mão — e `Alarme.NENHUM` é falso num teste booleano, o que permite `if alarmes:`.
+
+## Enumeração com comportamento
+
+Um `Enum` é uma classe, então aceita métodos e propriedades:
+
+```python
+class Estado(Enum):
+    ATIVA = "ativa"
+    SUSPENSA = "suspensa"
+    DESLIGADA = "desligada"
+
+    @property
+    def cobravel(self):
+        return self is not Estado.DESLIGADA
+
+    @classmethod
+    def de_codigo(cls, codigo):
+        mapa = {1: cls.ATIVA, 2: cls.SUSPENSA, 3: cls.DESLIGADA}
+        try:
+            return mapa[codigo]
+        except KeyError:
+            raise ValueError(f"codigo desconhecido: {codigo}") from None
+```
+
+```text
+  ATIVA      cobravel=True  proximo=SUSPENSA
+  SUSPENSA   cobravel=True  proximo=DESLIGADA
+  DESLIGADA  cobravel=False  proximo=ATIVA
+de_codigo: Estado.SUSPENSA
+ValueError: codigo desconhecido: 9
+```
+
+Isto elimina a tabela de `if` espalhada pelo programa: a regra "desligada não é cobrável" mora junto do estado. Métodos e propriedades **não** viram membros — só as atribuições simples no corpo da classe viram. Se você precisar de um atributo de classe que não seja membro, envolva-o em `typing.ClassVar` ou use `enum.nonmember` (3.11+).
+
+## Tudo junto
+
+```python
+@dataclass(frozen=True, slots=True)
+class ONU:
+    LIMITES: ClassVar[dict] = {Protocolo.GPON: -28.0, Protocolo.XGS: -30.0}
+
+    ident: str
+    potencia: float
+    protocolo: Protocolo = Protocolo.GPON
+    estado: Estado = Estado.ATIVA
+    local: Coordenada | None = None
+    tags: tuple[str, ...] = ()
+
+    @property
+    def critica(self):
+        return self.potencia < self.LIMITES[self.protocolo]
+
+    @classmethod
+    def de_csv(cls, linha):
+        ident, pot, proto = linha.strip().split(",")
+        return cls(ident, float(pot), Protocolo(proto))
+```
+
+```text
+  onu-00042 gpon  critica=False cobravel=True
+  onu-00043 gpon  critica=True  cobravel=True
+  onu-00044 xgs   critica=False cobravel=True
+  onu-00045 xgs   critica=True  cobravel=False
+
+hashavel (frozen): 1
+asdict do ultimo : {'ident': 'onu-00045', 'potencia': -31.7, 'protocolo': <Protocolo.XGS: 'xgs'>, 'estado': <Estado.SUSPENSA: 2>, 'local': Coordenada(lat=-23.55, lon=-46.63), 'tags': ('prioridade',)}
+local por nome   : -23.55
+FrozenInstanceError: cannot assign to field 'potencia'
+```
+
+Cinco detalhes que valem a leitura. `LIMITES` está anotado com `ClassVar`, e é isso que impede o `@dataclass` de tratá-lo como campo — sem a anotação, ele viraria um parâmetro do construtor com padrão mutável e o decorador recusaria a classe. O padrão de `tags` é uma tupla vazia, não uma lista: imutável, então pode ser padrão direto. `local` usa `Coordenada | None`, a sintaxe de união do Python **3.10** que substituiu `Optional[Coordenada]`. `de_csv` faz `Protocolo(proto)`, que valida a string do CSV de graça. E `asdict` desce recursivamente, preservando o `NamedTuple` interno — repare que `local` saiu como `Coordenada(...)` e não como dicionário.
+
+## 🐍 Jeito Pythônico
+
+**`@dataclass` para objeto de dados.** Escrever `__init__`, `__repr__` e `__eq__` à mão para campos simples é trabalho repetido com chance de erro.
+
+```python
+# antipadrão
+class Ponto:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def __repr__(self):
+        return f"Ponto({self.x}, {self.y})"
+    def __eq__(self, o):
+        return isinstance(o, Ponto) and (self.x, self.y) == (o.x, o.y)
+```
+
+```python
+# pythônico
+@dataclass(frozen=True, slots=True)
+class Ponto:
+    x: float
+    y: float
+```
+
+**`frozen=True` como padrão mental**, e mutável só quando houver razão. Objeto congelado é hasheável, seguro de compartilhar entre camadas e impossível de mudar por engano.
+
+**`slots=True` quando forem muitos objetos** (3.10+). 48 bytes contra 344 é decidido por ordem de grandeza, não por gosto.
+
+**`field(default_factory=...)` para lista, dicionário e conjunto.** O Python recusa o padrão mutável direto — e a mensagem já diz o que fazer.
+
+**`__post_init__` para validação e campo derivado.** Lembre que ele não cobre atribuição posterior; se isso importa, é `property` ou Pydantic.
+
+**`Enum` em vez de string solta** para todo conjunto fechado de valores. Compare com `is`; converta na fronteira com `Estado(valor)` e deixe o `ValueError` acontecer cedo.
+
+**`StrEnum`/`IntEnum` só na fronteira** com JSON, banco ou protocolo. Dentro do programa, `Enum` puro impede comparação acidental.
+
+**`NamedTuple` quando o objeto realmente é uma tupla.** Se você não quer que ele se compare igual a `(1, 2)` nem se desempacote sozinho, use `@dataclass(frozen=True)`.
+
+Sobre versões:
+
+- **Python 3.4** — `enum` entra na biblioteca padrão (PEP 435).
+- **Python 3.6** — `typing.NamedTuple` com sintaxe de classe e anotações (PEP 526).
+- **Python 3.7** — `@dataclass` (PEP 557).
+- **Python 3.10** — `slots=True` e `kw_only=True`; `X | None` substitui `Optional[X]`.
+- **Python 3.11** — `StrEnum`, `enum.member`/`nonmember`, `ReprEnum`, e o `repr` de `Flag` fica mais legível.
+- **Python 3.12** — `@dataclass` fica mais rápido para criar; o `__replace__` genérico é preparado.
+- **Python 3.13** — `copy.replace()` passa a funcionar com qualquer objeto que implemente `__replace__`, incluindo *dataclasses* e `NamedTuple`.
+
+## 🧪 Laboratório
+
+Objetivo: medir o que cada ferramenta gera, provar a regra de hash, comparar memória e comportamento, e terminar com um modelo de dados que usa as três em conjunto.
+
+**1. À mão.**
+
+```bash
+mkdir -p ~/lab46 && cd ~/lab46
+```
+
+`amao.py`: escreva a classe com `__init__`, `__repr__`, `__eq__` e `__hash__` e conte quantas vezes cada nome de campo aparece.
+
+**2. `@dataclass`.** Reescreva em quatro linhas. Confirme `asdict`, `astuple`, `replace` e `fields`, e o erro:
+
+```text
+TypeError: unhashable type: 'Leitura'
+```
+
+Explique por que uma dataclass mutável não é hasheável.
+
+**3. As opções.** Em `opcoes.py`, use `frozen=True, slots=True, order=True`. Confirme:
+
+```text
+hashavel: 1
+mudar campo: FrozenInstanceError: cannot assign to field 'lat'
+tem __dict__? False
+```
+
+Depois faça `kw_only=True` e confirme o `TypeError` ao passar posicionalmente.
+
+**4. O padrão mutável.** Rode `mutavel.py`. Confirme que o Python **recusa a classe**:
+
+```text
+ValueError: mutable default <class 'list'> for field onus is not allowed: use default_factory
+```
+
+Corrija com `default_factory` e confirme que duas instâncias têm listas independentes.
+
+**5. `__post_init__`.** Em `postinit.py`, valide a faixa e derive `critica`. Confirme que `compare=False` faz dois objetos com `_origem` diferente serem iguais. Depois atribua `a.potencia = -80.0` **depois** de construído e confirme que a validação não roda — e entenda o limite da ferramenta.
+
+**6. `NamedTuple`.** Rode `namedtuple.py` e confirme que é uma tupla de verdade: índice, desempacotamento, `isinstance(p, tuple)`.
+
+**7. A comparação.** Rode `comparacao.py`:
+
+```text
+dataclass         344 bytes  __dict__=True  mutavel=True
+dataclass slots    48 bytes  __dict__=False  mutavel=True
+NamedTuple         56 bytes  __dict__=False  mutavel=False
+```
+
+E o comportamento que decide a escolha:
+
+```text
+  compara com tupla crua: True
+  dataclass nao         : False
+```
+
+**8. `Enum`.** Escreva `estados.py` (**não** chame o arquivo de `enum.py` — veja o passo 12). Confirme a busca por valor, por nome, a iteração e o `ValueError` do valor inválido. Teste também `IntEnum` e `StrEnum`.
+
+**9. `Flag`.** Rode `alarmes.py` e confirme que `|`, `in` e a iteração funcionam, e que `Alarme.NENHUM` é falso num teste booleano.
+
+**10. Enumeração com método.** Rode `estadometodo.py` e confirme que a propriedade e o `classmethod` não viraram membros — `list(Estado)` continua com três.
+
+**11. Tudo junto.** Escreva `juntos.py` e reproduza a tabela. Depois **remova** o `ClassVar` de `LIMITES` e veja o `@dataclass` recusar a classe por causa do padrão mutável.
+
+**12. O arquivo que sombreia.** Crie um arquivo chamado `enum.py` no diretório e rode qualquer script que importe `dataclasses`:
+
+```text
+ImportError: cannot import name 'Enum' from 'enum' (consider renaming '/home/vitor/lab46/enum.py' since it has the same name as the standard library module named 'enum' and prevents importing that standard library module)
+```
+
+O caminho de busca do @sec-cap029 em ação: o diretório atual vem antes da biblioteca padrão. A mensagem do Python 3.13 já sugere a correção.
+
+## Resumo
+
+- `@dataclass` gera `__init__`, `__repr__` e `__eq__` a partir de campos anotados. As anotações são obrigatórias para o decorador e não são verificadas em tempo de execução.
+- Gerar `__eq__` anula o `__hash__`. Uma dataclass mutável não é hasheável; `frozen=True` devolve o hash junto com a imutabilidade.
+- `slots=True` (3.10+) elimina o `__dict__` — 48 bytes contra 344 —, e `kw_only=True` obriga passagem por nome.
+- Padrão mutável é **recusado** pelo decorador; use `field(default_factory=list)`.
+- `field` controla campo a campo: `init=False`, `repr=False`, `compare=False`. `__post_init__` é o lugar da validação e dos campos derivados — mas não cobre atribuição posterior.
+- `NamedTuple` **é** uma tupla: indexa, desempacota e se compara igual a uma tupla crua com o mesmo conteúdo. Isso é conveniência ou bug, conforme a intenção.
+- Regra de escolha: comportamento de verdade → classe comum; muda depois → `@dataclass`; é uma tupla → `NamedTuple`; nada disso → `@dataclass(frozen=True)`.
+- `Enum` transforma um conjunto fechado de valores em objetos únicos, iteráveis, comparáveis com `is` e validados na conversão.
+- `IntEnum` e `StrEnum` (3.11+) valem na fronteira com JSON, banco e protocolo; dentro do programa, `Enum` puro evita comparação acidental. `Flag` cobre combinações com `|` e `in`.
+- Enumeração aceita métodos, propriedades e `classmethod` — que não viram membros — e é onde a regra de negócio ligada ao estado deve morar.
+
+Falta uma peça no Volume 7. O *pipeline* do @sec-cap044 funciona porque as peças têm os métodos certos, mas nada declara qual é o contrato nem avisa quando ele é quebrado — o erro só aparece na execução. O último capítulo do volume resolve isso.
