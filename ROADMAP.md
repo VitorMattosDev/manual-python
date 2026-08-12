@@ -77,7 +77,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 044** - Composição, delegação e quando não herdar - `vol07/cap044-composicao-delegacao-e-quando-nao-herdar.qmd`
 - [x] **cap 045** - Métodos estáticos, métodos de classe e o desenho da API - `vol07/cap045-metodos-estaticos-metodos-de-classe-e-o.qmd`
 - [x] **cap 046** - Dataclasses, NamedTuple e enumerações - `vol07/cap046-dataclasses-namedtuple-e-enumeracoes.qmd`
-- [ ] **cap 047** - Classes abstratas, protocolos e duck typing - `vol07/cap047-classes-abstratas-protocolos-e-duck-typing.qmd`
+- [x] **cap 047** - Classes abstratas, protocolos e duck typing - `vol07/cap047-classes-abstratas-protocolos-e-duck-typing.qmd`
 
 ### Volume 8 — O Modelo de Dados de Python
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (40 concluidos).
+**Total:** 104 capitulos em 16 volumes (47 concluidos).
 

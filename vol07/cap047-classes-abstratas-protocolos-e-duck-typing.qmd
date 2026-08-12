@@ -1,3 +1,547 @@
-# Classes abstratas, protocolos e duck typing {#sec-cap047}
+# Classes abstratas, protocolos e *duck typing* {#sec-cap047}
 
-*(em elaboracao)*
+O *pipeline* do @sec-cap044 monta peças que se encaixam por terem os métodos certos. O problema aparece quando uma delas não tem:
+
+```python
+class FiltroRuim:
+    def filtrar(self, registros):        # nome errado
+        return registros
+
+
+p = Pipeline([FiltroBom(), FiltroRuim()])
+print("construiu sem reclamar:", p)
+p.executar([-21.4, -29.8, -31.7])
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab47/tarde.py", line 23, in <module>
+    p.executar([-21.4, -29.8, -31.7])
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vitor/lab47/tarde.py", line 17, in executar
+    dados = e.aplicar(dados)
+            ^^^^^^^^^
+AttributeError: 'FiltroRuim' object has no attribute 'aplicar'
+```
+
+A montagem passou. O erro nasceu na execução — e num programa de verdade, na primeira etapa do processamento noturno, depois de a primeira peça já ter escrito no banco. O *duck typing* deu toda a flexibilidade e nenhuma garantia.
+
+Python oferece três respostas para isso, e elas não competem: classe base abstrata, protocolo estrutural, e a decisão consciente de não verificar nada. Este capítulo fecha o Volume 7 mostrando qual cabe em cada situação.
+
+## Classe base abstrata
+
+```python
+from abc import ABC, abstractmethod
+
+
+class Etapa(ABC):
+    @abstractmethod
+    def aplicar(self, registros):
+        """Recebe um iterável de registros e devolve outro."""
+
+    def descrever(self):                 # concreto: herdado de graça
+        return f"etapa {type(self).__name__}"
+```
+
+```text
+funciona : [-29.8, -31.7]
+herdou   : etapa FiltroCritico
+TypeError: Can't instantiate abstract class Etapa without an implementation for abstract method 'aplicar'
+TypeError: Can't instantiate abstract class Incompleta without an implementation for abstract method 'aplicar'
+```
+
+O erro mudou de lugar: agora é impossível **criar** um objeto que não implementa o contrato. A mensagem nomeia o método que falta, e o `Incompleta()` — uma subclasse que herdou e esqueceu — falha do mesmo jeito.
+
+Repare que a verificação acontece na **instanciação**, não na definição da classe. `class Incompleta(Etapa): pass` é código válido; só não dá para criar objetos dela. Isso é deliberado: permite hierarquias abstratas intermediárias.
+
+A mensagem "without an implementation for abstract method" é a redação do Python **3.12**; versões anteriores diziam apenas "with abstract method 'aplicar'", sem nomear tão claramente o que fazer.
+
+`ABC` permite misturar abstrato e concreto, e é aí que ela se paga: `descrever` foi herdado pronto. Uma ABC é ao mesmo tempo um contrato e uma base de código compartilhado — o *template method* do @sec-cap043 com a garantia de que o gancho existe.
+
+```python
+class Transporte(ABC):
+    @property
+    @abstractmethod
+    def nome(self): ...
+
+    @classmethod
+    @abstractmethod
+    def de_url(cls, url): ...
+
+    @abstractmethod
+    def enviar(self, payload): ...
+
+    def enviar_lote(self, itens):        # template method
+        return [self.enviar(i) for i in itens]
+```
+
+```text
+nome  : snmp
+lote  : ['[snmp] 2 bytes', '[snmp] 4 bytes']
+abstratos que faltam em Snmp: frozenset()
+```
+
+Duas coisas úteis aqui. A ordem dos decoradores importa: `@abstractmethod` fica **por dentro**, colado na função, e `@property` ou `@classmethod` por fora. E um atributo de classe simples (`nome = "snmp"`) satisfaz uma propriedade abstrata — o contrato exige que o nome exista e seja legível, não que seja implementado de um jeito específico. O `__abstractmethods__` vazio confirma que nada ficou pendente.
+
+## O custo da ABC: herança obrigatória
+
+A ABC verifica por **nome**: só é uma `Etapa` quem herda de `Etapa`. Isso é um problema quando a classe é de terceiros, e o `abc` tem uma saída:
+
+```python
+Serializavel.register(DeTerceiros)
+```
+
+```text
+antes : False
+depois: True
+subclasse virtual: True
+mas nao esta no MRO: ['DeTerceiros', 'object']
+register nao verifica nada: True
+```
+
+`register` cria uma **subclasse virtual**: `isinstance` passa a dizer `True`, mas a classe não entra no MRO e não herda nada. A última linha é o aviso importante — `register` não verifica coisa alguma. Registrar uma classe que não tem o método faz `isinstance` mentir, e o `AttributeError` volta a acontecer tarde.
+
+Há uma alternativa mais honesta, com `__subclasshook__`:
+
+```python
+    @classmethod
+    def __subclasshook__(cls, C):
+        if cls is Aplicavel:
+            return any("aplicar" in B.__dict__ for B in C.__mro__)
+        return NotImplemented
+```
+
+```text
+tem aplicar  : True
+nao tem      : False
+sem herdar nem registrar
+```
+
+Agora `isinstance` verifica de verdade, olhando a estrutura da classe. É assim que `collections.abc.Iterable` funciona. O custo é escrever o gancho à mão para cada contrato — e é exatamente esse trabalho que o `Protocol` elimina.
+
+## `Protocol`: tipagem estrutural
+
+```python
+from typing import Protocol, runtime_checkable
+
+
+class Etapa(Protocol):
+    def aplicar(self, registros: list[float]) -> list[float]:
+        ...
+
+
+class FiltroCritico:                       # NÃO herda de nada
+    def __init__(self, limite):
+        self.limite = limite
+
+    def aplicar(self, registros):
+        return [r for r in registros if r < self.limite]
+```
+
+```text
+roda      : [-29.8, -31.7]
+isinstance: True
+negativo  : False
+Protocol nao entra no MRO: ['FiltroCritico', 'object']
+```
+
+`FiltroCritico` satisfaz `Etapa` sem saber que `Etapa` existe. É o *duck typing* de sempre — só que agora escrito, nomeado e verificável. O MRO confirma: nenhum acoplamento.
+
+Isso resolve o caso que a ABC não resolve bem: declarar o contrato que **você** precisa, para objetos que **outros** escreveram. Uma biblioteca pode aceitar "qualquer coisa com `.read()`" sem obrigar o mundo inteiro a herdar de uma base dela.
+
+::: {#fig-nominal-estrutural}
+```{.tikz}
+%%| filename: nominal-estrutural
+%%| alt: Comparacao entre tipagem nominal com ABC, que exige herda ou register, e tipagem estrutural com Protocol, em que basta ter os metodos certos
+\begin{tikzpicture}[
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  ab/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.8cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  pr/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.8cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  cl/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+             text width=3.0cm, align=center, minimum height=0.7cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fd/.style={->,>=stealth, thick, manualgreen!70!black, dashed},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.6) rectangle (15.0,-6.0);
+
+  \node[ttl] at (3.4, 2.05) {nominal --- \texttt{ABC}};
+  \node[ttl] at (11.2, 2.05) {estrutural --- \texttt{Protocol}};
+
+  \node[ab] at (3.4, 1.15) {class Etapa(ABC)};
+  \node[cl] at (1.7,-0.45) {FiltroCritico};
+  \node[cl] at (5.1,-0.45) {Enriquecedor};
+  \draw[fl] (1.7,-0.1) -- (2.9, 0.7);
+  \draw[fl] (5.1,-0.1) -- (3.9, 0.7);
+  \node[lb, text width=3.4cm] at (3.4,-1.45)
+    {precisam \textbf{herdar} (ou ser registradas à mão)};
+  \node[lb, text width=3.6cm, text=manualred] at (3.4,-2.6)
+    {impossível para classe de terceiros que você não pode editar};
+
+  \node[pr] at (11.2, 1.15) {class Etapa(Protocol)};
+  \node[cl] at (9.5,-0.45) {FiltroCritico};
+  \node[cl] at (12.9,-0.45) {ClasseAlheia};
+  \draw[fd] (9.5,-0.1) -- (10.7, 0.7);
+  \draw[fd] (12.9,-0.1) -- (11.7, 0.7);
+  \node[lb, text width=3.4cm] at (11.2,-1.45)
+    {basta \textbf{ter} \texttt{aplicar()} --- nenhuma delas conhece o protocolo};
+  \node[lb, text width=3.6cm, text=manualgreen!60!black] at (11.2,-2.6)
+    {o contrato é declarado por quem \emph{consome}, não por quem implementa};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.5)
+    {A ABC verifica na \textbf{instanciação} e ainda oferece código concreto
+     herdado. O \texttt{Protocol} verifica no \textbf{mypy}, sem custo em tempo
+     de execução --- e com \texttt{@runtime\_checkable} ganha um
+     \texttt{isinstance} que confere apenas a \emph{presença} dos métodos,
+     nunca as assinaturas.};
+\end{tikzpicture}
+```
+Tipagem nominal exige parentesco declarado; tipagem estrutural exige apenas a forma certa.
+:::
+
+O valor real do `Protocol` não é o `isinstance` — é o verificador estático pegando o erro antes de o programa rodar:
+
+```text
+mypy_alvo.py:25: error: List item 0 has incompatible type "Ruim"; expected "Etapa"  [list-item]
+Found 1 error in 1 file (checked 1 source file)
+```
+
+E ele confere a assinatura inteira, não só o nome do método:
+
+```text
+mypy_assinatura.py:18: error: Argument 1 to "executar" has incompatible type "TipoErrado"; expected "Etapa"  [arg-type]
+mypy_assinatura.py:18: note: Following member(s) of "TipoErrado" have conflicts:
+mypy_assinatura.py:18: note:     Expected:
+mypy_assinatura.py:18: note:         def aplicar(self, registros: list[float]) -> list[float]
+mypy_assinatura.py:18: note:     Got:
+mypy_assinatura.py:18: note:         def aplicar(self, registros: list[str]) -> list[str]
+```
+
+Esse é o erro do começo do capítulo, pego sem executar uma linha. O `@runtime_checkable` é um complemento com limite claro: ele confere apenas a **presença** dos métodos, nunca os tipos dos parâmetros. Um objeto com `aplicar` de assinatura errada passa no `isinstance` e é reprovado pelo `mypy` — os dois se completam, nenhum substitui o outro. A tipagem estática é o assunto do @sec-cap069.
+
+## As ABCs que você já usa
+
+`collections.abc` é a maior coleção de contratos prontos da biblioteca padrão, e usa `__subclasshook__` para funcionar sem herança:
+
+```python
+class Frota:
+    def __len__(self): ...
+    def __iter__(self): ...
+```
+
+```text
+  Iterable   True
+  Sized      True
+  Sequence   False
+  Mapping    False
+  Callable   False
+
+generator e Iterable: True
+str e Sequence      : True
+dict e Mapping      : True
+funcao e Callable   : True
+```
+
+`Frota` nunca ouviu falar de `Iterable` e mesmo assim é uma. `Sequence` dá `False` porque exige mais do que `__iter__` — `__getitem__`, `index`, `count`. Esse é o uso mais frequente dessas ABCs: `isinstance(x, Iterable)` em vez de `isinstance(x, (list, tuple))`, que exclui geradores e conjuntos sem motivo.
+
+O segundo uso é herdar delas para ganhar implementação:
+
+```python
+class Cache(MutableMapping):
+    def __getitem__(self, k): ...
+    def __setitem__(self, k, v): ...
+    def __delitem__(self, k): ...
+    def __iter__(self): ...
+    def __len__(self): ...
+```
+
+```text
+conteudo : {'b': 2, 'c': 3}
+de graca : ['b', 'c'] padrao True
+herdados : 9
+```
+
+Cinco métodos escritos, nove públicos ganhos: `keys`, `values`, `items`, `get`, `pop`, `popitem`, `clear`, `setdefault` e `update`. E — a diferença crucial em relação a herdar de `dict`, que o @sec-cap044 mostrou — todos eles passam pelo seu `__setitem__`, então a política de limite de tamanho é respeitada até no `update`. Foi o que aconteceu na saída: `{"b": 2, "c": 3}`, com o `"a"` descartado.
+
+::: {#fig-quando-falha}
+```{.tikz}
+%%| filename: quando-falha
+%%| alt: Linha do tempo mostrando em que momento cada abordagem detecta o contrato quebrado - duck typing na execucao, ABC na instanciacao, runtime checkable na montagem e Protocol com mypy antes de rodar
+\begin{tikzpicture}[
+  mrk/.style={draw=manualgray, very thick, circle, fill=white,
+              minimum size=0.34cm, inner sep=0pt},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=2.85cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  cw/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!18, text width=2.85cm, align=center,
+             minimum height=0.95cm, font=\ttfamily\scriptsize},
+  cb/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=2.85cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  eixo/.style={->,>=stealth, very thick, manualgray},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.8) rectangle (15.0,-5.6);
+
+  \draw[eixo] (0.6,-0.55) -- (14.4,-0.55);
+  \node[lb, anchor=north east] at (14.4,-0.85) {tempo};
+
+  \node[mrk] at (2.3,-0.55) {};
+  \node[mrk] at (6.0,-0.55) {};
+  \node[mrk] at (9.7,-0.55) {};
+  \node[mrk] at (13.2,-0.55) {};
+
+  \node[lb, text width=2.9cm] at (2.3,-1.25) {antes de rodar (\texttt{mypy}, CI)};
+  \node[lb, text width=2.9cm] at (6.0,-1.25) {importação da classe};
+  \node[lb, text width=2.9cm] at (9.7,-1.25) {montagem do objeto};
+  \node[lb, text width=2.9cm] at (13.2,-1.25) {execução};
+
+  \node[cx] at (2.3, 0.75) {Protocol\\+ mypy};
+  \node[cx] at (6.0, 0.75) {ABC\\na instanciação};
+  \node[cw] at (9.7, 0.75) {@runtime\_\-checkable};
+  \node[cb] at (13.2, 0.75) {duck typing\\puro};
+
+  \node[lb, text width=2.9cm] at (2.3, 1.95) {custo zero em produção};
+  \node[lb, text width=2.9cm] at (6.0, 1.95) {nomeia o método faltante};
+  \node[lb, text width=2.9cm] at (9.7, 1.95) {só a \emph{presença}, não a assinatura};
+  \node[lb, text width=2.9cm, text=manualred] at (13.2, 1.95) {tarde demais};
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.3)
+    {Quanto mais à esquerda o erro é detectado, mais barato ele é. O
+     \texttt{Protocol} verificado estaticamente é o único que não custa nada em
+     produção e o único que confere a assinatura inteira; a \texttt{ABC} é a
+     única que também \emph{entrega código} concreto herdado. As duas se
+     combinam --- e nenhuma delas obriga a abandonar o \emph{duck typing} onde
+     ele basta.};
+\end{tikzpicture}
+```
+Em que momento cada abordagem detecta o contrato quebrado. Erro à esquerda é erro barato.
+:::
+
+## Quando não verificar nada
+
+A terceira resposta é legítima: às vezes o *duck typing* cru é o certo.
+
+```python
+def lbyl(x):                             # look before you leap
+    if hasattr(x, "grasnar"):
+        return x.grasnar()
+    return "nao grasna"
+
+
+def eafp(x):                             # easier to ask forgiveness
+    try:
+        return x.grasnar()
+    except AttributeError:
+        return "nao grasna"
+```
+
+```text
+  Pato   lbyl=quack      eafp=quack
+  Pedra  lbyl=nao grasna eafp=nao grasna
+
+o perigo do EAFP largo:
+  eafp: nao grasna
+```
+
+Os dois estilos dão o mesmo resultado nos casos normais, e Python prefere o segundo — pedir perdão em vez de permissão. Mas a última linha mostra a armadilha: um objeto cujo `grasnar` levanta `AttributeError` **por dentro** é confundido com um objeto que não tem o método. Um bug de verdade some, disfarçado de caso previsto.
+
+A correção é estreitar o `try` ao mínimo, ou usar `getattr` para separar a busca da chamada:
+
+```python
+metodo = getattr(x, "grasnar", None)
+if metodo is None:
+    return "nao grasna"
+return metodo()          # se este levantar AttributeError, o erro sobe
+```
+
+## O *pipeline*, agora com contratos
+
+```python
+@runtime_checkable
+class Formato(Protocol):
+    def render(self, registros: list[dict]) -> list[str]: ...
+
+
+class Etapa(ABC):
+    @abstractmethod
+    def aplicar(self, registros): ...
+
+    def __repr__(self):
+        return f"{type(self).__name__}()"
+
+
+class Pipeline:
+    def __init__(self, etapas: list[Etapa], formato: Formato):
+        for e in etapas:
+            if not isinstance(e, Etapa):
+                raise TypeError(f"{type(e).__name__} nao e uma Etapa")
+        if not isinstance(formato, Formato):
+            raise TypeError(f"{type(formato).__name__} nao implementa render()")
+        ...
+```
+
+```text
+etapas: [FiltroCritico(), Enriquecedor()]
+   onu-00043 -29.8 dBm porta 1/1/2
+   onu-00045 -31.7 dBm porta 1/1/4
+   onu-00043,-29.8,1/1/2
+   onu-00045,-31.7,1/1/4
+
+os erros agora acontecem na montagem:
+  TypeError: NaoServe nao implementa render()
+  TypeError: Texto nao e uma Etapa
+```
+
+As duas abordagens no mesmo desenho, cada uma onde cabe. As **etapas** são ABC porque compartilham código (`__repr__`, e amanhã um `nome` ou um `__or__` para encadear) e porque são todas escritas dentro do projeto — a herança não custa nada. Os **formatos** são `Protocol` porque a intenção é aceitar qualquer objeto com `render`, inclusive um que venha de outro pacote ou um duplo de teste, sem obrigar ninguém a importar a base.
+
+E o ganho está na última seção da saída: os dois erros aparecem na construção do `Pipeline`, com mensagem que nomeia a classe e o que falta. O `AttributeError` tardio do começo do capítulo deixou de ser possível.
+
+Duas notas sobre o código. As etapas são `@dataclass(repr=False)` herdando de `Etapa` — combinar as duas coisas funciona, e o `repr=False` preserva o `__repr__` da base em vez de deixar o decorador gerar o seu. E `aplicar` devolve geradores, então o *pipeline* inteiro é preguiçoso: nada é calculado até o `render` consumir. Por isso `p.executar(DADOS)` pôde ser chamado duas vezes com resultados corretos — geradores novos a cada chamada.
+
+## 🐍 Jeito Pythônico
+
+**Comece sem verificação.** *Duck typing* é o padrão da linguagem, e para código interno pequeno ele basta.
+
+**`ABC` quando você é dono da hierarquia e há código a compartilhar.** O ganho é a instanciação que falha cedo mais os métodos concretos herdados.
+
+**`Protocol` quando o contrato é sobre objetos que você não controla**, ou quando obrigar herança seria acoplamento gratuito. Quem consome declara o que precisa.
+
+```python
+# antipadrão: obriga o mundo a herdar da sua base
+class Renderizador(ABC):
+    @abstractmethod
+    def render(self, x): ...
+```
+
+```python
+# pythônico: descreve a forma que você aceita
+class Renderizador(Protocol):
+    def render(self, x: list[dict]) -> list[str]: ...
+```
+
+**`isinstance(x, Iterable)`, não `isinstance(x, list)`.** As ABCs de `collections.abc` aceitam gerador, conjunto e o que mais tiver a forma certa.
+
+**Herde de `collections.abc` para implementar coleção**, não de `dict`/`list`. Cinco métodos e o resto vem pronto, roteado pelos seus ganchos.
+
+**`@abstractmethod` por dentro**, `@property` e `@classmethod` por fora.
+
+**`register` só com convicção** — ele não verifica nada e faz `isinstance` mentir.
+
+**`@runtime_checkable` confere presença, não assinatura.** O `mypy` é quem confere de verdade.
+
+**EAFP com `try` estreito.** Um `except AttributeError` em volta de uma chamada engole os erros de dentro dela.
+
+Sobre versões:
+
+- **Python 2.6** — o módulo `abc` e as ABCs de `collections` (PEP 3119).
+- **Python 3.3** — as ABCs de coleção migram para `collections.abc`.
+- **Python 3.4** — `ABC` como classe base, dispensando `metaclass=ABCMeta`.
+- **Python 3.8** — `typing.Protocol` e `@runtime_checkable` (PEP 544).
+- **Python 3.12** — a mensagem passa a ser `without an implementation for abstract method 'x'`; `isinstance` com `Protocol` fica bem mais rápido.
+- **Python 3.12** — `@typing.override` (PEP 698) marca sobrescrita intencional e é verificado estaticamente.
+
+## 🧪 Laboratório
+
+Objetivo: sentir o erro tardio do *duck typing* puro, movê-lo para a instanciação com ABC, depois para o verificador estático com `Protocol`, e montar um desenho que usa as duas ferramentas onde cada uma cabe.
+
+**1. O erro tardio.**
+
+```bash
+mkdir -p ~/lab47 && cd ~/lab47
+```
+
+`tarde.py`: monte um *pipeline* com uma peça sem o método certo. Confirme que a construção passa e o erro só aparece na execução.
+
+**2. A ABC.** Escreva `etapa_abstrata.py` (**não** chame de `abc.py` — o passo 7 mostra por quê). Confirme:
+
+```text
+TypeError: Can't instantiate abstract class Etapa without an implementation for abstract method 'aplicar'
+```
+
+Depois crie uma subclasse vazia e confirme que ela também não instancia — mas que a **definição** dela é aceita.
+
+**3. Abstratos compostos.** Em `abcprop.py`, declare `@property @abstractmethod` e `@classmethod @abstractmethod`. Confirme que um atributo de classe simples satisfaz a propriedade e que `Snmp.__abstractmethods__` está vazio. Depois **inverta** a ordem dos decoradores e veja o que quebra.
+
+**4. `register`.** Rode `register.py` e confirme os quatro resultados. Registre uma classe que **não** tem o método e confirme que `isinstance` passa a mentir.
+
+**5. `__subclasshook__`.** Rode `subclasshook.py` e confirme que `isinstance` acerta sem herança nem registro.
+
+**6. `Protocol`.** Em `protocol.py`, escreva o protocolo e uma classe que não herda de nada. Confirme:
+
+```text
+isinstance: True
+Protocol nao entra no MRO: ['FiltroCritico', 'object']
+```
+
+**7. O verificador.** Instale o `mypy` num venv e rode sobre `mypy_alvo.py`:
+
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install mypy
+./.venv/bin/mypy mypy_alvo.py
+```
+
+```text
+mypy_alvo.py:25: error: List item 0 has incompatible type "Ruim"; expected "Etapa"  [list-item]
+```
+
+Se aparecer `error: This file shadows library module "abc"`, é o arquivo do passo 2 com nome de módulo da biblioteca padrão — renomeie.
+
+**8. Assinatura incompatível.** Escreva uma classe com `aplicar(self, registros: list[str])` e confirme que o `mypy` reclama, listando o esperado e o recebido. Depois confirme que `isinstance` com `@runtime_checkable` **aprova** o mesmo objeto — e entenda a divisão de trabalho.
+
+**9. `collections.abc`.** Rode `abccolecoes.py` e explique por que `Frota` é `Iterable` e `Sized` mas não `Sequence`.
+
+**10. `MutableMapping`.** Escreva `mutablemapping.py` com cinco métodos e confirme que o limite é respeitado até no `update`:
+
+```text
+conteudo : {'b': 2, 'c': 3}
+herdados : 9
+```
+
+Compare com o `CacheRuim(dict)` do @sec-cap044, onde o `update` furava a política.
+
+**11. LBYL e EAFP.** Rode `eafp.py` e confirme o caso traiçoeiro:
+
+```text
+o perigo do EAFP largo:
+  eafp: nao grasna
+```
+
+Reescreva com `getattr` de duas etapas e confirme que agora o `AttributeError` de dentro do método sobe.
+
+**12. O *pipeline* final.** Escreva `pipeline_final.py` com ABC para as etapas e `Protocol` para os formatos. Confirme que os dois erros acontecem na montagem:
+
+```text
+  TypeError: NaoServe nao implementa render()
+  TypeError: Texto nao e uma Etapa
+```
+
+Depois troque `Csv()` por um objeto anônimo com `render` (por exemplo, uma instância de uma classe declarada na hora) e confirme que ele é aceito sem herdar de nada.
+
+## Resumo
+
+- *Duck typing* puro dá flexibilidade total e nenhuma garantia: o `AttributeError` aparece na execução, longe da montagem que estava errada.
+- `ABC` com `@abstractmethod` torna impossível instanciar quem não implementa o contrato — a verificação é na instanciação, não na definição, e a mensagem nomeia o método faltante.
+- Uma ABC mistura contrato e código concreto herdado, e é o *template method* com a garantia de que o gancho existe.
+- `@abstractmethod` vai por dentro; `@property` e `@classmethod`, por fora. Um atributo de classe satisfaz uma propriedade abstrata.
+- ABC é tipagem **nominal**: só é quem herda. `register` cria subclasse virtual sem verificar nada, e faz `isinstance` mentir se você errar.
+- `Protocol` é tipagem **estrutural**: basta ter os métodos. O contrato é declarado por quem consome, e a classe implementadora não precisa conhecê-lo nem importá-lo.
+- O valor do `Protocol` está no verificador estático, que confere as assinaturas inteiras antes de o programa rodar. `@runtime_checkable` confere só a presença dos métodos.
+- `collections.abc` traz contratos prontos que funcionam sem herança — prefira `isinstance(x, Iterable)` a `isinstance(x, list)`.
+- Herdar de `MutableMapping` custa cinco métodos e devolve nove, todos roteados pelos seus ganchos — ao contrário de herdar de `dict`.
+- EAFP é o estilo idiomático, com o `try` estreito: um `except AttributeError` largo engole os erros de dentro do método chamado.
+
+Com isto fecha o Volume 7. O objeto saiu do dicionário informal: tem estado próprio e validado, parentesco quando ele significa alguma coisa, peças trocáveis quando não significa, construtores nomeados, geração automática do código repetitivo e contratos que falham cedo. O que ainda não foi explicado é por que `len(f)` funciona numa classe sua, por que `for x in f` funciona, por que `f[:2]` devolve o que devolve — a sintaxe da linguagem inteira apoiada em métodos com dois sublinhados. É o modelo de dados de Python, e é o Volume 8.
