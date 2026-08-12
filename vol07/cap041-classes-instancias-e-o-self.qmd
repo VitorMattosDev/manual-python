@@ -1,3 +1,628 @@
-# Classes, instâncias e o self {#sec-cap041}
+# Classes, instâncias e o `self` {#sec-cap041}
 
-*(em elaboracao)*
+O coletor começou com três listas paralelas, porque três listas paralelas resolvem o problema no primeiro dia:
+
+```python
+ids = ["onu-00042", "onu-00043", "onu-00044"]
+potencias = [-21.4, -29.8, -18.2]
+portas = ["1/1/1", "1/1/2"]           # alguém esqueceu uma
+
+for i, ident in enumerate(ids):
+    print(f"{ident} {potencias[i]} dBm porta {portas[i]}")
+```
+
+```text
+onu-00042 -21.4 dBm porta 1/1/1
+onu-00043 -29.8 dBm porta 1/1/2
+Traceback (most recent call last):
+  File "/home/vitor/lab41/paralelas.py", line 6, in <module>
+    print(f"{ident} {potencias[i]} dBm porta {portas[i]}")
+                                              ~~~~~~^^^
+IndexError: list index out of range
+```
+
+O erro aponta para a linha do `print`, que não tem defeito nenhum. O defeito é estrutural: **nada no programa diz que o item `i` das três listas é o mesmo equipamento**. A relação existe só na cabeça de quem escreveu, e some na primeira manutenção. Um dicionário por ONU melhora, mas continua sem lugar para a regra de negócio — a potência abaixo da qual o cliente reclama —, que acaba espalhada em `if` repetido por todo o programa.
+
+Uma classe resolve os dois problemas de uma vez: amarra os dados que andam juntos e dá endereço ao comportamento que opera sobre eles. Este capítulo abre o Volume 7 mostrando o que exatamente o interpretador cria quando você escreve `class`, onde cada atributo mora e por que o primeiro parâmetro de todo método se chama `self`.
+
+## A primeira classe
+
+```python
+class ONU:
+    def __init__(self, ident, potencia, porta):
+        self.ident = ident
+        self.potencia = potencia
+        self.porta = porta
+
+    def critica(self):
+        return self.potencia < -28.0
+
+
+a = ONU("onu-00042", -21.4, "1/1/1")
+b = ONU("onu-00043", -29.8, "1/1/2")
+```
+
+```text
+onu-00042 -21.4 False
+onu-00043 -29.8 True
+<__main__.ONU object at 0x79f0b0347230>
+<class '__main__.ONU'> True
+```
+
+Os três dados agora viajam grudados, e a regra tem um nome. Um objeto sabe responder se está crítico; ninguém precisa lembrar do `-28.0` na hora de escrever o relatório.
+
+Duas coisas na saída merecem atenção desde já. `ONU("onu-00042", ...)` **não** chama `__init__` diretamente — chamar a classe cria um objeto vazio e *depois* passa esse objeto para `__init__` como primeiro argumento. E o `print(a)` sem mais nada dá `<__main__.ONU object at 0x...>`, que é a representação de fábrica: o nome do módulo, o nome da classe e o endereço de memória. Isso se resolve com `__repr__`, mais adiante.
+
+## O corpo da classe é código que roda
+
+O `class` não é declaração; é uma instrução executável, como o `def`. O corpo roda **uma vez**, no momento da definição, num namespace próprio:
+
+```python
+print("antes do class")
+
+
+class Exemplo:
+    print("  o corpo da classe roda agora")
+    LIMITE = -28.0
+    print(f"  e enxerga o próprio namespace: LIMITE = {LIMITE}")
+
+    def metodo(self):
+        print("  o corpo do método só roda quando chamado")
+
+
+print("depois do class")
+```
+
+```text
+antes do class
+  o corpo da classe roda agora
+  e enxerga o proprio namespace: LIMITE = -28.0
+depois do class
+Exemplo e um objeto: <class '__main__.Exemplo'>
+do tipo           : <class 'type'>
+com um namespace  : ['__module__', '__firstlineno__', 'LIMITE', 'metodo', '__static_attributes__', '__dict__']
+```
+
+Ao terminar, o Python empacota aquele namespace num objeto e amarra ao nome `Exemplo`. Repare no `type(Exemplo)`: é `type`. **A classe é um objeto** — pode ser guardada em lista, passada como argumento, devolvida por função. É a mesma cidadania de primeira classe que as funções têm desde o @sec-cap021.
+
+Os nomes `__firstlineno__` e `__static_attributes__` no namespace são novidade do **Python 3.13**: o primeiro guarda a linha da definição, o segundo os atributos que o compilador viu sendo atribuídos em `self`. Em versões anteriores eles não aparecem.
+
+## Onde cada atributo mora
+
+Este é o modelo mental que decide quase tudo em orientação a objetos no Python: **cada instância tem seu próprio dicionário, e a classe tem outro.**
+
+```python
+class ONU:
+    LIMITE = -28.0                     # atributo de classe
+
+    def __init__(self, ident, potencia):
+        self.ident = ident             # atributos de instância
+        self.potencia = potencia
+
+    def critica(self):
+        return self.potencia < self.LIMITE
+```
+
+```text
+a.__dict__    : {'ident': 'onu-00042', 'potencia': -21.4}
+b.__dict__    : {'ident': 'onu-00043', 'potencia': -29.8}
+LIMITE na inst: False
+LIMITE na cls : True
+a.LIMITE      : -28.0
+```
+
+`a.LIMITE` funciona, mas `LIMITE` não está em `a.__dict__`. A busca é em cascata: primeiro a instância, depois a classe, depois as superclasses (assunto do @sec-cap043). Escrever, porém, **não** segue a mesma cascata — atribuir sempre grava na instância:
+
+```text
+depois de mudar na classe: -25.0 -25.0
+a.LIMITE      : -30.0   b.LIMITE: -25.0
+a.__dict__    : {'ident': 'onu-00042', 'potencia': -21.4, 'LIMITE': -30.0}
+depois do del : -25.0
+```
+
+Mudar `ONU.LIMITE` mudou para as duas instâncias, porque nenhuma tinha cópia própria. Atribuir `a.LIMITE = -30.0` criou uma entrada em `a.__dict__` que **sombreia** a da classe — só para `a`. E `del a.LIMITE` remove o sombreamento, revelando de novo o valor da classe. É a mesma assimetria entre leitura e escrita da regra LEGB do @sec-cap020, aplicada a objetos.
+
+::: {#fig-busca-atributo}
+```{.tikz}
+%%| filename: busca-atributo
+%%| alt: A cascata de busca de atributo - primeiro o dicionario da instancia, depois o da classe, depois as superclasses, e a assimetria de que a escrita grava sempre na instancia
+\begin{tikzpicture}[
+  inst/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+               text width=5.2cm, align=left, font=\ttfamily\scriptsize,
+               inner xsep=6pt, inner ysep=5pt},
+  clss/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+               text width=5.2cm, align=left, font=\ttfamily\scriptsize,
+               inner xsep=6pt, inner ysep=5pt},
+  base/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+               text width=5.2cm, align=left, font=\ttfamily\scriptsize,
+               inner xsep=6pt, inner ysep=5pt},
+  ttl/.style={font=\scriptsize\bfseries, text=manualgray, anchor=south west},
+  fl/.style={->,>=stealth, thick, manualblue},
+  fw/.style={->,>=stealth, very thick, manualred},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.4) rectangle (15.0,-6.4);
+
+  \node[ttl] at (0.0, 1.75) {a.\_\_dict\_\_ \ (a instância)};
+  \node[inst, anchor=north west] at (0.0, 1.65)
+    {'ident': 'onu-00042'\\'potencia': -21.4};
+
+  \node[ttl] at (0.0,-0.75) {ONU.\_\_dict\_\_ \ (a classe)};
+  \node[clss, anchor=north west] at (0.0,-0.85)
+    {'LIMITE': -28.0\\'\_\_init\_\_': <function>\\'critica': <function>};
+
+  \node[ttl] at (0.0,-3.85) {object.\_\_dict\_\_ \ (a base)};
+  \node[base, anchor=north west] at (0.0,-3.95)
+    {'\_\_repr\_\_': <slot wrapper>\\'\_\_eq\_\_': <slot wrapper>};
+
+  \draw[fl] (5.6, 0.75) .. controls (6.6, 0.75) and (6.6,-1.4) .. (5.6,-1.4);
+  \draw[fl] (5.6,-2.2) .. controls (6.6,-2.2) and (6.6,-4.5) .. (5.6,-4.5);
+
+  \node[lb, text width=3.0cm] at (6.8, 0.9)
+    {\textbf{leitura} de \texttt{a.LIMITE}: não achou aqui};
+  \node[lb, text width=3.0cm] at (6.8,-2.9)
+    {achou aqui --- devolve \texttt{-28.0}};
+
+  \draw[fw] (11.4, 0.4) -- (9.0, 0.4);
+  \node[lb, text width=3.4cm, text=manualred] at (11.6, 0.4)
+    {\textbf{escrita} de \texttt{a.LIMITE = -30.0} grava \textbf{sempre} aqui};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.2)
+    {A leitura desce a cascata; a escrita não sobe. Por isso
+     \texttt{a.LIMITE = -30.0} não altera a classe --- cria uma entrada nova em
+     \texttt{a.\_\_dict\_\_} que \textbf{sombreia} a da classe, e só para
+     \texttt{a}. O \texttt{del a.LIMITE} remove o sombreamento e o valor da
+     classe reaparece.};
+\end{tikzpicture}
+```
+A busca de atributo desce da instância para a classe e daí para as bases. A atribuição não faz esse caminho: grava sempre na instância.
+:::
+
+### A armadilha do atributo mutável de classe
+
+A assimetria acima é inofensiva com números e strings, porque atribuir cria a cópia local. Com uma lista, ninguém atribui — **muta**:
+
+```python
+class OLTRuim:
+    onus = []                          # ARMADILHA: compartilhado
+
+    def registrar(self, ident):
+        self.onus.append(ident)        # não atribui: muta a lista da classe
+```
+
+```text
+x.onus: ['onu-00042', 'onu-00043']
+y.onus: ['onu-00042', 'onu-00043']
+mesma lista? True
+```
+
+Duas OLTs distintas, uma lista só. `self.onus.append(...)` **lê** `self.onus` (cascata: acha na classe) e chama `append` no objeto encontrado. Nunca houve atribuição, então nunca houve cópia por instância. É a mesma armadilha do argumento padrão mutável do @sec-cap019, com outra roupa.
+
+A correção é criar a lista no `__init__`, onde há uma execução por instância:
+
+```python
+class OLT:
+    def __init__(self):
+        self.onus = []                 # uma lista por instância
+```
+
+```text
+p.onus: ['onu-00042']  q.onus: ['onu-00043']
+```
+
+Regra prática: **atributo de classe só para valor imutável e realmente compartilhado** — constantes, limites, contadores lidos com o nome da classe. Estado mutável nasce no `__init__`.
+
+## O `self` desmistificado
+
+`self` não é palavra reservada. É só o nome que a comunidade dá ao primeiro parâmetro, e o interpretador o preenche por você porque o acesso `a.descrever` produz um objeto diferente da função original:
+
+```python
+print("pela instância :", a.descrever())
+print("pela classe    :", ONU.descrever(a))
+print("com argumento  :", ONU.descrever(a, "equipamento"))
+```
+
+```text
+pela instancia : ONU onu-00042
+pela classe    : ONU onu-00042
+com argumento  : equipamento onu-00042
+
+na classe      : <function ONU.descrever at 0x73d09a75f4c0>
+na instancia   : <bound method ONU.descrever of <__main__.ONU object at 0x73d09a847230>>
+__func__       : True
+__self__       : True
+```
+
+`ONU.descrever` é uma função comum. `a.descrever` é um **método ligado**: um objeto que embrulha a função e a instância. Chamá-lo insere `a` na frente dos argumentos. Por isso `a.descrever()` e `ONU.descrever(a)` são a mesma chamada escrita de duas formas — e os atributos `__func__` e `__self__` mostram as duas metades do embrulho.
+
+::: {#fig-metodo-ligado}
+```{.tikz}
+%%| filename: metodo-ligado
+%%| alt: Como o acesso a um metodo pela instancia produz um metodo ligado que embrulha a funcao e a instancia, e insere self na frente dos argumentos da chamada
+\begin{tikzpicture}[
+  fn/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.4cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  ob/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.2cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  bm/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!20, text width=5.6cm, align=center,
+             minimum height=0.95cm, font=\ttfamily\scriptsize},
+  cl/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+             text width=5.6cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.2) rectangle (15.0,-5.4);
+
+  \node[fn] at (2.6, 1.4) {ONU.descrever};
+  \node[ob] at (2.6,-0.3) {a};
+
+  \node[lb, text width=2.4cm] at (2.6, 0.55) {a função crua \ + \ a instância};
+
+  \draw[fl] (5.0, 1.4) .. controls (6.4, 1.4) .. (7.4, 0.6);
+  \draw[fl] (4.4,-0.3) .. controls (6.4,-0.3) .. (7.4, 0.35);
+
+  \node[bm] at (10.4, 0.5) {a.descrever\\{\normalfont\scriptsize (método ligado)}};
+
+  \node[lb, text width=3.2cm] at (6.2, 1.35) {o acesso por ponto embrulha os dois};
+
+  \draw[fl] (10.4,-0.1) -- (10.4,-1.1);
+
+  \node[cl] at (10.4,-1.6) {a.descrever("x")};
+  \draw[fl] (10.4,-2.05) -- (10.4,-2.75);
+  \node[cl, text width=6.6cm] at (10.4,-3.2) {ONU.descrever(a, "x")};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.1)
+    {O método ligado guarda a função em \texttt{\_\_func\_\_} e a instância em
+     \texttt{\_\_self\_\_}, e insere a segunda na frente dos argumentos da
+     chamada. Como ele segura uma referência à instância, guardar
+     \texttt{f = a.descrever} mantém \texttt{a} viva mesmo depois de
+     \texttt{del a}.};
+\end{tikzpicture}
+```
+O acesso por ponto embrulha a função e a instância num método ligado. A chamada insere `self` na frente.
+:::
+
+Duas consequências práticas. A primeira: um método ligado é um objeto autossuficiente, ótimo como *callback*, e ele **segura** a instância:
+
+```python
+f = a.descrever
+del a
+print("o método ligado segura a instância:", f())
+```
+
+```text
+o metodo ligado segura a instancia: ONU onu-00042
+```
+
+O `del a` apagou o nome, não o objeto — `f.__self__` ainda o referencia, e a contagem de referências do @sec-cap008 mantém tudo de pé.
+
+A segunda: esquecer o `self` na definição produz um erro com número confuso.
+
+```python
+class Errada:
+    def metodo():
+        return "não recebo nada"
+```
+
+```text
+TypeError: Errada.metodo() takes 0 positional arguments but 1 was given
+```
+
+"Zero esperados, um recebido" — mas você não passou argumento nenhum. O argumento é a instância, inserida pelo método ligado. Sempre que esse `1 was given` aparecer numa chamada sem argumentos, o diagnóstico é `self` faltando.
+
+E, para deixar claro que é convenção mesmo:
+
+```python
+class Estranha:
+    def metodo(eu):                    # 'self' é convenção, não palavra-chave
+        return f"funciona, eu = {eu.__class__.__name__}"
+```
+
+```text
+funciona, eu = Estranha
+```
+
+Funciona — e não se escreve assim. Toda ferramenta do ecossistema (Ruff, mypy, o realce do editor) assume `self`, e fugir disso só cria atrito.
+
+## Dar uma cara ao objeto: `__repr__` e `__str__`
+
+A representação de fábrica é inútil em log e em depuração. Dois métodos resolvem:
+
+```python
+class Com:
+    def __init__(self, ident, potencia):
+        self.ident = ident
+        self.potencia = potencia
+
+    def __repr__(self):
+        return f"Com(ident={self.ident!r}, potencia={self.potencia!r})"
+
+    def __str__(self):
+        return f"{self.ident} @ {self.potencia} dBm"
+```
+
+```text
+sem __repr__: <__main__.Sem object at 0xADDR>
+numa lista  : [<__main__.Sem object at 0xADDR>]
+com __repr__: Com(ident='onu-00042', potencia=-21.4)
+numa lista  : [Com(ident='onu-00042', potencia=-21.4)]
+com __str__ : onu-00042 @ -21.4 dBm
+no print    : onu-00042 @ -21.4 dBm
+no f-string : onu-00042 @ -21.4 dBm / Com(ident='onu-00042', potencia=-21.4)
+```
+
+A divisão de trabalho é clara. `__repr__` é para **quem programa**: sem ambiguidade, de preferência no formato que reconstruiria o objeto. `__str__` é para **quem lê a saída**. Quando só um existe, `__repr__` cobre os dois casos — o contrário não vale, e é por isso que `__repr__` é o que se escreve primeiro.
+
+Repare no detalhe que mais economiza tempo: dentro de uma lista, o Python usa sempre `__repr__`, nunca `__str__`. Um objeto sem `__repr__` transforma qualquer coleção impressa em parede de endereços de memória. O `!r` no f-string força `__repr__`, e é o certo dentro do próprio `__repr__` para que as strings saiam com aspas.
+
+## Igualdade é identidade, por padrão
+
+```python
+a = ONU("onu-00042")
+b = ONU("onu-00042")
+```
+
+```text
+a == b : False
+a is b : False
+a == a : True
+num set: 2
+```
+
+Dois objetos com exatamente os mesmos dados são diferentes. O `==` de fábrica, herdado de `object`, compara endereço — é `is` com outro nome. Para muitos objetos isso é o certo (duas conexões abertas para o mesmo banco não são a mesma conexão), mas para um registro de dados quase nunca é.
+
+Definir `__eq__` obriga a definir `__hash__` junto:
+
+```python
+    def __eq__(self, outro):
+        if not isinstance(outro, ONUComparavel):
+            return NotImplemented
+        return self.ident == outro.ident
+
+    def __hash__(self):
+        return hash(self.ident)
+```
+
+```text
+x == y : True
+x is y : False
+num set: 1
+```
+
+Declarar `__eq__` faz o Python zerar o `__hash__` herdado, e o objeto vira inutilizável como chave de dicionário ou elemento de conjunto — porque dois objetos iguais **têm** de ter o mesmo hash. Devolver `NotImplemented` (e não `False`) na comparação com tipo alheio é o protocolo correto: dá ao outro operando a chance de tentar, e só então o Python decide por `False`. O @sec-cap046 mostra o `@dataclass`, que gera os dois métodos de graça e é o que se usa na prática.
+
+## Instâncias aceitam atributos novos
+
+```python
+a = ONU("onu-00042")
+a.temperatura = 47.2                   # atributo que a classe nunca declarou
+```
+
+```text
+a.__dict__: {'ident': 'onu-00042', 'temperatura': 47.2}
+AttributeError: 'ONU' object has no attribute 'temperatura'
+getattr com padrao: None
+hasattr           : False
+depois do setattr : 44.0
+```
+
+O `__dict__` é um dicionário comum, e nada impede acrescentar chaves. Isso é flexibilidade real — e fonte de bug de digitação silencioso, porque `onu.potencia = -21.4` num objeto cujo atributo se chama `potência` cria um campo novo em vez de reclamar. O `__slots__` do @sec-cap053 é a trava para quando isso importa.
+
+`getattr(obj, nome, padrão)` e `hasattr` são a forma segura de perguntar; `setattr` escreve com o nome vindo de uma variável.
+
+## Contadores: o erro clássico do `+=`
+
+```python
+class ONU:
+    total = 0
+
+    def __init__(self, ident):
+        self.ident = ident
+        ONU.total += 1                 # explícito na classe, não em self
+```
+
+```text
+instancias criadas: 3
+com self.total += 1: 0  (nao contou nada)
+cada instancia ficou com: 1
+```
+
+`self.total += 1` é `self.total = self.total + 1`: **lê** da classe (0), soma 1, **escreve na instância**. Cada objeto acaba com o seu `total = 1` e o contador da classe nunca sai do zero. Escrever `ONU.total += 1` é a forma correta — e o `@classmethod` do @sec-cap045 dá a maneira idiomática de fazer isso sem repetir o nome da classe.
+
+## Juntando: o coletor com classes
+
+```python
+class ONU:
+    LIMITE_CRITICO = -28.0
+
+    def __init__(self, ident, potencia, porta):
+        self.ident = ident
+        self.potencia = potencia
+        self.porta = porta
+
+    def critica(self):
+        return self.potencia < self.LIMITE_CRITICO
+
+    def __repr__(self):
+        return f"ONU({self.ident!r}, {self.potencia!r}, {self.porta!r})"
+
+
+class OLT:
+    def __init__(self, nome):
+        self.nome = nome
+        self.onus = []
+
+    def registrar(self, onu):
+        self.onus.append(onu)
+        return onu
+
+    def criticas(self):
+        return [o for o in self.onus if o.critica()]
+
+    def relatorio(self):
+        ruins = self.criticas()
+        return f"{self.nome}: {len(self.onus)} ONUs, {len(ruins)} criticas"
+
+    def __repr__(self):
+        return f"OLT({self.nome!r}, {len(self.onus)} ONUs)"
+```
+
+```text
+OLT('olt-borda-01', 4 ONUs)
+olt-borda-01: 4 ONUs, 2 criticas
+   ONU('onu-00043', -29.8, '1/1/2')
+   ONU('onu-00045', -31.7, '1/1/4')
+```
+
+Nada aqui é sofisticado, e é esse o ponto. As listas paralelas viraram uma lista de objetos; o `-28.0` mora num lugar só; o relatório é uma linha. E `LIMITE_CRITICO` foi lido como `self.LIMITE_CRITICO`, não `ONU.LIMITE_CRITICO` — de propósito: assim uma subclasse pode baixar o limite sem reescrever o método, que é o assunto do @sec-cap043.
+
+## 🐍 Jeito Pythônico
+
+**Classe quando dados e comportamento andam juntos.** Um punhado de funções que recebem sempre o mesmo dicionário como primeiro argumento já é uma classe mal escrita. Por outro lado, uma classe com um método só e nenhum estado é uma função disfarçada — escreva a função.
+
+```python
+# antipadrão
+def critica(onu):
+    return onu["potencia"] < -28.0
+
+def descrever(onu):
+    return f"{onu['ident']} @ {onu['potencia']}"
+```
+
+```python
+# pythônico: o dado que os dois recebem é o objeto
+class ONU:
+    def critica(self): ...
+    def descrever(self): ...
+```
+
+**Todo estado mutável nasce no `__init__`.** Atributo de classe só para constante compartilhada. Lista, dicionário e conjunto no corpo da classe são o mesmo bug do argumento padrão mutável.
+
+**`__repr__` em toda classe que você vai depurar** — que são praticamente todas. O formato de referência é `NomeDaClasse(campo=valor, ...)`, com `!r` nos valores. `__str__` só quando a saída para pessoa é diferente da saída para quem programa.
+
+**`self` é o nome, sempre.** Não invente; e não passe `self` explicitamente na chamada (`a.metodo(a)` é erro).
+
+**Não use `__dict__` diretamente para ler ou escrever atributo.** `getattr`, `setattr` e `hasattr` respeitam propriedades e descritores; `obj.__dict__["x"]` os atropela.
+
+**Nomeie o que é interno com um sublinhado à frente** (`self._buffer`). É convenção, não proteção — o @sec-cap042 trata do assunto.
+
+**`__eq__` e `__hash__` andam em par.** Definir só o primeiro torna o objeto não-hasheável. Na prática, use `@dataclass` (@sec-cap046) em vez de escrever os dois à mão.
+
+Sobre versões:
+
+- **Python 3.0** — as classes clássicas somem; toda classe herda de `object`, e não se escreve mais `class C(object):`.
+- **Python 3.6** — a PEP 526 permite anotar atributos no corpo da classe (`potencia: float`), sem criar atributo de classe: a anotação sozinha só popula `__annotations__`.
+- **Python 3.7** — `@dataclass` entra na biblioteca padrão e passa a ser o caminho normal para classe de dados.
+- **Python 3.10** — `match` reconhece objetos por padrão de classe (`case ONU(potencia=p)`), usando `__match_args__`.
+- **Python 3.13** — `__firstlineno__` e `__static_attributes__` aparecem no namespace da classe; o segundo lista os atributos que o compilador viu atribuídos em `self`.
+
+## 🧪 Laboratório
+
+Objetivo: ver o corpo da classe executando, mapear em qual dicionário cada atributo mora, reproduzir a armadilha do mutável compartilhado, desmontar o método ligado à mão e terminar com o coletor reescrito com classes.
+
+**1. O problema.**
+
+```bash
+mkdir -p ~/lab41 && cd ~/lab41
+```
+
+`paralelas.py`: monte as três listas com a terceira faltando um item e confirme o `IndexError` apontando para a linha errada.
+
+```text
+onu-00042 -21.4 dBm porta 1/1/1
+onu-00043 -29.8 dBm porta 1/1/2
+IndexError: list index out of range
+```
+
+**2. A primeira classe.** Escreva `primeira.py` com `ONU`, crie duas instâncias e confirme que `type(a) is ONU`. Repare na representação de fábrica com o endereço de memória.
+
+**3. O corpo executa.** Rode `corpo.py` e confirme a ordem:
+
+```text
+antes do class
+  o corpo da classe roda agora
+depois do class
+```
+
+Depois imprima `list(vars(Exemplo))` e localize `__firstlineno__` — se ele não aparecer, você não está no 3.13.
+
+**4. Os dois dicionários.** Em `dicts.py`, imprima `a.__dict__` e `vars(ONU)`, e confirme que `LIMITE` está só no segundo. Depois:
+
+- mude `ONU.LIMITE` e veja as duas instâncias mudarem;
+- atribua `a.LIMITE` e veja só `a` mudar;
+- rode `del a.LIMITE` e veja o valor da classe reaparecer.
+
+```text
+depois de mudar na classe: -25.0 -25.0
+a.LIMITE      : -30.0   b.LIMITE: -25.0
+depois do del : -25.0
+```
+
+**5. A armadilha.** Rode `mutavel.py` e confirme `x.onus is y.onus is OLTRuim.onus` dando `True`. Corrija movendo a lista para o `__init__` e rode de novo.
+
+**6. O método ligado.** Em `self.py`, imprima `ONU.descrever` e `a.descrever` lado a lado e compare `<function>` com `<bound method>`. Confirme:
+
+```text
+__func__       : True
+__self__       : True
+```
+
+Depois faça `f = a.descrever; del a; f()` e explique por que ainda funciona.
+
+**7. O `self` que falta.** Rode `semself.py` e leia a mensagem com atenção:
+
+```text
+TypeError: Errada.metodo() takes 0 positional arguments but 1 was given
+```
+
+Confirme que `Errada.metodo()` — pela classe, sem instância — funciona.
+
+**8. A representação.** Em `repr.py`, ponha um objeto sem `__repr__` dentro de uma lista e imprima. Acrescente `__repr__` e `__str__` e confirme que a lista usa o primeiro e o `print` usa o segundo.
+
+**9. Igualdade.** Rode `identidade.py`. Confirme que dois objetos idênticos em conteúdo dão `False` no `==` e ocupam duas posições num `set`. Acrescente `__eq__` **sem** `__hash__` e observe o `TypeError: unhashable type` ao montar o conjunto; depois acrescente o `__hash__`.
+
+**10. Atributo de fora.** Em `dinamico.py`, crie `a.temperatura` do lado de fora da classe e confirme que `b` não tem o atributo. Compare `getattr(b, "temperatura", None)` com o acesso direto.
+
+**11. O contador quebrado.** Rode `contador.py` nas duas versões e confirme:
+
+```text
+instancias criadas: 3
+com self.total += 1: 0  (nao contou nada)
+```
+
+Explique, olhando o `__dict__` de uma instância de `Errado`, para onde foi o `1`.
+
+**12. O coletor.** Escreva `coletor.py` com `ONU` e `OLT` completas e reproduza:
+
+```text
+olt-borda-01: 4 ONUs, 2 criticas
+   ONU('onu-00043', -29.8, '1/1/2')
+   ONU('onu-00045', -31.7, '1/1/4')
+```
+
+Depois crie uma segunda OLT e confirme que as listas de ONUs não se misturam — a verificação que o passo 5 ensinou a temer.
+
+## Resumo
+
+- `class` é instrução executável: o corpo roda uma vez, na definição, e o namespace resultante vira um objeto. A classe é um objeto de tipo `type`, com a mesma cidadania de uma função.
+- Chamar a classe cria a instância e só então passa o objeto novo para `__init__` como `self`. `__init__` inicializa; não constrói.
+- Cada instância tem seu `__dict__`; a classe tem outro. A **leitura** de atributo desce a cascata instância → classe → bases; a **escrita** grava sempre na instância.
+- Por causa dessa assimetria, `a.X = v` sombreia o `X` da classe só para `a`, e `del a.X` revela o da classe de novo.
+- Atributo mutável no corpo da classe é compartilhado por todas as instâncias, porque `self.lista.append(...)` muta sem nunca atribuir. Estado mutável nasce no `__init__`.
+- `self` é convenção, não palavra-chave. O acesso `a.metodo` produz um **método ligado**, que embrulha a função (`__func__`) e a instância (`__self__`) e insere a segunda nos argumentos.
+- Esquecer o `self` na assinatura dá `takes 0 positional arguments but 1 was given` numa chamada sem argumentos — o `1` é a instância.
+- `__repr__` é para quem programa e é o que as coleções usam; `__str__` é para quem lê a saída. Com um só, escreva `__repr__`.
+- O `==` de fábrica compara identidade. Definir `__eq__` anula o `__hash__` herdado, então os dois andam em par.
+- `self.contador += 1` num atributo de classe lê da classe e escreve na instância — o contador nunca anda. Use o nome da classe.
+
+O próximo capítulo pega o ponto mais frágil do que ficou: nada impede alguém de escrever `onu.potencia = "muito ruim"` e quebrar o `critica()` três funções adiante. É aí que entram as propriedades e o encapsulamento.

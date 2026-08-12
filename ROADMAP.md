@@ -71,7 +71,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ### Volume 7 — Programação Orientada a Objetos
 
-- [ ] **cap 041** - Classes, instâncias e o self - `vol07/cap041-classes-instancias-e-o-self.qmd`
+- [x] **cap 041** - Classes, instâncias e o self - `vol07/cap041-classes-instancias-e-o-self.qmd`
 - [ ] **cap 042** - Atributos, propriedades e encapsulamento - `vol07/cap042-atributos-propriedades-e-encapsulamento.qmd`
 - [ ] **cap 043** - Herança, MRO e a função super - `vol07/cap043-heranca-mro-e-a-funcao-super.qmd`
 - [ ] **cap 044** - Composição, delegação e quando não herdar - `vol07/cap044-composicao-delegacao-e-quando-nao-herdar.qmd`
