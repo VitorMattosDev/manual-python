@@ -67,7 +67,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 037** - Caminhos e o sistema de arquivos com pathlib - `vol06/cap037-caminhos-e-o-sistema-de-arquivos-com-pathlib.qmd`
 - [x] **cap 038** - Exceções: hierarquia e o bloco try, except, else e finally - `vol06/cap038-excecoes-hierarquia-e-o-bloco-try-except-else.qmd`
 - [x] **cap 039** - Levantando exceções e criando exceções próprias - `vol06/cap039-levantando-excecoes-e-criando-excecoes.qmd`
-- [ ] **cap 040** - Gerenciadores de contexto e a instrução with - `vol06/cap040-gerenciadores-de-contexto-e-a-instrucao-with.qmd`
+- [x] **cap 040** - Gerenciadores de contexto e a instrução with - `vol06/cap040-gerenciadores-de-contexto-e-a-instrucao-with.qmd`
 
 ### Volume 7 — Programação Orientada a Objetos
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (39 concluidos).
+**Total:** 104 capitulos em 16 volumes (40 concluidos).
 
