@@ -1,3 +1,622 @@
-# Herança, MRO e a função super {#sec-cap043}
+# Herança, MRO e a função `super` {#sec-cap043}
 
-*(em elaboracao)*
+A rede tem duas tecnologias de ONU, e o coletor nasceu com uma classe para cada:
+
+```python
+class ONUGpon:
+    def __init__(self, ident, potencia):
+        self.ident = ident
+        self.potencia = potencia
+
+    def critica(self):
+        return self.potencia < -28.0
+
+    def descrever(self):
+        return f"{self.ident} GPON {self.potencia} dBm"
+
+
+class ONUXgs:
+    def __init__(self, ident, potencia):
+        self.ident = ident
+        self.potencia = potencia
+
+    def critica(self):
+        return self.potencia < -30.0     # única diferença real
+```
+
+Trinta linhas para uma diferença de dois decibéis. Toda correção precisa ser aplicada duas vezes, e a terceira tecnologia que aparecer vai copiar a classe de novo — com a versão do bug que já foi corrigida numa e não na outra.
+
+Herança resolve isso escrevendo uma vez o que é comum e declarando só o que difere. Este capítulo mostra como, mostra a regra exata que o Python usa para escolher qual método roda quando há mais de um candidato, e — o que é mais importante na prática — mostra quando herança é a ferramenta errada.
+
+## O básico
+
+```python
+class ONU:
+    LIMITE = -28.0
+    TECNOLOGIA = "generica"
+
+    def __init__(self, ident, potencia):
+        self.ident = ident
+        self.potencia = potencia
+
+    def critica(self):
+        return self.potencia < self.LIMITE
+
+    def descrever(self):
+        return f"{self.ident} {self.TECNOLOGIA} {self.potencia} dBm"
+
+
+class ONUGpon(ONU):
+    TECNOLOGIA = "GPON"
+
+
+class ONUXgs(ONU):
+    LIMITE = -30.0
+    TECNOLOGIA = "XGS-PON"
+```
+
+```text
+ONU        onu-00042 generica -29.0 dBm         critica=True
+ONUGpon    onu-00042 GPON -29.0 dBm             critica=True
+ONUXgs     onu-00042 XGS-PON -29.0 dBm          critica=False
+
+issubclass(ONUGpon, ONU) : True
+isinstance(gpon, ONU)    : True
+__bases__                : (<class '__main__.ONU'>,)
+__mro__                  : ['ONUXgs', 'ONU', 'object']
+```
+
+Duas linhas por subclasse. E repare no que fez isso funcionar: `critica` lê `self.LIMITE`, não `ONU.LIMITE`. Como a busca de atributo do @sec-cap041 começa pela classe do objeto, `ONUXgs` acha o próprio `LIMITE` antes de chegar em `ONU`, e o método herdado passa a se comportar diferente **sem ter sido reescrito**. Escrever `ONU.LIMITE` dentro do método teria congelado o valor e destruído a extensibilidade — é um erro fácil de cometer e difícil de perceber.
+
+`isinstance` e `issubclass` enxergam a hierarquia inteira: um `ONUGpon` **é** um `ONU`, e todo código escrito para `ONU` funciona com ele. Essa é a promessa da herança, e é também a obrigação — voltaremos a ela.
+
+## `super()`: estender em vez de substituir
+
+Sobrescrever um método joga fora o da base. Quase sempre você quer o comportamento da base **mais** alguma coisa:
+
+```python
+class ONUComPorta(ONU):
+    def __init__(self, ident, potencia, porta):
+        super().__init__(ident, potencia)     # a base cuida do que é dela
+        self.porta = porta
+
+    def descrever(self):
+        return f"{super().descrever()} na porta {self.porta}"
+```
+
+```text
+onu-00042 -21.4 dBm na porta 1/1/1
+{'ident': 'onu-00042', 'potencia': -21.4, 'porta': '1/1/1'}
+```
+
+O `__init__` da subclasse cuida só do campo novo e delega o resto. O que acontece quando alguém esquece a delegação é instrutivo:
+
+```python
+class Esquecida(ONU):
+    def __init__(self, ident, potencia, porta):
+        self.porta = porta                    # esqueceu de chamar a base
+```
+
+```text
+AttributeError: 'Esquecida' object has no attribute 'ident'
+```
+
+O objeto foi construído sem erro e só quebrou depois, num método herdado que contava com um atributo que ninguém criou. **Todo `__init__` de subclasse chama `super().__init__(...)`**, e a única exceção legítima é quando a subclasse substitui deliberadamente toda a inicialização.
+
+A forma sem argumentos, `super()`, é a do Python 3 — dentro de um método, o compilador preenche a classe e a instância por você. A forma antiga `super(ONUComPorta, self)` ainda funciona e só é necessária fora de um corpo de classe. Escrever o nome da classe à mão é fonte de bug em renomeação; use `super()`.
+
+## O MRO
+
+Com herança simples, "o método da base" é óbvio. Com herança múltipla, não é:
+
+```python
+class A:
+    def quem(self):
+        return "A"
+
+
+class B(A):
+    def quem(self):
+        return "B -> " + super().quem()
+
+
+class C(A):
+    def quem(self):
+        return "C -> " + super().quem()
+
+
+class D(B, C):
+    def quem(self):
+        return "D -> " + super().quem()
+```
+
+```text
+MRO : ['D', 'B', 'C', 'A', 'object']
+D() : D -> B -> C -> A
+
+o super de B nao e A, e o proximo do MRO de quem chamou:
+  B.quem sozinho: B -> A
+```
+
+Este é o resultado que surpreende quase todo mundo na primeira vez. O `super()` dentro de `B.quem` chamou `C.quem` — e `C` **não** é superclasse de `B`. As duas últimas linhas mostram que não é uma propriedade de `B`: chamado a partir de uma instância de `B`, o mesmo `super()` vai para `A`.
+
+A conclusão é a frase que vale decorar: **`super()` não significa "a classe-mãe". Significa "o próximo da lista MRO do objeto que recebeu a chamada".** Por isso `A.quem` rodou uma vez só, e não duas, apesar de `B` e `C` herdarem dela.
+
+::: {#fig-mro-diamante}
+```{.tikz}
+%%| filename: mro-diamante
+%%| alt: O diamante de heranca com quatro classes e a lista linearizada do MRO ao lado, mostrando que super dentro de B vai para C e nao para A
+\begin{tikzpicture}[
+  nd/.style={draw=manualblue, very thick, circle, fill=manualblue!11,
+             minimum size=0.95cm, font=\ttfamily\small},
+  rt/.style={draw=manualgray, very thick, circle, fill=manualgray!10,
+             minimum size=0.95cm, font=\ttfamily\small},
+  ln/.style={-, thick, manualgray},
+  stp/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=1.5cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, very thick, manualgreen!70!black},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.6) rectangle (15.0,-5.2);
+
+  \node[rt] (ob) at (2.6, 2.0) {object};
+  \node[nd] (na) at (2.6, 0.75) {A};
+  \node[nd] (nb) at (1.4,-0.6) {B};
+  \node[nd] (nc) at (3.8,-0.6) {C};
+  \node[nd] (nd) at (2.6,-1.95) {D};
+
+  \draw[ln] (na) -- (ob);
+  \draw[ln] (nb) -- (na);
+  \draw[ln] (nc) -- (na);
+  \draw[ln] (nd) -- (nb);
+  \draw[ln] (nd) -- (nc);
+
+  \node[lb] at (2.6,-2.85) {a hierarquia};
+
+  \node[stp] (s1) at (6.6, 0.9) {D};
+  \node[stp] (s2) at (8.6, 0.9) {B};
+  \node[stp] (s3) at (10.6, 0.9) {C};
+  \node[stp] (s4) at (12.6, 0.9) {A};
+  \node[stp] (s5) at (14.2, 0.9) {object};
+
+  \draw[fl] (s1) -- (s2);
+  \draw[fl] (s2) -- (s3);
+  \draw[fl] (s3) -- (s4);
+  \draw[fl] (s4) -- (s5);
+
+  \node[lb, text width=8.4cm] at (10.4, 1.9)
+    {\texttt{D.\_\_mro\_\_} --- a ordem em que os nomes são procurados};
+
+  \node[lb, text width=3.6cm, text=manualred] at (9.6,-0.5)
+    {o \texttt{super()} dentro de \texttt{B} vai para \texttt{C}, \textbf{não}
+     para \texttt{A}};
+  \draw[->,>=stealth, thick, manualred] (8.6, 0.45) .. controls (8.6,-0.1) and (10.0,-0.1) .. (10.6, 0.45);
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.4)
+    {A linearização C3 garante três coisas: a classe vem antes de suas bases,
+     a ordem em que as bases foram escritas é respeitada, e cada classe aparece
+     \textbf{uma vez só}. É por isso que \texttt{A.quem} roda uma vez apesar de
+     \texttt{B} e \texttt{C} herdarem dela --- e por isso \texttt{super()} tem de
+     ser lido como ``o próximo da lista'', nunca como ``a classe-mãe''.};
+\end{tikzpicture}
+```
+O diamante e sua linearização. `super()` percorre a lista da direita, não a árvore da esquerda.
+:::
+
+A regra que produz essa lista é a **linearização C3**, adotada no Python 2.3. Ela garante que uma classe apareça antes de suas bases, que a ordem de declaração das bases seja respeitada, e que ninguém apareça duas vezes. Quando essas garantias são incompatíveis entre si, a classe simplesmente não pode existir:
+
+```python
+class Boa(X, Y):
+    pass
+
+
+class Ruim(Boa, Y, X):     # exige Y antes de X e X antes de Y
+    pass
+```
+
+```text
+Boa ok: ['Boa', 'X', 'Y', 'object']
+TypeError: Cannot create a consistent method resolution order (MRO) for bases X, Y
+```
+
+O erro acontece na **definição** da classe, não na instanciação — o que é uma boa notícia: o programa nem sobe. Na prática, esse `TypeError` quase sempre significa que a ordem das bases está invertida em algum ponto da hierarquia.
+
+## *Mixins*
+
+O uso honesto de herança múltipla é o *mixin*: uma classe pequena, sem estado próprio, que acrescenta um comportamento a quem a herdar.
+
+```python
+class SerializavelMixin:
+    def para_json(self):
+        return json.dumps(
+            {k: v for k, v in vars(self).items() if not k.startswith("_")},
+            ensure_ascii=False,
+        )
+
+
+class ComparavelPorIdMixin:
+    def __eq__(self, outro):
+        if type(self) is not type(outro):
+            return NotImplemented
+        return self.ident == outro.ident
+
+    def __hash__(self):
+        return hash((type(self).__name__, self.ident))
+
+
+class ONUCompleta(SerializavelMixin, ComparavelPorIdMixin, ONU):
+    pass
+```
+
+```text
+json : {"ident": "onu-00042", "potencia": -21.4}
+a==b : True
+set  : 1
+MRO  : ['ONUCompleta', 'SerializavelMixin', 'ComparavelPorIdMixin', 'ONU', 'object']
+```
+
+Os *mixins* vêm **antes** da classe principal na lista de bases, e isso não é estética: eles precisam estar antes no MRO para conseguir sobrescrever. A classe que dá a identidade ao objeto vem por último.
+
+Um *mixin* que se preze não define `__init__`, não guarda estado e não faz sentido instanciado sozinho — o sufixo no nome avisa disso. Quando um *mixin* começa a precisar de estado próprio, é sinal de que deveria ser um objeto composto, o assunto do @sec-cap044.
+
+## `**kwargs` cooperativo
+
+Quando várias classes na hierarquia precisam de inicialização, o padrão que funciona é cada uma consumir o que é seu e repassar o resto:
+
+```python
+class Logavel:
+    def __init__(self, *, nivel="INFO", **kwargs):
+        self.nivel = nivel
+        super().__init__(**kwargs)
+
+
+class Auditavel:
+    def __init__(self, *, autor="sistema", **kwargs):
+        self.autor = autor
+        super().__init__(**kwargs)
+
+
+class Registro(Logavel, Auditavel, Base):
+    def __init__(self, ident, **kwargs):
+        self.ident = ident
+        super().__init__(**kwargs)
+```
+
+```text
+    Registro.__init__ ident=onu-00042
+    Logavel.__init__ nivel=DEBUG
+    Auditavel.__init__ autor=vitor
+    Base.__init__ recebeu {}
+MRO: ['Registro', 'Logavel', 'Auditavel', 'Base', 'object']
+estado: {'ident': 'onu-00042', 'nivel': 'DEBUG', 'autor': 'vitor'}
+```
+
+A cadeia inteira rodou, na ordem do MRO, e cada classe pegou só o seu. Três detalhes fazem isso funcionar: os parâmetros são **somente-nomeados** (o `*` do @sec-cap019), de modo que a ordem posicional não importa; cada `__init__` chama `super().__init__(**kwargs)` **sempre**, mesmo sem saber quem vem depois; e o último da fila entrega um dicionário vazio a `object.__init__`, que não aceita argumentos — se sobrar alguma chave ali, você recebe um `TypeError` que denuncia o parâmetro escrito errado.
+
+::: {#fig-cadeia-cooperativa}
+```{.tikz}
+%%| filename: cadeia-cooperativa
+%%| alt: A cadeia cooperativa de init percorrendo o MRO, cada classe consumindo o proprio parametro nomeado e repassando o resto ate object receber um dicionario vazio
+\begin{tikzpicture}[
+  cls/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.0cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  fim/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!9,
+              text width=3.0cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  bag/.style={draw=manualyellow!80!black, thick, rounded corners=2pt,
+              fill=manualyellow!18, align=center, font=\ttfamily\scriptsize,
+              inner xsep=4pt, inner ysep=2.5pt},
+  got/.style={draw=manualgreen, thick, rounded corners=2pt, fill=manualgreen!14,
+              align=center, font=\ttfamily\scriptsize,
+              inner xsep=4pt, inner ysep=2.5pt},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fu/.style={->,>=stealth, thick, manualgreen!70!black},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.4) rectangle (15.0,-5.8);
+
+  \node[cls] at (1.9, 1.5) {Registro};
+  \node[cls] at (5.4, 1.5) {Logavel};
+  \node[cls] at (8.9, 1.5) {Auditavel};
+  \node[cls] at (12.4, 1.5) {Base};
+  \node[fim] at (12.4,-0.5) {object};
+
+  \draw[fl] (3.4, 1.5) -- (3.9, 1.5);
+  \draw[fl] (6.9, 1.5) -- (7.4, 1.5);
+  \draw[fl] (10.4, 1.5) -- (10.9, 1.5);
+  \draw[fl] (12.4, 1.1) -- (12.4,-0.1);
+
+  \node[bag] at (3.65, 0.75) {nivel\\autor};
+  \node[bag] at (7.15, 0.75) {autor};
+  \node[bag] at (10.65, 0.75) {\{\}};
+  \node[bag] at (13.6,-0.5) {\{\}};
+
+  \draw[fu] (1.9, 1.1) -- (1.9, 0.35);
+  \draw[fu] (5.4, 1.1) -- (5.4, 0.35);
+  \draw[fu] (8.9, 1.1) -- (8.9, 0.35);
+
+  \node[got] at (1.9, 0.0) {ident};
+  \node[got] at (5.4, 0.0) {nivel};
+  \node[got] at (8.9, 0.0) {autor};
+
+  \node[nt, text width=15.0cm] at (-0.4,-1.4)
+    {Cada classe tira do \texttt{**kwargs} só o parâmetro que é seu (caixa
+     verde) e repassa o resto (caixa amarela) para o próximo do MRO. O último
+     entrega um dicionário \textbf{vazio} a \texttt{object.\_\_init\_\_}, que
+     não aceita argumento nenhum --- então uma chave sobrando ali vira
+     \texttt{TypeError} e denuncia o nome escrito errado.\\[2pt]
+     A fragilidade: se \textbf{um} elo esquecer o
+     \texttt{super().\_\_init\_\_(**kwargs)}, todos os seguintes deixam de
+     rodar --- sem erro, sem aviso, só com atributos que nunca foram criados.};
+\end{tikzpicture}
+```
+A cadeia cooperativa: cada `__init__` consome o que é seu e repassa o resto pelo MRO.
+:::
+
+É um padrão poderoso e é também frágil: basta uma classe na cadeia esquecer o `super()` para as seguintes nunca rodarem, sem erro nenhum. Use quando a herança múltipla for realmente necessária, e prefira composição quando não for.
+
+## Sobrescrever, estender, e o buraco entre os dois
+
+```python
+class Base:
+    def processar(self, dados):
+        return [self.transformar(d) for d in dados]
+
+    def transformar(self, d):
+        return d
+
+
+class Dobra(Base):
+    def transformar(self, d):                     # ponto de extensão previsto
+        return d * 2
+
+
+class Filtra(Base):
+    def processar(self, dados):
+        return [x for x in super().processar(dados) if x is not None]
+
+    def transformar(self, d):
+        return d if d > 0 else None
+```
+
+```text
+base  : [1, -2, 3]
+dobra : [2, -4, 6]
+filtra: [1, 3]
+```
+
+`Dobra` usa o gancho que a base ofereceu: `processar` chama `self.transformar`, e a subclasse só troca a peça. Esse é o *template method*, e é a forma mais limpa de projetar para herança — a base decide o esqueleto e documenta quais métodos existem para serem trocados.
+
+`Filtra` faz a outra coisa: embrulha o método da base. Também é legítimo, mas depende de saber o que `processar` devolve, ou seja, de um detalhe interno. Quanto mais uma subclasse depende de *como* a base funciona, mais ela quebra quando a base muda — o problema da "classe base frágil", e o principal argumento contra herança profunda.
+
+## O contrato que a herança assina
+
+`isinstance(gpon, ONU)` dando `True` é uma promessa: **onde um `ONU` funciona, um `ONUGpon` funciona.** É o princípio da substituição de Liskov, e é fácil violá-lo sem perceber. O exemplo clássico:
+
+```python
+class Quadrado(Retangulo):
+    def __init__(self, lado):
+        super().__init__(lado, lado)
+
+    @property
+    def largura(self): ...
+    @largura.setter
+    def largura(self, v):
+        self._lado = v                 # mudar a largura muda a altura junto
+```
+
+```python
+def esticar(r):
+    r.largura = 10
+    r.altura = 4
+    return r.area()
+```
+
+```text
+retangulo: 40 (esperado 40)
+quadrado : 16 (esperado 40)
+```
+
+`esticar` é código correto, escrito contra `Retangulo`, e um `Quadrado` o quebra. Matematicamente um quadrado é um retângulo; como **objeto mutável**, não é — porque retângulo tem duas dimensões independentes e quadrado não. A herança copiou uma relação do mundo real que não sobrevive ao código.
+
+O teste prático antes de herdar: *toda função que hoje aceita a base continuaria correta recebendo a subclasse?* Se a resposta exige "depende", é composição, não herança.
+
+## `__init_subclass__`: reagir a quem herda
+
+O Python 3.6 trouxe um gancho que resolve com uma função o que antes exigia metaclasse:
+
+```python
+class Plugin:
+    registro = {}
+
+    def __init_subclass__(cls, /, chave=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if chave is None:
+            raise TypeError(f"{cls.__name__} precisa declarar chave=")
+        Plugin.registro[chave] = cls
+
+
+class ColetorGpon(Plugin, chave="gpon"):
+    pass
+```
+
+```text
+    registrou 'gpon' -> ColetorGpon
+    registrou 'xgs' -> ColetorXgs
+registro: {'gpon': <class '__main__.ColetorGpon'>, 'xgs': <class '__main__.ColetorXgs'>}
+TypeError: SemChave precisa declarar chave=
+```
+
+A base é notificada no momento em que cada subclasse é **definida**, recebe a classe nova como argumento e pode registrá-la, validá-la ou recusá-la. Um registro de plugins que se preenche sozinho, e um erro na importação — não na execução — quando alguém esquece de declarar a chave. O método é implicitamente um `classmethod`, e o `@sec-cap054` trata dele em profundidade.
+
+## Juntando
+
+```python
+class ONUXgs(ONU):
+    LIMITE = -30.0
+    TECNOLOGIA = "XGS-PON"
+
+    def __init__(self, ident, potencia, porta, temperatura):
+        super().__init__(ident, potencia, porta)
+        self.temperatura = temperatura
+
+    def alertas(self):
+        yield from super().alertas()
+        if self.temperatura > 70.0:
+            yield f"{self.ident}: temperatura {self.temperatura} C"
+```
+
+```text
+ONUGpon('onu-00042', -21.4)      GPON      critica=False
+ONUGpon('onu-00043', -29.8)      GPON      critica=True
+ONUXgs('onu-00044', -29.5)       XGS-PON   critica=False
+ONUXgs('onu-00045', -31.7)       XGS-PON   critica=True
+
+alertas:
+   onu-00043: potencia -29.8 abaixo de -28.0
+   onu-00044: temperatura 82.0 C
+   onu-00045: potencia -31.7 abaixo de -30.0
+```
+
+Três coisas para reparar. O mesmo `-29.x` é crítico na GPON e não na XGS-PON, sem um `if` sequer sobre tecnologia — a constante de classe fez o trabalho. O `yield from super().alertas()` estende o gerador da base em vez de substituí-lo, então a subclasse acrescenta verificações sem repetir as existentes. E `__repr__` usa `type(self).__name__`, não o literal `"ONU"`, então cada subclasse se apresenta com o próprio nome de graça — escrever o nome fixo aqui é um dos erros mais comuns em classe feita para ser herdada.
+
+## 🐍 Jeito Pythônico
+
+**Herança é para "é um tipo de", não para reaproveitar código.** Se a frase "todo X é um Y" soa estranha, use composição (@sec-cap044).
+
+```python
+# antipadrão: herda só para pegar os métodos
+class Coletor(dict):
+    def coletar(self): ...
+```
+
+```python
+# pythônico: o dicionário é um detalhe interno
+class Coletor:
+    def __init__(self):
+        self._dados = {}
+```
+
+**`super()` sem argumentos, sempre.** E leia-o como "o próximo do MRO", não "a classe-mãe".
+
+**Todo `__init__` de subclasse chama `super().__init__(...)`.**
+
+**Constantes lidas de `self`, não do nome da classe**, e `type(self).__name__` no `__repr__`. É o que torna a subclasse útil sem reescrever método.
+
+**Hierarquia rasa.** Duas ou três camadas. A partir daí, ninguém consegue mais responder de onde vem um método sem abrir o `__mro__`.
+
+**`Mixin` no nome, sem estado, e antes da classe principal na lista de bases.**
+
+**Não herde de `list`, `dict` ou `str` para "aproveitar".** Os métodos embutidos não chamam uns aos outros como você espera (sobrescrever `__setitem__` não afeta `update`). Se precisar mesmo, herde de `collections.UserDict` e afins, ou componha.
+
+**Antes de herdar, faça o teste de substituição**: toda função escrita para a base continua correta com a subclasse?
+
+Sobre versões:
+
+- **Python 2.3** — a linearização C3 substitui a busca em profundidade da esquerda para a direita, que produzia resultados incorretos em diamante.
+- **Python 3.0** — `super()` sem argumentos passa a funcionar dentro de métodos.
+- **Python 3.6** — `__init_subclass__` e `__set_name__` cobrem a maior parte dos casos que exigiam metaclasse.
+- **Python 3.7** — `__class_getitem__` permite que classes próprias aceitem `Minha[int]` sem metaclasse.
+- **Python 3.12** — a PEP 695 traz a sintaxe `class C[T]:` para classes genéricas, sem `Generic[T]` na lista de bases (@sec-cap069).
+
+## 🧪 Laboratório
+
+Objetivo: eliminar a duplicação com herança, ver a lista MRO decidir a chamada, provocar o erro de MRO impossível, montar uma cadeia cooperativa de `__init__` e reproduzir uma violação de substituição.
+
+**1. A duplicação.**
+
+```bash
+mkdir -p ~/lab43 && cd ~/lab43
+```
+
+`duplicado.py`: escreva as duas classes independentes e conte quantas linhas são idênticas.
+
+**2. A hierarquia.** Em `heranca.py`, reescreva com uma base e duas subclasses de duas linhas cada. Confirme:
+
+```text
+ONUGpon    onu-00042 GPON -29.0 dBm             critica=True
+ONUXgs     onu-00042 XGS-PON -29.0 dBm          critica=False
+```
+
+Depois troque `self.LIMITE` por `ONU.LIMITE` dentro de `critica` e veja `ONUXgs` parar de funcionar.
+
+**3. `super()`.** Em `super.py`, estenda `__init__` e `descrever`. Depois escreva a subclasse que **esquece** o `super().__init__` e confirme:
+
+```text
+AttributeError: 'Esquecida' object has no attribute 'ident'
+```
+
+**4. O diamante.** Rode `diamante.py` e confirme o resultado que surpreende:
+
+```text
+MRO : ['D', 'B', 'C', 'A', 'object']
+D() : D -> B -> C -> A
+```
+
+Explique por que o `super()` de `B` foi para `C`. Depois instancie `B` sozinho e veja o mesmo `super()` ir para `A`.
+
+**5. MRO impossível.** Rode `mroimpossivel.py` e confirme:
+
+```text
+TypeError: Cannot create a consistent method resolution order (MRO) for bases X, Y
+```
+
+Repare que o erro acontece na definição da classe, antes de qualquer instância.
+
+**6. *Mixins*.** Em `mixin.py`, monte `ONUCompleta` com dois *mixins* e confirme o MRO. Depois **inverta** a ordem das bases (`ONU` primeiro) e veja o que muda.
+
+**7. `**kwargs` cooperativo.** Rode `kwargs.py` e confirme que as quatro classes rodaram na ordem do MRO:
+
+```text
+    Registro.__init__ ident=onu-00042
+    Logavel.__init__ nivel=DEBUG
+    Auditavel.__init__ autor=vitor
+    Base.__init__ recebeu {}
+```
+
+Depois remova o `super().__init__(**kwargs)` de `Logavel` e confirme que `Auditavel` e `Base` deixam de rodar **sem erro nenhum**. Por fim, passe `autr="vitor"` (com erro de digitação) e leia o `TypeError` que vem de `object.__init__`.
+
+**8. Template method.** Rode `sobrescreve.py` e compare as três saídas. Identifique qual subclasse depende de um detalhe interno da base.
+
+**9. A violação.** Rode `lsp.py`:
+
+```text
+retangulo: 40 (esperado 40)
+quadrado : 16 (esperado 40)
+```
+
+Explique por que `esticar` está correto e a herança é que está errada.
+
+**10. `__init_subclass__`.** Rode `initsubclass.py` e confirme que o registro se preenche sozinho e que a classe sem `chave=` não chega a existir.
+
+**11. O coletor.** Escreva `coletores.py` com `yield from super().alertas()` e reproduza:
+
+```text
+   onu-00043: potencia -29.8 abaixo de -28.0
+   onu-00044: temperatura 82.0 C
+   onu-00045: potencia -31.7 abaixo de -30.0
+```
+
+Depois troque `type(self).__name__` por `"ONU"` no `__repr__` e veja as duas subclasses passarem a mentir sobre o que são.
+
+## Resumo
+
+- Herança escreve uma vez o que é comum. A subclasse declara só o que difere — muitas vezes uma constante de classe.
+- Métodos herdados só se adaptam se lerem os dados de `self`. `self.LIMITE` é extensível; `ONU.LIMITE` congela o valor e mata a subclasse.
+- `super()` sem argumentos é a forma do Python 3, e significa **o próximo da lista MRO do objeto**, não "a classe-mãe" — num diamante, o `super()` de `B` pode ir para `C`.
+- O MRO vem da linearização C3: a classe antes das bases, a ordem de declaração respeitada, cada classe uma vez só. Quando as três garantias são incompatíveis, o `TypeError` acontece na definição.
+- Todo `__init__` de subclasse chama `super().__init__(...)`; esquecer não dá erro na construção, só depois, num método herdado.
+- *Mixin* é classe pequena, sem estado, que vem antes da principal na lista de bases — só assim consegue sobrescrever.
+- A cadeia cooperativa com parâmetros somente-nomeados e `**kwargs` funciona, e quebra em silêncio se um elo esquecer o `super()`.
+- O *template method* — a base chama `self.gancho()` — é a forma limpa de projetar para herança; embrulhar o método da base acopla a subclasse a detalhes internos.
+- Herdar é assinar que a subclasse substitui a base em qualquer código. `Quadrado(Retangulo)` mutável viola isso, e o teste é fazer a pergunta antes de escrever `class X(Y)`.
+- `__init_subclass__` (3.6+) permite à base validar ou registrar cada subclasse no momento da definição, sem metaclasse.
+
+Nada disso, porém, responde a pergunta que aparece antes: *devia mesmo ser herança?* Na maioria dos casos em código de aplicação, a resposta é não — e o próximo capítulo trata do que fazer em vez disso.
