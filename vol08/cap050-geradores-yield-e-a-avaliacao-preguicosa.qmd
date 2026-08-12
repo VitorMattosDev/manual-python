@@ -1,3 +1,527 @@
-# Geradores, yield e a avaliação preguiçosa {#sec-cap050}
+# Geradores, `yield` e a avaliação preguiçosa {#sec-cap050}
 
-*(em elaboracao)*
+O @sec-cap049 custou quinze linhas para dizer "devolva um item de cada vez": uma classe iteradora, um contador manual, um `IndexError` convertido em `StopIteration`. O mesmo comportamento, escrito do jeito que se escreve em produção:
+
+```python
+class Coleta:
+    def __init__(self, leituras):
+        self._itens = list(leituras)
+
+    def __iter__(self):
+        for item in self._itens:
+            yield item
+```
+
+```text
+primeira passada : [-29.8, -31.7, -21.4]
+segunda passada  : [-29.8, -31.7, -21.4]
+max              : -21.4
+in               : True
+laco aninhado    : 9 pares
+
+cada __iter__ devolve um objeto novo? True
+tipo do que __iter__ devolve       : generator
+```
+
+Nove pares no laço aninhado, passadas independentes, tudo o que a classe iteradora entregava — em duas linhas, sem contador e sem `StopIteration` escrita à mão. A palavra `yield` no corpo de uma função muda o que essa função é: ela deixa de calcular um valor e passa a fabricar um objeto que produz valores sob demanda, guardando sozinha onde parou.
+
+Isso não é só economia de digitação. É o que torna viável processar dados maiores que a memória, e é a base de um estilo de composição — funções que se encaixam em tubos — que atravessa o resto deste manual. Este capítulo mostra o mecanismo, mede o ganho e percorre as armadilhas.
+
+## Uma função que não executa quando chamada
+
+O comportamento mais estranho dos geradores é o primeiro:
+
+```python
+def contagem():
+    print("  [entrou na funcao]")
+    yield -29.8
+    print("  [voltou depois do primeiro yield]")
+    yield -31.7
+    print("  [voltou depois do segundo yield]")
+```
+
+```text
+1. chamando a funcao
+   devolveu um generator - nada rodou ainda
+2. primeiro next
+  [entrou na funcao]
+   -> -29.8
+3. segundo next
+  [voltou depois do primeiro yield]
+   -> -31.7
+4. terceiro next
+  [voltou depois do segundo yield]
+   StopIteration
+
+a funcao tem a marca de gerador? True
+o objeto e um Iterator?           True
+iter(g) is g?                     True
+```
+
+Chamar `contagem()` **não executou nada** — nem o `print` da primeira linha. O que voltou foi um objeto gerador com o corpo da função congelado no início. Só o primeiro `next` fez a execução começar, e ela avançou até o `yield`, entregou o valor e **congelou de novo**, com variáveis locais e posição intactas.
+
+O `next` seguinte descongelou exatamente onde parou: o `print` que aparece é o da linha **depois** do primeiro `yield`. E quando o corpo chega ao fim sem mais `yield`, o Python levanta `StopIteration` automaticamente — sem `raise` no seu código.
+
+A decisão é tomada na compilação, não na execução: a presença de `yield` em qualquer ponto do corpo marca o objeto de código como gerador (a bandeira `0x20`, visível na saída). Por isso não há como "às vezes" devolver um gerador — a função inteira é uma coisa ou outra.
+
+As duas últimas linhas fecham o encaixe com o capítulo anterior: o objeto gerador **é** um iterador completo, com `__next__` e com `__iter__` devolvendo `self`. Toda a máquina do `for` funciona sobre ele de graça.
+
+::: {#fig-vida-do-gerador}
+```{.tikz}
+%%| filename: vida-do-gerador
+%%| alt: Linha do tempo alternando entre quem consome e o corpo do gerador - a chamada nao executa nada, cada next retoma a execucao ate o proximo yield e congela de novo
+\begin{tikzpicture}[
+  lna/.style={very thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualblue},
+  fv/.style={->,>=stealth, thick, manualgreen!65!black},
+  fr/.style={->,>=stealth, thick, manualred},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  frz/.style={font=\scriptsize\itshape, text=manualgray, align=left,
+              anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.0) rectangle (15.0,-7.6);
+
+  \node[ttl] at (2.6, 3.4) {quem consome};
+  \node[ttl] at (10.4, 3.4) {o corpo da função};
+
+  \draw[lna] (2.6, 2.9) -- (2.6,-4.2);
+  \draw[lna] (10.4, 2.9) -- (10.4,-4.2);
+
+  \draw[fl] (2.6, 2.2) -- (10.4, 2.2);
+  \node[lb, anchor=south] at (6.5, 2.3) {\texttt{g = contagem()}};
+  \node[frz] at (10.7, 2.2) {não executa nada};
+
+  \draw[fl] (2.6, 0.9) -- (10.4, 0.9);
+  \node[lb, anchor=south] at (6.5, 1.0) {\texttt{next(g)}};
+  \draw[fv] (10.4, 0.3) -- (2.6, 0.3);
+  \node[lb, anchor=south] at (6.5, 0.4) {\texttt{-29.8}};
+  \node[frz] at (10.7, 0.6) {roda até o 1º \texttt{yield}};
+
+  \draw[fl] (2.6,-1.0) -- (10.4,-1.0);
+  \node[lb, anchor=south] at (6.5,-0.9) {\texttt{next(g)}};
+  \draw[fv] (10.4,-1.6) -- (2.6,-1.6);
+  \node[lb, anchor=south] at (6.5,-1.5) {\texttt{-31.7}};
+  \node[frz] at (10.7,-1.3) {retoma onde parou};
+
+  \draw[fl] (2.6,-2.9) -- (10.4,-2.9);
+  \node[lb, anchor=south] at (6.5,-2.8) {\texttt{next(g)}};
+  \draw[fr] (10.4,-3.5) -- (2.6,-3.5);
+  \node[lb, anchor=south, text=manualred] at (6.5,-3.4) {\texttt{StopIteration}};
+  \node[frz] at (10.7,-3.2) {chega ao fim do corpo};
+
+  \node[frz, text=manualgray] at (10.7,-0.35) {congelado};
+  \node[frz, text=manualgray] at (10.7,-2.25) {congelado};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.9)
+    {Entre um \texttt{next} e o seguinte, o corpo da função fica suspenso com
+     as variáveis locais e a posição preservadas --- é o interpretador guardando
+     o estado que, na classe iteradora, era um contador escrito à mão. O
+     \texttt{StopIteration} final é levantado pelo próprio interpretador quando
+     o corpo termina.};
+\end{tikzpicture}
+```
+A execução alterna entre quem consome e o corpo do gerador, que congela em cada `yield`.
+:::
+
+## O que a preguiça economiza
+
+O argumento decisivo não é elegância, é memória. Somando a segunda coluna de um CSV de 200 mil linhas, das duas maneiras:
+
+```python
+with alvo.open() as f:
+    linhas = f.readlines()
+    total = sum(float(ln.split(",")[1]) for ln in linhas)
+```
+
+```python
+with alvo.open() as f:
+    total = sum(float(ln.split(",")[1]) for ln in f)
+```
+
+```text
+arquivo: 3320 KiB, 200000 linhas
+
+readlines : pico  12.62 MiB   total -5489975.0
+gerador   : pico   0.02 MiB   total -5489975.0
+
+lista de quadrados   : pico   7.65 MiB   soma 2666646666700000
+expressao geradora   : pico   0.45 KiB   soma 2666646666700000
+```
+
+Medido com `tracemalloc`, o mesmo resultado com um sexcentésimo da memória. A diferença não é constante: ela cresce com o tamanho da entrada, e é a diferença entre um programa que roda e um que morre com `MemoryError` quando o arquivo dobra. No caso dos quadrados, a lista intermediária custa 7,65 MiB para ser somada e descartada; a expressão geradora custa menos de meio kilobyte, porque em nenhum momento existe mais de um valor.
+
+O padrão a reconhecer é este: **toda lista intermediária que só existe para ser percorrida uma vez é desperdício.** Não é otimização prematura trocá-la por um gerador — é escrever o que se queria dizer.
+
+## Expressões geradoras
+
+A forma curta troca os colchetes por parênteses:
+
+```python
+lista = [abs(v) for v in leituras]     # calcula tudo agora
+gerad = (abs(v) for v in leituras)     # calcula sob demanda
+```
+
+```text
+compreensao : list [29.8, 31.7, 21.4, 27.0]
+geradora    : generator
+consumida   : [29.8, 31.7, 21.4, 27.0]
+de novo     : []
+
+sem parenteses extras : 3079.89
+com parenteses        : 3079.89
+max com key           : -31.7
+dois argumentos exigem parenteses: Generator expression must be parenthesized
+```
+
+Quando a expressão geradora é o **único** argumento de uma função, os parênteses da chamada bastam: `sum(v * v for v in leituras)` é a forma idiomática. Com dois argumentos, o Python exige os parênteses próprios, e a mensagem de erro diz exatamente isso.
+
+O "de novo: `[]`" é o lembrete de sempre: expressão geradora é iterador de um tiro só. Se o resultado for percorrido duas vezes, use lista — conscientemente.
+
+Há uma sutileza de avaliação que morde:
+
+```text
+a primeira clausula for e avaliada na criacao:
+   trocando a variavel depois: [1, 2, 3]
+   mas o resto so na hora   : [100, 200, 300]
+```
+
+A **primeira** cláusula `for` é avaliada na hora da criação: `(x for x in fonte)` guarda o iterador de `fonte` naquele instante, e reatribuir `fonte` depois não muda nada. Todo o resto — a expressão do valor, os `if`, os `for` seguintes — só é avaliado durante o consumo, e enxerga o valor que as variáveis tiverem **naquele momento**. Foi por isso que `fator`, atribuído depois da criação do gerador, funcionou.
+
+A consequência prática é desagradável quando misturada com laços: um gerador criado dentro de um `for` e consumido depois vê o valor final da variável do laço, não o valor de quando foi criado. O remédio é o de sempre — capturar por argumento padrão ou materializar na hora.
+
+## Tubos de geradores
+
+Cada estágio é uma função que recebe um iterável e produz outro:
+
+```python
+def ler(caminho):
+    with caminho.open() as f:
+        for linha in f:
+            yield linha.strip()
+
+
+def parsear(linhas):
+    for linha in linhas:
+        onu, pot = linha.split(",")
+        yield onu, float(pot)
+
+
+def criticas(registros, limite):
+    for onu, pot in registros:
+        if pot < limite:
+            yield onu, pot
+
+
+tubo = criticas(parsear(ler(alvo)), -28.0)
+```
+
+Com um `print` em cada estágio, a ordem de execução revela o desenho:
+
+```text
+tubo montado, nenhuma linha lida ainda: generator
+
+  ler       onu-00043,-29.8
+    parsear   onu-00043
+      critica onu-00043
+        SAIDA onu-00043 -29.8
+  ler       onu-00045,-31.7
+    parsear   onu-00045
+      critica onu-00045
+        SAIDA onu-00045 -31.7
+  ler       onu-00051,-21.4
+    parsear   onu-00051
+  ler       onu-00052,-30.1
+    parsear   onu-00052
+      critica onu-00052
+        SAIDA onu-00052 -30.1
+```
+
+Cada registro atravessa o tubo **inteiro** antes que o próximo seja lido. Não há "ler tudo, depois parsear tudo": há um registro por vez, puxado do fim para o começo pela demanda de quem consome. A terceira linha (`onu-00051`, acima do limite) foi lida, convertida e descartada sem chegar à saída — e sem que nenhuma lista tenha sido construída em lugar nenhum.
+
+O consumo parcial mostra a consequência mais forte:
+
+```text
+so a primeira critica:
+  ler       onu-00043,-29.8
+    parsear   onu-00043
+      critica onu-00043
+        SAIDA ('onu-00043', -29.8)
+```
+
+Pedir um único resultado leu **uma** linha do arquivo. Num arquivo de dez gigabytes, `next(tubo)` custa uma linha. Com listas, custaria dez gigabytes.
+
+::: {#fig-tubo-preguicoso}
+```{.tikz}
+%%| filename: tubo-preguicoso
+%%| alt: Comparacao entre um encadeamento de etapas que devolvem listas, materializando todo o conjunto entre elas, e um encadeamento de geradores em que um registro por vez atravessa todas as etapas
+\begin{tikzpicture}[
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=2.5cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  cga/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=2.1cm, align=center, minimum height=0.72cm,
+              font=\scriptsize},
+  cgb/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=2.1cm, align=center, minimum height=0.72cm,
+              font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-7.4);
+
+  \node[ttl] at (-0.4, 3.0) {devolvendo listas --- cada etapa materializa tudo};
+  \node[bx] (a1) at (2.0, 1.6) {ler()};
+  \node[bx] (a2) at (7.2, 1.6) {parsear()};
+  \node[bx] (a3) at (12.4, 1.6) {criticas()};
+  \draw[fl] (a1) -- (a2);
+  \draw[fl] (a2) -- (a3);
+  \node[cga] at (4.6, 1.6) {200 000 linhas};
+  \node[cga] at (9.8, 1.6) {200 000 tuplas};
+  \node[lb, anchor=west, text=manualred] at (-0.4, 0.4)
+    {pico medido: 12,62 MiB --- e cresce com o arquivo};
+
+  \node[ttl] at (-0.4,-1.4) {devolvendo geradores --- um registro por vez};
+  \node[bx] (b1) at (2.0,-2.8) {ler()};
+  \node[bx] (b2) at (7.2,-2.8) {parsear()};
+  \node[bx] (b3) at (12.4,-2.8) {criticas()};
+  \draw[fl] (b1) -- (b2);
+  \draw[fl] (b2) -- (b3);
+  \node[cgb] at (4.6,-2.8) {1 linha};
+  \node[cgb] at (9.8,-2.8) {1 tupla};
+  \node[lb, anchor=west, text=manualgreen!55!black] at (-0.4,-4.0)
+    {pico medido: 0,02 MiB --- constante, não importa o tamanho};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.8)
+    {No tubo preguiçoso a demanda vem do fim: quem consome pede um item a
+     \texttt{criticas()}, que pede a \texttt{parsear()}, que pede a
+     \texttt{ler()}. Um registro atravessa todas as etapas antes de o próximo
+     ser lido, e pedir um único resultado lê uma única linha do arquivo.};
+\end{tikzpicture}
+```
+As mesmas três etapas, encadeadas com listas e com geradores.
+:::
+
+Um cuidado: o `with` dentro de `ler` só fecha o arquivo quando o gerador é esgotado ou destruído. Um tubo abandonado no meio deixa o arquivo aberto até o coletor de lixo passar — em CPython isso costuma ser imediato, mas não é garantia da linguagem. Quando o recurso importa, `close()` explícito ou `contextlib.closing`.
+
+## `yield from`
+
+Delegar a produção a outro iterável é comum o bastante para ter sintaxe própria:
+
+```python
+def por_partes(blocos):
+    for bloco in blocos:
+        for item in bloco:
+            yield item
+
+
+def com_yield_from(blocos):
+    for bloco in blocos:
+        yield from bloco
+```
+
+```text
+laco aninhado : [-29.8, -31.7, -21.4, -27.0, -30.1]
+yield from    : [-29.8, -31.7, -21.4, -27.0, -30.1]
+recursivo     : [1, 2, 3, 4, 5, 6, 7]
+    [yield from capturou: 'valor de retorno']
+delegacao     : ['a', 'b', 'c']
+```
+
+Nos casos simples é açúcar para o laço aninhado, e brilha na recursão: achatar uma estrutura arbitrariamente aninhada cabe em quatro linhas. Mas `yield from` faz mais do que repassar valores — ele estabelece um canal direto entre quem consome e o gerador delegado, encaminhando também `send`, `throw` e `close`, e capturando o valor de `return` do subgerador. É esse encaminhamento que sustentou as corrotinas antes de `async`/`await` existir.
+
+## `return` num gerador e o `StopIteration`
+
+Um `return` com valor dentro de um gerador não produz um item:
+
+```text
+list() descarta o return: [-29.8, -31.7]
+mas ele esta no StopIteration: 'leitura encerrada'
+```
+
+O valor viaja no atributo `value` da exceção de fim. `list()` e o `for` o descartam em silêncio; quem quiser recebê-lo precisa capturar `StopIteration` — ou usar `yield from`, que o entrega como resultado da expressão. É a base do `return` em corrotinas.
+
+O reverso é um erro clássico, e desde o Python 3.7 ele falha alto:
+
+```python
+def vaza():
+    vazio = iter([])
+    yield next(vazio)          # StopIteration escapando de dentro
+```
+
+```text
+PEP 479 -> RuntimeError: generator raised StopIteration
+           causa original: StopIteration
+com next(it, padrao)   : ['sem dados']
+```
+
+Antes da PEP 479, uma `StopIteration` acidental vinda de dentro do corpo era confundida com o fim do gerador: o laço de quem consumia terminava normalmente, e os dados que faltavam simplesmente não apareciam — sem erro, sem log, sem nada. Hoje ela vira `RuntimeError` com a causa encadeada. A correção é a do @sec-cap049: `next(it, padrao)`, ou um `try`/`except StopIteration` estreito em volta da chamada.
+
+## Geradores que recebem valores
+
+`yield` é uma expressão, e o que ela devolve é o que `send` empurra para dentro:
+
+```python
+def media_movel():
+    total = 0.0
+    n = 0
+    media = None
+    while True:
+        x = yield media
+        n += 1
+        total += x
+        media = total / n
+```
+
+```text
+priming (next)  : None
+send -29.8      : -29.8
+send -31.7      : -30.75
+send -21.4      : -27.633
+```
+
+O gerador virou um acumulador com estado, que responde a cada envio com a média atualizada. O `next(g)` inicial é obrigatório — o *priming*: até ele, a execução nem começou, e não há `yield` esperando receber. Enviar antes disso levanta `TypeError`.
+
+Esse era o mecanismo das corrotinas em Python 2 e no início do 3, e hoje foi substituído por `async`/`await` para programação assíncrona — assunto do Volume 15. Para acumuladores e máquinas de estado simples, `send` continua válido, mas uma classe com `__call__` costuma ser mais legível.
+
+O encerramento tem protocolo próprio:
+
+```text
+  [abrindo]
+primeiro: 0
+segundo : 1
+fechando antes do fim:
+  [GeneratorExit: fechando recurso]
+  [finally: recurso liberado]
+```
+
+`close()` injeta `GeneratorExit` no ponto do `yield`, o que faz os `finally` e os `with` de dentro do gerador rodarem. É o que garante que o arquivo do tubo seja fechado mesmo quando ninguém consome até o fim — e acontece também quando o gerador é coletado, como a última parte da saída confirma. A única regra: não se pode `yield` dentro do tratamento de `GeneratorExit`; o gerador deve terminar ou repropagar.
+
+## 🐍 Jeito Pythônico
+
+**Escreva `__iter__` como gerador.** A classe iteradora do @sec-cap049 existe para explicar o mecanismo; em código real, duas linhas com `yield` fazem o mesmo e devolvem um objeto novo a cada passada.
+
+**Lista intermediária que só é percorrida uma vez é desperdício.**
+
+```python
+# antipadrão: materializa duas coleções para somar uma
+linhas = f.readlines()
+validas = [ln for ln in linhas if ln.strip()]
+total = sum(float(ln.split(",")[1]) for ln in validas)
+```
+
+```python
+# pythônico: nada é materializado
+validas = (ln for ln in f if ln.strip())
+total = sum(float(ln.split(",")[1]) for ln in validas)
+```
+
+**Uma expressão geradora como único argumento dispensa parênteses próprios:** `sum(v * v for v in dados)`.
+
+**Encadeie estágios pequenos** — um `yield` por responsabilidade. O tubo fica testável peça por peça e continua consumindo memória constante.
+
+**Devolva um gerador, mas documente.** Quem recebe precisa saber que é de um tiro só. Se a função se chama `carregar_configuracao`, devolva uma estrutura pronta; se se chama `iterar_registros`, o gerador é o certo.
+
+**Nunca deixe `StopIteration` escapar de dentro de um gerador.** Desde o 3.7 vira `RuntimeError`; antes disso, virava dado faltando em silêncio.
+
+**Use `yield from` para delegar,** não um laço que só repassa — e lembre que ele também encaminha `send`, `throw` e `close`.
+
+**`itertools` antes de escrever o gerador à mão.** `chain`, `islice`, `groupby`, `tee` e `batched` cobrem boa parte dos casos com código testado — é assunto do Volume 9.
+
+Sobre versões:
+
+- **Python 2.2** — geradores com `yield` (PEP 255), como recurso opcional; obrigatório no **2.3**.
+- **Python 2.4** — expressões geradoras (PEP 289).
+- **Python 2.5** — `send`, `throw`, `close` e `yield` como expressão (PEP 342).
+- **Python 3.3** — `yield from` (PEP 380) e o valor de `return` no `StopIteration`.
+- **Python 3.7** — PEP 479 obrigatória: `StopIteration` vazando de um gerador vira `RuntimeError`.
+- **Python 3.8** — o *walrus* (`:=`) simplifica laços de leitura que antes exigiam `iter(chamavel, sentinela)`.
+- **Python 3.12** — `itertools.batched`; e geradores ficam sensivelmente mais rápidos com a inline de chamadas do interpretador.
+
+## 🧪 Laboratório
+
+Objetivo: ver a função congelar e retomar, medir a economia de memória, montar um tubo preguiçoso e reproduzir os três erros clássicos.
+
+**1. A função que não roda.**
+
+```bash
+mkdir -p ~/lab50 && cd ~/lab50
+```
+
+Em `primeiro_gerador.py`, ponha `print` antes do primeiro `yield` e entre os `yield`. Confirme que chamar a função não imprime nada e que o primeiro `print` só aparece no primeiro `next`.
+
+**2. A coleção em duas linhas.** Reescreva a `Coleta` do @sec-cap049 com `__iter__` gerador. Confirme que o laço aninhado volta a dar **9 pares** e que `iter(c) is not iter(c)`.
+
+**3. A medida.** Em `memoria.py`, gere 200 mil linhas e compare `readlines()` com a iteração direta usando `tracemalloc`:
+
+```text
+readlines : pico  12.62 MiB
+gerador   : pico   0.02 MiB
+```
+
+Multiplique o número de linhas por dez e confirme que o pico do `readlines` cresce e o do gerador não. (Os valores variam um pouco entre execuções e entre plataformas; a ordem de grandeza é o que importa.)
+
+**4. Expressão geradora.** Confirme a diferença de tipo, que a segunda leitura é vazia, e provoque o erro de sintaxe:
+
+```text
+dois argumentos exigem parenteses: Generator expression must be parenthesized
+```
+
+**5. Quando cada parte é avaliada.** Crie `(x for x in fonte)`, reatribua `fonte` e confirme que o gerador continua com os dados antigos. Depois use uma variável dentro da **expressão** e confirme que ela é lida no consumo. Explique a diferença.
+
+**6. O tubo.** Em `pipeline.py`, escreva os três estágios com `print` de rastreamento. Confirme que cada registro atravessa o tubo inteiro antes do próximo ser lido, e que `next(tubo)` lê **uma** linha:
+
+```text
+  ler       onu-00043,-29.8
+    parsear   onu-00043
+      critica onu-00043
+        SAIDA onu-00043 -29.8
+```
+
+Depois troque os três `yield` por `return [...]` com listas e confirme que a saída passa a ser em blocos — todas as leituras, depois todos os *parses*.
+
+**7. `yield from`.** Compare o laço aninhado com `yield from` e escreva o achatador recursivo. Confirme que ele resolve `[1, [2, [3, [4, 5]], 6], 7]`.
+
+**8. O valor de retorno.** Confirme que `list()` descarta o `return` e que ele está em `e.value`. Depois capture-o com `yield from` num gerador delegante.
+
+**9. PEP 479.** Escreva um gerador que chama `next()` num iterador vazio e confirme:
+
+```text
+PEP 479 -> RuntimeError: generator raised StopIteration
+```
+
+Corrija com `next(it, padrao)` e confirme que o gerador volta a produzir.
+
+**10. `send`.** Escreva a média móvel e confirme que enviar antes do `next` inicial levanta `TypeError` — leia a mensagem, que explica o *priming*.
+
+**11. `close` e a limpeza.** Ponha um `try`/`finally` em volta do `yield`, consuma dois itens e chame `close()`. Confirme que o `finally` roda:
+
+```text
+  [GeneratorExit: fechando recurso]
+  [finally: recurso liberado]
+```
+
+Depois abandone o gerador sem fechar (`del` e `gc.collect()`) e confirme que a limpeza acontece do mesmo jeito. Por fim, tente dar `yield` dentro do `except GeneratorExit` e leia o `RuntimeError` que aparece.
+
+## Resumo
+
+- `yield` no corpo transforma a função numa fábrica de geradores: chamá-la não executa nada, apenas devolve um objeto com o corpo congelado no início.
+- Cada `next` retoma a execução exatamente onde parou, com variáveis locais e posição preservadas, e congela de novo no `yield` seguinte. O `StopIteration` do fim é levantado pelo interpretador.
+- O objeto gerador é um iterador completo — tem `__next__` e `__iter__` devolvendo `self` —, então toda a máquina de `for`, `in`, `max` e compreensão funciona sobre ele.
+- `__iter__` escrito como gerador substitui a classe iteradora inteira e devolve um objeto novo a cada passada, preservando laços aninhados e passadas independentes.
+- A economia é medível: somar 200 mil linhas custou 12,62 MiB com `readlines()` e 0,02 MiB com iteração direta — e a diferença cresce com a entrada.
+- Expressão geradora usa parênteses e dispensa os próprios quando é o único argumento da chamada. A primeira cláusula `for` é avaliada na criação; todo o resto, no consumo.
+- Num tubo de geradores a demanda vem do fim: cada registro atravessa todas as etapas antes de o próximo ser lido, e pedir um resultado lê uma linha.
+- `yield from` delega a produção e também encaminha `send`, `throw` e `close`, além de entregar o valor de `return` do subgerador.
+- `return` com valor num gerador não produz item: viaja em `StopIteration.value`, descartado por `list()` e pelo `for`.
+- Desde o Python 3.7 (PEP 479), `StopIteration` escapando de dentro de um gerador vira `RuntimeError` — antes, virava dado faltando em silêncio.
+- `send` empurra valores para dentro do `yield`, exige *priming* com `next`, e `close()` injeta `GeneratorExit` para que `finally` e `with` de dentro do gerador rodem.
+
+Os geradores mostraram que uma função pode ser tratada como objeto que se constrói, se compõe e se embrulha. O @sec-cap051 leva essa ideia ao limite: funções que recebem funções e devolvem funções alteradas — os decoradores, a sintaxe de uma linha que está por trás de `@property`, `@staticmethod` e de metade dos *frameworks* de Python.
