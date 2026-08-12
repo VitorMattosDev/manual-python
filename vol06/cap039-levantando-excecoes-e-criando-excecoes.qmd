@@ -1,3 +1,801 @@
 # Levantando exceções e criando exceções próprias {#sec-cap039}
 
-*(em elaboracao)*
+A função tinha uma linha defensiva, e a defesa é que era o problema:
+
+```python
+def limite(olt):
+    if olt not in LIMITES:
+        return None
+    return LIMITES[olt]
+
+
+def classificar(olt, nivel):
+    return "critico" if nivel <= limite(olt) else "normal"
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab39/silenciosa.py", line 15, in <module>
+    print(classificar("olt-borda-99", -29.0))
+  File "/home/vitor/lab39/silenciosa.py", line 11, in classificar
+    return "critico" if nivel <= limite(olt) else "normal"
+                        ^^^^^^^^^^^^^^^^^^^^
+TypeError: '<=' not supported between instances of 'float' and 'NoneType'
+```
+
+O erro real foi "a OLT `olt-borda-99` não está no cadastro". O erro relatado foi "não dá para comparar `float` com `NoneType`", numa função que não tem nada a ver com cadastro, três chamadas depois. Quem lê esse traceback às três da manhã vai investigar a comparação.
+
+O @sec-cap038 tratou de capturar. Este trata do outro lado: **levantar** — quando, com qual classe, com qual mensagem — e de projetar as exceções do seu próprio pacote.
+
+## `raise`, e a mensagem que resolve
+
+```python
+def limite(olt):
+    if olt not in LIMITES:
+        raise KeyError(f"OLT desconhecida: {olt!r} (conhecidas: {sorted(LIMITES)})")
+    return LIMITES[olt]
+```
+
+```text
+KeyError: "OLT desconhecida: 'olt-borda-99' (conhecidas: ['olt-borda-01', 'olt-borda-02'])"
+```
+
+O traceback agora aponta para a linha certa, na função certa, e a mensagem contém as três coisas que uma boa mensagem de erro tem: **o que deu errado**, **com qual valor** e **o que era esperado**.
+
+Compare os dois extremos da mesma validação:
+
+```python
+raise ValueError("valor invalido")
+```
+
+```text
+ValueError: valor invalido
+```
+
+```python
+raise ValueError(f"{onu}: nivel {nivel} dBm fora da faixa [-60, 0]")
+```
+
+```text
+ValueError: onu-00043: nivel 15.0 dBm fora da faixa [-60, 0]
+```
+
+A primeira obriga quem depura a abrir o código para descobrir qual valor era inválido e por quê. A segunda resolve o problema no próprio traceback. O `!r` das f-strings (@sec-cap013) é seu aliado aqui: `'olt-borda-99 '` com espaço no fim é indistinguível de `olt-borda-99` sem `repr`, e essa distinção já custou tardes.
+
+## Devolver `None` contra levantar
+
+A escolha da abertura do capítulo é frequente e quase sempre tem a mesma resposta.
+
+| devolver `None` / valor sentinela | levantar exceção |
+|---|---|
+| a ausência é um resultado **esperado** | a ausência é um **defeito** |
+| quem chama vai testar sempre | quem chama, na maioria dos casos, não pode fazer nada |
+| há um padrão sensato (`dict.get(k, 0)`) | não há padrão sensato |
+| o erro aparece na hora | o erro aparece três chamadas depois, disfarçado |
+
+O critério prático: **se ignorar o retorno produz um erro pior mais adiante, levante.** `re.match` devolve `None` porque "não casou" é um resultado normal e quem chama vai testar. `int("abc")` levanta porque não há inteiro sensato para devolver, e devolver `0` seria mentira.
+
+## Que classe usar
+
+Antes de criar uma exceção própria, vale saber que a biblioteca padrão já tem a classe certa para a maioria dos casos:
+
+```python
+def registrar(olt, nivel):
+    if not isinstance(olt, str):
+        raise TypeError(f"olt deve ser str, veio {type(olt).__name__}")
+    if not olt:
+        raise ValueError("olt nao pode ser vazia")
+    if not -60.0 <= nivel <= 0.0:
+        raise ValueError(f"nivel fora de faixa: {nivel} dBm (esperado entre -60 e 0)")
+    return f"{olt} {nivel:.1f} dBm"
+```
+
+```text
+ok    : olt-borda-01 -21.4 dBm
+TypeError : olt deve ser str, veio int
+ValueError: olt nao pode ser vazia
+ValueError: nivel fora de faixa: 15.0 dBm (esperado entre -60 e 0)
+```
+
+A distinção entre as duas mais usadas é constante e vale decorar:
+
+- **`TypeError`** — o **tipo** está errado. Passar `int` onde se espera `str`.
+- **`ValueError`** — o tipo está certo, o **valor** não serve. Uma `str` vazia, um `float` fora de faixa.
+
+E as outras que aparecem com frequência: `KeyError` e `IndexError` para busca que não achou; `NotImplementedError` para método abstrato ainda não escrito; `RuntimeError` para o que não se encaixa em lugar nenhum; `TimeoutError`, `PermissionError` e as outras filhas de `OSError` quando o problema é de recurso externo.
+
+Um detalhe de sintaxe: `raise` aceita a classe ou uma instância.
+
+```python
+try:
+    raise ValueError
+except ValueError as e:
+    print("classe   ->", repr(e), "| str:", repr(str(e)))
+try:
+    raise ValueError("mensagem util")
+except ValueError as e:
+    print("instancia->", repr(e), "| str:", repr(str(e)))
+```
+
+```text
+classe   -> ValueError() | str: ''
+instancia-> ValueError('mensagem util') | str: 'mensagem util'
+```
+
+Levantar a classe funciona — o Python instancia sozinho —, mas produz exceção sem mensagem, que é meio caminho para o traceback inútil. E só classes de exceção servem:
+
+```python
+raise "string nao serve"
+```
+
+```text
+TypeError: exceptions must derive from BaseException
+```
+
+## Encadear: `raise from`
+
+Aqui está o recurso que separa um traceback bom de um excelente. Quando você captura uma exceção de baixo nível e levanta uma de alto nível, as duas importam:
+
+```python
+class ConfiguracaoInvalida(Exception):
+    pass
+
+
+def carregar(caminho):
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError as e:
+        raise ConfiguracaoInvalida(f"configuracao ausente: {caminho}") from e
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab39/encadear.py", line 10, in carregar
+    with open(caminho, encoding="utf-8") as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'nao-existe.json'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/vitor/lab39/encadear.py", line 16, in <module>
+    carregar("nao-existe.json")
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/home/vitor/lab39/encadear.py", line 13, in carregar
+    raise ConfiguracaoInvalida(f"configuracao ausente: {caminho}") from e
+ConfiguracaoInvalida: configuracao ausente: nao-existe.json
+```
+
+Dois tracebacks completos, ligados pela frase **"the above exception was the direct cause of the following exception"**. Quem chama vê o erro de negócio; quem depura vê a causa técnica e o arquivo exato.
+
+Há três formas de encadear, e o Python distingue as três.
+
+::: {#fig-cadeia-excecoes}
+```{.tikz}
+%%| filename: cadeia-excecoes
+%%| alt: As tres formas de encadeamento de excecao - raise from e, raise sozinho dentro do except, e raise from None - com a frase que cada uma imprime no traceback e os atributos cause e context resultantes
+\begin{tikzpicture}[
+  hd/.style={font=\ttfamily\small\bfseries, text=manualgray, align=center},
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+             text width=4.1cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  fr/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!20, text width=4.1cm, align=center,
+             minimum height=1.15cm, font=\scriptsize\itshape},
+  vz/.style={draw=manualgray!35, thick, rounded corners, fill=manualgray!5,
+             text width=4.1cm, align=center, minimum height=1.15cm,
+             font=\scriptsize\itshape, text=manualgray!70},
+  at/.style={font=\ttfamily\scriptsize, text=manualgray, align=center},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgray},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.2) rectangle (15.0,-6.6);
+
+  \node[hd] at (2.4, 2.5) {raise Nova from e};
+  \node[hd] at (7.4, 2.5) {raise Nova};
+  \node[hd] at (12.4, 2.5) {raise Nova from None};
+
+  \node[bx] at (2.4, 1.4) {FileNotFoundError};
+  \node[bx] at (7.4, 1.4) {FileNotFoundError};
+  \node[bx, draw=manualgray!35, fill=manualgray!5] at (12.4, 1.4)
+       {FileNotFoundError};
+
+  \draw[fl] (2.4, 1.0) -- (2.4, 0.3);
+  \draw[fl] (7.4, 1.0) -- (7.4, 0.3);
+  \draw[manualgray!35, thick, dashed] (12.4, 1.0) -- (12.4, 0.3);
+
+  \node[fr] at (2.4,-0.4) {the above exception was the direct cause of the
+    following exception};
+  \node[fr] at (7.4,-0.4) {during handling of the above exception, another
+    exception occurred};
+  \node[vz] at (12.4,-0.4) {nada é impresso: só a nova exceção aparece};
+
+  \draw[fl] (2.4,-1.1) -- (2.4,-1.8);
+  \draw[fl] (7.4,-1.1) -- (7.4,-1.8);
+  \draw[fl] (12.4,-1.1) -- (12.4,-1.8);
+
+  \node[bx, draw=manualred, fill=manualred!10] at (2.4,-2.5)
+       {ConfiguracaoInvalida};
+  \node[bx, draw=manualred, fill=manualred!10] at (7.4,-2.5)
+       {ConfiguracaoInvalida};
+  \node[bx, draw=manualred, fill=manualred!10] at (12.4,-2.5)
+       {ConfiguracaoInvalida};
+
+  \node[at] at (2.4,-3.5) {\_\_cause\_\_ = a original};
+  \node[at] at (2.4,-3.95) {\_\_context\_\_ = a original};
+  \node[at] at (7.4,-3.5) {\_\_cause\_\_ = None};
+  \node[at] at (7.4,-3.95) {\_\_context\_\_ = a original};
+  \node[at] at (12.4,-3.5) {\_\_cause\_\_ = None};
+  \node[at] at (12.4,-3.95) {\_\_context\_\_ = a original};
+  \node[at] at (12.4,-4.4) {\_\_suppress\_context\_\_ = True};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.0)
+    {A original nunca se perde: mesmo com \texttt{from None} ela continua em
+     \texttt{\_\_context\_\_}, só não é impressa. Use \texttt{from e} quando a
+     causa ajuda a depurar (quase sempre); \texttt{from None} quando a causa é
+     um detalhe interno que só confunde quem lê --- por exemplo, um
+     \texttt{KeyError} de dicionário interno virando um erro de API pública.};
+\end{tikzpicture}
+```
+As três formas de encadeamento e o que cada uma imprime.
+:::
+
+Sem o `from`, o Python encadeia sozinho, com outra frase:
+
+```text
+During handling of the above exception, another exception occurred:
+```
+
+A diferença é de intenção: `from e` diz "eu converti aquele erro neste"; a forma implícita diz "aconteceu outro erro enquanto eu tratava o primeiro" — que é o que o Python assume quando você não declara. Na prática, para conversão deliberada, escreva o `from e`: é documentação para quem lê o código, além de mudar a frase do traceback.
+
+E `from None` suprime a impressão:
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab39/semorigem.py", line 13, in <module>
+    carregar("nao-existe.json")
+  File "/home/vitor/lab39/semorigem.py", line 10, in carregar
+    raise ConfiguracaoInvalida(f"configuracao ausente: {caminho}") from None
+ConfiguracaoInvalida: configuracao ausente: nao-existe.json
+```
+
+Os atributos, confirmados no interpretador:
+
+```text
+com from:
+__cause__           : ZeroDivisionError('division by zero')
+__context__         : ZeroDivisionError('division by zero')
+__suppress_context__: True
+
+sem from:
+__cause__           : None
+__context__         : ZeroDivisionError('division by zero')
+```
+
+## `raise` sozinho contra `raise e`
+
+Dentro de um `except`, `raise` sem argumento relança a exceção original. Não é a mesma coisa que `raise e`:
+
+```python
+def meio_nu():
+    try:
+        profundo()
+    except ValueError:
+        raise                    # preserva o traceback
+
+
+def meio_e():
+    try:
+        profundo()
+    except ValueError as e:
+        raise e                  # acrescenta um quadro
+```
+
+```text
+=== raise nu ===
+  File "relancar.py", line 21, in <module>
+    meio_nu()
+  File "relancar.py", line 7, in meio_nu
+    profundo()
+  File "relancar.py", line 2, in profundo
+    raise ValueError("origem la embaixo")
+ValueError: origem la embaixo
+```
+
+```text
+=== raise e ===
+  File "relancar.py", line 28, in <module>
+    meio_e()
+  File "relancar.py", line 16, in meio_e
+    raise e                  # acrescenta um quadro
+    ^^^^^^^
+  File "relancar.py", line 14, in meio_e
+    profundo()
+  File "relancar.py", line 2, in profundo
+    raise ValueError("origem la embaixo")
+ValueError: origem la embaixo
+```
+
+O `raise e` inseriu um quadro extra — a linha do próprio `raise` — no meio do traceback. Nada quebra, mas é ruído que aponta para a linha que relançou em vez da que originou. **Dentro de um `except`, relance com `raise` sozinho.**
+
+## Exceções próprias
+
+Quando a biblioteca padrão não tem a classe certa, criar a sua é barato: uma linha.
+
+```python
+class TelemetriaError(Exception):
+    """Base de todos os erros deste pacote."""
+```
+
+Só isso já entrega herança de `Exception`, mensagem por argumento, `args`, `str()` e traceback. O ganho real, porém, vem do desenho da hierarquia.
+
+::: {#fig-hierarquia-propria}
+```{.tikz}
+%%| filename: hierarquia-propria
+%%| alt: A hierarquia de excecoes de um pacote, com uma classe base propria herdando de Exception e tres erros especificos abaixo dela, e os tres niveis de captura que isso permite
+\begin{tikzpicture}[
+  ext/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=3.4cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  bse/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!15, text width=3.8cm, align=center,
+              minimum height=0.75cm, font=\ttfamily\scriptsize},
+  esp/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.8cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  pt/.style={draw=manualgray!50, thick},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  cd/.style={font=\ttfamily\scriptsize, text=manualgray, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 1.6) rectangle (15.0,-7.0);
+
+  \node[ext] at (1.9, 0.9) {Exception};
+  \node[bse] at (6.1,-0.1) {TelemetriaError};
+  \node[esp] at (10.5,-1.1) {OLTDesconhecida};
+  \node[esp] at (10.5,-1.95) {NivelForaDeFaixa};
+  \node[esp] at (10.5,-2.8) {ColetaIncompleta};
+
+  \draw[pt] (1.9, 0.55) -- (1.9,-0.1) -- (4.2,-0.1);
+  \draw[pt] (6.1,-0.475) -- (6.1,-2.8);
+  \draw[pt] (6.1,-1.1) -- (8.6,-1.1);
+  \draw[pt] (6.1,-1.95) -- (8.6,-1.95);
+  \draw[pt] (6.1,-2.8) -- (8.6,-2.8);
+
+  \node[lb, text width=2.6cm] at (12.6,-1.95)
+    {cada uma com os atributos do próprio caso};
+
+  \node[cd] at (-0.4,-3.9) {except NivelForaDeFaixa};
+  \node[lb, text width=9.6cm] at (4.8,-3.9)
+    {trata um caso específico --- e tem \texttt{e.onu} e \texttt{e.nivel} para
+     agir};
+  \node[cd] at (-0.4,-4.6) {except TelemetriaError};
+  \node[lb, text width=9.6cm] at (4.8,-4.6)
+    {\textbf{qualquer} erro deste pacote, inclusive os que ainda não existem};
+  \node[cd] at (-0.4,-5.3) {except Exception};
+  \node[lb, text width=9.6cm] at (4.8,-5.3)
+    {tudo, inclusive o \texttt{NameError} do seu erro de digitação};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.8)
+    {A classe base própria é o que dá ao usuário do pacote a captura do nível
+     do meio. Sem ela, quem chama precisa importar e listar todas as suas
+     exceções --- e passa a quebrar toda vez que você acrescenta uma.};
+\end{tikzpicture}
+```
+Uma base própria por pacote, e as específicas abaixo dela.
+:::
+
+O pacote inteiro, com atributos estruturados:
+
+```python
+class TelemetriaError(Exception):
+    """Base de todos os erros deste pacote."""
+
+
+class OLTDesconhecida(TelemetriaError):
+    """A OLT pedida nao esta no cadastro."""
+
+    def __init__(self, olt, conhecidas):
+        self.olt = olt
+        self.conhecidas = sorted(conhecidas)
+        super().__init__(f"OLT desconhecida: {olt!r}")
+
+
+class NivelForaDeFaixa(TelemetriaError):
+    """A leitura esta fora do intervalo fisicamente possivel."""
+
+    def __init__(self, onu, nivel, minimo=-60.0, maximo=0.0):
+        self.onu = onu
+        self.nivel = nivel
+        self.minimo = minimo
+        self.maximo = maximo
+        super().__init__(f"{onu}: {nivel} dBm fora da faixa [{minimo}, {maximo}]")
+```
+
+Usando:
+
+```text
+onu-00042: critico=True
+  OLTDesconhecida: OLT desconhecida: 'olt-borda-99'  -> conhecidas: ['olt-borda-01', 'olt-borda-02']
+  NivelForaDeFaixa: onu-00043: 15.0 dBm fora da faixa [-60.0, 0.0]  -> nivel bruto: 15.0
+
+um except so para o pacote inteiro:
+  peguei OLTDesconhecida com except TelemetriaError
+
+atributos estruturados: 120 118 2
+isinstance TelemetriaError: True
+isinstance Exception      : True
+```
+
+Três decisões de projeto nesse código, e cada uma tem consequência prática.
+
+**Uma classe base por pacote.** É o que permite `except TelemetriaError` capturar tudo que o seu código levanta — inclusive as exceções que você vai criar no ano que vem. Sem ela, quem usa o pacote precisa importar e listar cada classe, e o código dele quebra a cada versão sua.
+
+**Atributos, não só mensagem.** `e.nivel` é um `float` com que se pode calcular; extrair o número da mensagem com expressão regular é o antipadrão que essa decisão evita. E `self.faltantes = esperadas - obtidas` calcula na hora do erro o que quem trata vai querer saber.
+
+**`super().__init__(mensagem)`** no fim do `__init__`. É isso que preenche `args` e faz `str(e)` devolver a mensagem. Sem essa chamada, a exceção imprime vazio.
+
+Note também o traceback de uma exceção própria:
+
+```text
+telemetria_erros.NivelForaDeFaixa: onu-00043: 15.0 dBm fora da faixa [-60.0, 0.0]
+```
+
+O nome vem qualificado com o módulo, o que ajuda quem recebe o relatório de erro a saber de onde veio.
+
+### Herdar de `Exception` ou de uma classe mais específica?
+
+Às vezes vale herdar de uma exceção embutida, para que código que não conhece o seu pacote continue funcionando:
+
+```python
+class NivelInvalido(ValueError):
+    """Nivel que nao e um numero valido."""
+
+
+def ler(texto):
+    try:
+        return float(texto)
+    except ValueError as e:
+        raise NivelInvalido(f"nivel ilegivel: {texto!r}") from e
+```
+
+```text
+'-21.4'          -> -21.4
+'indisponivel'   -> NivelInvalido: nivel ilegivel: 'indisponivel'
+```
+
+O `except ValueError` de quem chama continua pegando, porque `NivelInvalido` **é** um `ValueError`. Isso preserva compatibilidade quando você substitui uma exceção da biblioteca padrão por uma sua num código que já existe. A herança múltipla (`class NivelInvalido(TelemetriaError, ValueError)`) permite os dois ao mesmo tempo, e é usada de verdade — mas só quando a relação "é um" for honesta nos dois sentidos.
+
+## `add_note`: contexto sem mudar a exceção
+
+Novidade do **Python 3.11** (PEP 678), e resolve um problema que antes exigia relançar:
+
+```python
+def carregar(caminho, linha_n=None):
+    try:
+        processar()
+    except ValueError as e:
+        e.add_note(f"arquivo: {caminho}")
+        e.add_note(f"linha:   {linha_n}")
+        raise
+```
+
+```text
+ValueError: nivel ilegivel: 'indisponivel'
+arquivo: leituras.csv
+linha:   4
+```
+
+As notas saem depois da mensagem, no traceback, e ficam em `e.__notes__`. É a forma de acrescentar contexto **sem** trocar o tipo da exceção — o que importa porque quem chama pode estar capturando `ValueError` especificamente.
+
+## `assert` não é validação
+
+O `assert` parece o jeito curto de levantar exceção, e é a armadilha mais comum deste capítulo:
+
+```python
+def media(niveis):
+    assert niveis, "lista vazia nao tem media"
+    return sum(niveis) / len(niveis)
+```
+
+```text
+AssertionError: lista vazia nao tem media
+```
+
+Funciona. Agora, com a otimização ligada:
+
+```bash
+python3 -O afirmar.py
+```
+
+```text
+ZeroDivisionError: division by zero
+```
+
+**A opção `-O` remove todo `assert` do bytecode.** A validação desapareceu e o erro voltou a ser o genérico de três chamadas adiante. Como `-O` (e `PYTHONOPTIMIZE`) aparece em imagem de contêiner e em configuração de produção, uma validação escrita com `assert` é uma validação que pode não existir onde mais importa.
+
+A regra é a que a documentação recomenda:
+
+- **`assert`** para invariante interna — algo que, se for falso, indica um **bug no seu próprio código**. "Neste ponto a lista já foi ordenada."
+- **`raise`** para tudo que vem de fora: argumento de função pública, entrada do usuário, conteúdo de arquivo, resposta de rede.
+
+E uma armadilha de sintaxe que o Python 3.12 passou a avisar:
+
+```python
+assert (-60 <= nivel <= 0, "fora de faixa")
+```
+
+```text
+<string>:5: SyntaxWarning: assertion is always true, perhaps remove parentheses?
+o assert passou, apesar de o nivel ser invalido
+```
+
+Os parênteses transformaram os dois valores numa **tupla**, e tupla não vazia é sempre verdadeira (@sec-cap011). O `assert` nunca falha. Antes do 3.12 não havia nem o aviso.
+
+## `warnings`: quando não é erro, mas quase
+
+Nem tudo que merece atenção deve interromper o programa. Para isso existe o módulo `warnings`:
+
+```python
+import warnings
+
+
+def coletar(olt, formato="texto"):
+    if formato == "xml":
+        warnings.warn(
+            "o formato 'xml' sera removido na versao 1.0; use 'json'",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return f"coleta de {olt} em {formato}"
+```
+
+```text
+/home/vitor/lab39/app.py:3: DeprecationWarning: o formato 'xml' sera removido na versao 1.0; use 'json'
+  print(coletar("olt-borda-01", formato="xml"))
+coleta de olt-borda-01 em xml
+```
+
+O programa continuou. E repare **onde** o aviso aponta: `app.py:3`, a linha de quem chamou — não a linha do `warnings.warn` dentro da biblioteca. É o que `stacklevel=2` faz, e é o que torna o aviso acionável. Sem ele:
+
+```text
+/home/vitor/lab39/semstack.py:6: DeprecationWarning: use 'json'
+  warnings.warn("use 'json'", DeprecationWarning)   # sem stacklevel
+```
+
+O aviso aponta para o código da biblioteca, que o usuário não pode mudar.
+
+A visibilidade do `DeprecationWarning` tem uma regra que confunde: por padrão, ele só aparece quando parece vir de `__main__`. Um aviso levantado no fundo de uma biblioteca fica invisível:
+
+```bash
+python3 app2.py                 # aviso sem stacklevel, dentro do módulo
+```
+
+```text
+coleta de olt-borda-01 em xml
+```
+
+```bash
+python3 -W default app2.py
+```
+
+```text
+/home/vitor/lab39/coletor2.py:6: DeprecationWarning: use 'json'
+```
+
+Ou seja: `stacklevel=2` não só melhora a mensagem, como faz o aviso **aparecer** para quem precisa vê-lo. Do outro lado, quem mantém código roda os testes com `-W error::DeprecationWarning`, que transforma aviso em exceção e faz a suíte falhar antes de a remoção acontecer:
+
+```text
+DeprecationWarning: o formato 'xml' sera removido na versao 1.0; use 'json'
+```
+
+## Grupos de exceções próprios
+
+O `ExceptionGroup` do @sec-cap038 combina bem com exceções de pacote: o laço processa tudo e reporta todas as falhas de uma vez.
+
+```python
+def validar_lote(leituras):
+    erros, validas = [], []
+    for onu, nivel in leituras:
+        try:
+            if not -60.0 <= nivel <= 0.0:
+                raise NivelForaDeFaixa(onu, nivel)
+            validas.append((onu, nivel))
+        except TelemetriaError as e:
+            erros.append(e)
+    if erros:
+        raise ExceptionGroup(f"{len(erros)} leituras invalidas", erros)
+    return validas
+
+
+try:
+    validar_lote([("onu-00042", -21.4), ("onu-00043", 15.0), ("onu-00044", -99.9)])
+except* NivelForaDeFaixa as eg:
+    for e in eg.exceptions:
+        print(f"  {e.onu}: {e.nivel} dBm")
+```
+
+```text
+  onu-00043: 15.0 dBm
+  onu-00044: -99.9 dBm
+```
+
+Os atributos estruturados aparecem aqui em toda a sua utilidade: quem trata itera sobre as exceções e usa `e.onu` e `e.nivel` diretamente.
+
+## O custo
+
+Levantar exceção não é de graça:
+
+```text
+com exceção : 192  nsec por volta
+com retorno : 42.4 nsec por volta
+```
+
+Quatro vezes mais caro. Isso importa em laço muito quente e não importa em quase nenhum outro lugar — mas reforça a regra do @sec-cap038: exceção é para o caso excepcional. Um laço que levanta e captura a cada iteração está usando exceção como `if`, e o `if` é mais barato e mais legível.
+
+## 🐍 Jeito Pythônico
+
+**Levante em vez de devolver `None`** quando ignorar o retorno produz um erro pior adiante.
+
+```python
+# antipadrão
+def limite(olt):
+    if olt not in LIMITES:
+        return None          # explode três chamadas depois
+    return LIMITES[olt]
+```
+
+```python
+# pythônico
+def limite(olt):
+    try:
+        return LIMITES[olt]
+    except KeyError:
+        raise OLTDesconhecida(olt, LIMITES) from None
+```
+
+**Mensagem com valor e expectativa.** "o que deu errado, com qual valor, o que era esperado" — e `!r` nos valores.
+
+**`TypeError` para tipo errado, `ValueError` para valor errado.** Só crie classe própria quando nenhuma embutida disser a verdade.
+
+**Uma classe base por pacote**, herdando de `Exception`, e todas as suas exceções abaixo dela.
+
+**Atributos na exceção**, não só mensagem. Quem trata precisa do valor, não de uma `str` para analisar.
+
+**`raise ... from e`** ao converter uma exceção em outra; `from None` só quando a causa é ruído interno.
+
+**`raise` sozinho para relançar**, nunca `raise e` — este acrescenta um quadro falso ao traceback.
+
+**`add_note` para acrescentar contexto** sem trocar o tipo (3.11+).
+
+**`assert` só para invariante interna.** `-O` apaga todo `assert`; validação de entrada é `raise`. E nunca `assert (cond, "msg")` com parênteses.
+
+**`warnings.warn(..., stacklevel=2)`** para depreciação, e `-W error::DeprecationWarning` na suíte de testes.
+
+Sobre versões:
+
+- **Python 3.0** — encadeamento automático (`__context__`) e `raise ... from` (PEP 3134).
+- **Python 3.3** — `raise ... from None` e `__suppress_context__` (PEP 409).
+- **Python 3.8** — `SyntaxWarning` para literal ambíguo em comparação; `f"{x=}"` facilita mensagem de erro.
+- **Python 3.11** — `add_note` (PEP 678), `ExceptionGroup` (PEP 654), marcador de coluna no traceback (PEP 657).
+- **Python 3.12** — `SyntaxWarning` para `assert` com tupla entre parênteses.
+- **Python 3.13** — `ExceptionGroup` ganha `split` e `subgroup` mais rápidos; traceback colorido no terminal.
+
+## 🧪 Laboratório
+
+Objetivo: transformar retorno `None` em exceção com mensagem útil, ver as três formas de encadeamento no traceback, projetar a hierarquia de um pacote e provar que `assert` some com `-O`.
+
+**1. O `None` que explode longe.**
+
+```bash
+mkdir -p ~/lab39 && cd ~/lab39
+```
+
+Escreva `silenciosa.py` (o primeiro bloco do capítulo) e rode:
+
+```text
+TypeError: '<=' not supported between instances of 'float' and 'NoneType'
+```
+
+Depois `levantar.py`, com `raise KeyError(...)`, e compare os dois tracebacks.
+
+**2. As classes certas.** Rode `escolher.py` com os quatro casos:
+
+```text
+ok    : olt-borda-01 -21.4 dBm
+TypeError : olt deve ser str, veio int
+ValueError: olt nao pode ser vazia
+ValueError: nivel fora de faixa: 15.0 dBm (esperado entre -60 e 0)
+```
+
+**3. Classe contra instância.**
+
+```bash
+python3 -c "raise ValueError"
+python3 -c "raise 'string nao serve'"
+```
+
+```text
+ValueError
+TypeError: exceptions must derive from BaseException
+```
+
+**4. As três cadeias.** Rode `encadear.py`, `implicito.py` e `semorigem.py` e compare as frases:
+
+```text
+The above exception was the direct cause of the following exception:
+During handling of the above exception, another exception occurred:
+(nada)
+```
+
+Depois imprima `__cause__`, `__context__` e `__suppress_context__` nos três casos.
+
+**5. `raise` contra `raise e`.** Rode `relancar.py` e conte os quadros: quatro no primeiro traceback, cinco no segundo.
+
+**6. O pacote de exceções.** Escreva `telemetria_erros.py` com as três classes e `usar.py` com os três casos:
+
+```text
+onu-00042: critico=True
+  OLTDesconhecida: OLT desconhecida: 'olt-borda-99'  -> conhecidas: ['olt-borda-01', 'olt-borda-02']
+  NivelForaDeFaixa: onu-00043: 15.0 dBm fora da faixa [-60.0, 0.0]  -> nivel bruto: 15.0
+```
+
+Confirme que `except TelemetriaError` pega qualquer uma das três. Depois **remova** o `super().__init__(...)` de uma delas e veja `str(e)` sair vazio.
+
+**7. Herdar de `ValueError`.** Rode `herdar.py` e confirme que o `except ValueError` de quem chama continua pegando `NivelInvalido`.
+
+**8. As notas.** Rode `notas.py`:
+
+```text
+ValueError: nivel ilegivel: 'indisponivel'
+arquivo: leituras.csv
+linha:   4
+```
+
+**9. O `assert` que some.**
+
+```bash
+python3 afirmar.py
+python3 -O afirmar.py
+```
+
+```text
+AssertionError: lista vazia nao tem media
+ZeroDivisionError: division by zero
+```
+
+Depois escreva `assert (-60 <= nivel <= 0, "fora de faixa")` com `nivel = 15.0` e veja o `SyntaxWarning`.
+
+**10. Os avisos.** Rode `avisos.py` de três formas:
+
+```bash
+python3 avisos.py
+python3 -W default avisos.py
+python3 -W error::DeprecationWarning avisos.py
+```
+
+Depois mova o `warnings.warn` para um módulo importado, tire o `stacklevel` e confirme que o aviso some da execução padrão.
+
+**11. O grupo.** Rode `grupo.py` e confirme que as duas leituras inválidas foram reportadas juntas, com `e.onu` e `e.nivel` disponíveis.
+
+**12. O custo.** Rode as duas medições de `timeit` e compare 192 ns com 42,4 ns.
+
+## Resumo
+
+- Devolver `None` transfere o erro para três chamadas adiante, disfarçado. Levante quando não houver valor sensato para devolver.
+- Mensagem boa tem o que deu errado, com qual valor e o que era esperado — com `!r` nos valores.
+- `TypeError` é tipo errado; `ValueError` é valor errado. A biblioteca padrão já tem a classe certa para a maioria dos casos.
+- `raise ... from e` imprime "direct cause"; sem o `from`, imprime "during handling"; `from None` não imprime a origem, mas ela continua em `__context__`.
+- Dentro de um `except`, relance com `raise` sozinho: `raise e` insere um quadro falso no traceback.
+- Toda biblioteca precisa de **uma classe base própria** herdando de `Exception`. É o que permite `except SeuPacoteError` capturar inclusive as exceções que ainda não existem.
+- Ponha **atributos** na exceção, não só mensagem, e chame `super().__init__(mensagem)` — sem isso `str(e)` sai vazio.
+- Herdar de `ValueError` (ou outra embutida) preserva compatibilidade com quem já captura a genérica.
+- `add_note` (3.11) acrescenta contexto ao traceback sem trocar o tipo da exceção.
+- `assert` é para invariante interna: `python -O` remove todos. Validação de entrada é `raise`. E `assert (cond, "msg")` com parênteses nunca falha.
+- `warnings.warn(..., stacklevel=2)` aponta para quem chamou e faz o `DeprecationWarning` ser visível; `-W error::DeprecationWarning` na suíte transforma aviso em falha.
