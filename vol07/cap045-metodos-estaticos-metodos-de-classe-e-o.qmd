@@ -1,3 +1,572 @@
 # Métodos estáticos, métodos de classe e o desenho da API {#sec-cap045}
 
-*(em elaboracao)*
+A `ONU` do @sec-cap042 valida o que recebe, mas quem a usa continua fazendo trabalho braçal em toda chamada:
+
+```python
+linha = "onu-00042,-21.4,1/1/1"
+ident, pot, porta = linha.split(",")
+a = ONU(ident, float(pot), porta)
+
+registro = {"ident": "onu-00043", "potencia": -29.8, "porta": "1/1/2"}
+b = ONU(registro["ident"], registro["potencia"], registro["porta"])
+```
+
+```text
+ONU('onu-00042', -21.4, '1/1/1')
+ONU('onu-00043', -29.8, '1/1/2')
+```
+
+Três linhas para transformar uma linha de CSV num objeto — e essas três linhas estão espalhadas por todo lugar que lê CSV. Quando o formato ganhar uma quarta coluna, todos esses pontos quebram, e o `__init__` não pode ajudar porque só existe um por classe.
+
+Python resolve isso com métodos que pertencem à **classe** e não à instância. Este capítulo mostra os três tipos de método, quando cada um cabe, e como eles se combinam para desenhar uma API que as pessoas conseguem usar sem ler o código-fonte.
+
+## Os três tipos, lado a lado
+
+```python
+class Demo:
+    def instancia(self, x):
+        return f"instancia: self={type(self).__name__} x={x}"
+
+    @classmethod
+    def declasse(cls, x):
+        return f"classe   : cls={cls.__name__} x={x}"
+
+    @staticmethod
+    def estatico(x):
+        return f"estatico : sem primeiro argumento, x={x}"
+```
+
+```text
+instancia: self=Demo x=1
+classe   : cls=Demo x=1
+estatico : sem primeiro argumento, x=1
+
+pela classe:
+  TypeError: Demo.instancia() missing 1 required positional argument: 'x'
+  classe   : cls=Demo x=1
+  estatico : sem primeiro argumento, x=1
+```
+
+Os três funcionam chamados pela instância. Pela classe, só dois: o método de instância reclama, porque o `self` que o método ligado do @sec-cap041 inseria não existe — e repare que a mensagem culpa o `x`, não o `self`, que é o mesmo deslocamento de argumento de sempre.
+
+A diferença está no que o Python coloca na frente dos argumentos:
+
+```text
+o que sai do dict da classe:
+  instancia  -> function
+  declasse   -> classmethod
+  estatico   -> staticmethod
+
+depois do acesso por ponto:
+  instancia  -> function
+  declasse   -> method
+  estatico   -> function
+```
+
+`classmethod` e `staticmethod` são objetos que embrulham a função no dicionário da classe. No acesso por ponto, o primeiro produz um método ligado **à classe** (por isso `method`), e o segundo devolve a função crua, sem embrulho nenhum.
+
+::: {#fig-tres-metodos}
+```{.tikz}
+%%| filename: tres-metodos
+%%| alt: Comparacao dos tres tipos de metodo - de instancia recebe self, de classe recebe cls e respeita a subclasse, estatico nao recebe nada e e so uma funcao morando na classe
+\begin{tikzpicture}[
+  hdr/.style={font=\scriptsize\bfseries, text=manualgray, align=center},
+  mi/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.2cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  mc/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.2cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  me/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!20, text width=3.2cm, align=center,
+             minimum height=0.8cm, font=\ttfamily\scriptsize},
+  cel/.style={font=\ttfamily\scriptsize, text=manualgray, align=center},
+  txt/.style={font=\scriptsize, text=manualgray, align=center},
+  sep/.style={-, thin, manualgray!60},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.6) rectangle (15.0,-5.8);
+
+  \node[hdr] at (2.4, 1.9) {como se declara};
+  \node[hdr] at (6.4, 1.9) {recebe};
+  \node[hdr] at (9.8, 1.9) {enxerga a subclasse?};
+  \node[hdr] at (13.2, 1.9) {para quê};
+
+  \draw[sep] (0.2, 1.55) -- (14.6, 1.55);
+
+  \node[mi] at (2.4, 0.85) {def m(self)};
+  \node[cel] at (6.4, 0.85) {a instância};
+  \node[txt] at (9.8, 0.85) {sim, via \texttt{type(self)}};
+  \node[txt, align=center] at (13.2, 0.85) {operar sobre \emph{este} objeto};
+
+  \draw[sep] (0.2, 0.25) -- (14.6, 0.25);
+
+  \node[mc] at (2.4,-0.55) {@classmethod\\def m(cls)};
+  \node[cel] at (6.4,-0.55) {a classe};
+  \node[txt] at (9.8,-0.55) {\textbf{sim} --- \texttt{cls} é a classe chamada};
+  \node[txt, align=center] at (13.2,-0.55) {construtor alternativo, estado da classe};
+
+  \draw[sep] (0.2,-1.35) -- (14.6,-1.35);
+
+  \node[me] at (2.4,-2.15) {@staticmethod\\def m(x)};
+  \node[cel] at (6.4,-2.15) {nada};
+  \node[txt] at (9.8,-2.15) {não --- nem sabe que existe};
+  \node[txt, align=center] at (13.2,-2.15) {função pura relacionada ao assunto};
+
+  \draw[sep] (0.2,-2.85) -- (14.6,-2.85);
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.4)
+    {A pergunta que decide: \emph{de que o método precisa?} Se precisa dos
+     dados de \textbf{um} objeto, é de instância. Se precisa da \textbf{classe}
+     --- para construir uma instância do tipo certo ou ler uma constante que a
+     subclasse pode trocar ---, é de classe. Se não precisa de nenhum dos dois,
+     provavelmente é uma \textbf{função de módulo} e não deveria estar aqui.};
+\end{tikzpicture}
+```
+Os três tipos de método e o critério de escolha entre eles.
+:::
+
+## `@classmethod`: construtores alternativos
+
+Este é o uso que justifica o recurso:
+
+```python
+class ONU:
+    def __init__(self, ident, potencia, porta):
+        self.ident = ident
+        self.potencia = potencia
+        self.porta = porta
+
+    @classmethod
+    def de_csv(cls, linha):
+        ident, pot, porta = linha.strip().split(",")
+        return cls(ident, float(pot), porta)
+
+    @classmethod
+    def de_dict(cls, registro):
+        return cls(registro["ident"], registro["potencia"], registro["porta"])
+```
+
+```text
+de_csv        : ONU('onu-00042', -21.4, '1/1/1')
+de_dict       : ONU('onu-00043', -29.8, '1/1/2')
+na subclasse  : ONUXgs('onu-00044', -18.2)
+tipo correto  : ONUXgs
+```
+
+A conversão mora num lugar só, o nome diz o que faz, e `ONU.de_csv(linha)` se lê melhor do que qualquer função solta. A biblioteca padrão usa esse padrão o tempo todo: `dict.fromkeys`, `datetime.fromisoformat`, `int.from_bytes`, `Path.cwd`.
+
+A linha que mais importa é a terceira: `ONUXgs.de_csv(...)` devolveu um `ONUXgs`. É o `cls` fazendo o trabalho — ele é a classe **pela qual o método foi chamado**, não a classe onde foi escrito. Trocar `cls(...)` por `ONU(...)` quebra isso de forma silenciosa:
+
+```python
+class Base:
+    @classmethod
+    def flexivel(cls):
+        return cls()                   # respeita a subclasse
+
+    @classmethod
+    def rigida(cls):
+        return Base()                  # ignora a subclasse
+```
+
+```text
+flexivel: Filha
+rigida  : Base
+```
+
+Uma subclasse que chama `Filha.rigida()` recebe um `Base` — sem erro, sem aviso, e com o bug aparecendo bem longe dali. **Dentro de um `classmethod`, use `cls`.**
+
+## `@classmethod`: estado e política da classe
+
+O segundo uso é operar sobre o que pertence à classe e não a uma instância:
+
+```python
+class Coletor:
+    _criados = 0
+
+    def __init__(self, nome):
+        self.nome = nome
+        type(self)._registrar()
+
+    @classmethod
+    def _registrar(cls):
+        Coletor._criados += 1
+
+    @classmethod
+    def quantos(cls):
+        return cls._criados
+```
+
+```text
+criados: 3
+```
+
+Isto resolve o contador quebrado do @sec-cap041 sem repetir o nome da classe em cada método. Repare na assimetria deliberada: `_registrar` escreve em `Coletor._criados` explicitamente (para o contador ser global à hierarquia), enquanto `quantos` lê de `cls._criados` (para uma subclasse poder ter o próprio, se quiser). Escrever `cls._criados += 1` criaria um contador separado por subclasse na primeira escrita — pela mesma assimetria entre leitura e escrita do @sec-cap041, agora um nível acima.
+
+Uma variação comum é a instância única de configuração:
+
+```python
+    @classmethod
+    def carregar(cls, **valores):
+        if cls._instancia is None:
+            cls._instancia = cls(**valores)
+        return cls._instancia
+```
+
+```text
+    criando pela primeira vez
+mesma instancia: True
+valores        : {'destino': 'olt-borda-01'}
+    criando pela primeira vez
+depois do limpar: {'destino': 'novo'}
+```
+
+Funciona, e vale a ressalva: estado global disfarçado de classe é difícil de testar e cria acoplamento invisível. O `limpar()` existe justamente porque, sem ele, um teste contamina o seguinte. Na maior parte dos casos, passar a configuração como parâmetro (@sec-cap044) é melhor do que buscá-la de uma classe.
+
+## `@staticmethod`: quando é mesmo útil
+
+O método estático não recebe nem `self` nem `cls`. É uma função comum que mora dentro da classe:
+
+```python
+class Potencia:
+    @staticmethod
+    def dbm_para_mw(dbm):
+        return 10 ** (dbm / 10)
+```
+
+```text
+pela classe   : 0.007244
+pela instancia: 0.007244
+ida e volta   : -21.4000
+via classmethod: 0.007244
+```
+
+O uso legítimo é estreito: **uma função pura, fortemente ligada ao assunto da classe, que outros métodos da classe chamam.** Como `converter` chama `cls.dbm_para_mw(...)`, uma subclasse pode trocar a conversão sem que `converter` mude — o que uma função de módulo não permitiria.
+
+Fora desse caso, o estático costuma ser um cheiro. A classe como saco de funções é o padrão mais comum:
+
+```python
+class Util:
+    @staticmethod
+    def normalizar(ident):
+        return ident.strip().lower()
+
+    @staticmethod
+    def validar(ident):
+        return ident.startswith("onu-")
+```
+
+```text
+classe como namespace: onu-00042
+funcao de modulo    : onu-00042
+```
+
+Mesmo resultado, e a segunda versão é melhor: `Util` não tem estado, não tem instância, não tem subclasse útil. Em Python o namespace é o **módulo** — `from coleta import normalizar` já é agrupamento suficiente. Uma classe usada só para prefixar nomes é hábito importado de linguagens onde não existe função de primeira classe.
+
+O teste rápido: se um `@staticmethod` nunca é chamado por outro método da mesma classe, nem faz parte de uma interface que subclasses trocam, é uma função de módulo escrita no lugar errado.
+
+## `__new__`: antes do `__init__`
+
+Existe um quarto tipo, implícito. `__new__` é um `staticmethod` especial (o Python o converte automaticamente) que **constrói** o objeto, enquanto `__init__` apenas o inicializa:
+
+```python
+class Rastreada:
+    def __new__(cls, *args, **kwargs):
+        obj = super().__new__(cls)
+        return obj
+
+    def __init__(self, valor):
+        self.valor = valor
+```
+
+```text
+    __new__  recebeu cls=Rastreada
+    __init__ recebeu valor=42
+valor: 42
+    __new__ devolvendo outra coisa
+resultado: 'nao sou uma instancia'
+```
+
+A segunda parte mostra a regra que pega desprevenido: se `__new__` devolve algo que **não** é instância da classe, o `__init__` não roda. É por isso que sobrescrever `__new__` sem cuidado produz objetos meio-construídos.
+
+::: {#fig-new-init}
+```{.tikz}
+%%| filename: new-init
+%%| alt: A sequencia de criacao de um objeto - chamar a classe dispara new que constroi e depois init que inicializa, com o desvio quando new devolve algo de outro tipo
+\begin{tikzpicture}[
+  stp/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=4.4cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  dec/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=4.4cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  ok/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.4cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  no/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=4.4cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fr/.style={->,>=stealth, thick, manualred},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.2) rectangle (15.0,-6.0);
+
+  \node[stp] at (3.0, 1.5) {ONU("onu-00042")};
+  \node[lb, text width=6.4cm] at (5.6, 1.5)
+    {chamar a \textbf{classe} --- não é o \texttt{\_\_init\_\_} que é chamado
+     aqui};
+
+  \draw[fl] (3.0, 1.05) -- (3.0, 0.35);
+
+  \node[stp] at (3.0,-0.1) {\_\_new\_\_(cls, *args)};
+  \node[lb, text width=6.4cm] at (5.6,-0.1)
+    {\textbf{constrói} e devolve o objeto; é \texttt{staticmethod} implícito e
+     recebe \texttt{cls}};
+
+  \draw[fl] (3.0,-0.55) -- (3.0,-1.25);
+
+  \node[dec] at (3.0,-1.7) {devolveu isinstance de cls?};
+
+  \draw[fl] (3.0,-2.15) -- (3.0,-2.85);
+  \node[lb] at (3.2,-2.5) {sim};
+  \draw[fr] (5.2,-1.7) -- (7.4,-1.7);
+  \node[lb, text=manualred] at (5.7,-1.45) {não};
+
+  \node[ok] at (3.0,-3.3) {\_\_init\_\_(self, *args)};
+  \node[no] at (9.8,-1.7) {\_\_init\_\_ \textbf{não} roda};
+  \node[lb, text width=2.6cm, text=manualred] at (12.3,-1.7)
+    {e você recebe o outro objeto};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.2)
+    {\texttt{\_\_new\_\_} constrói, \texttt{\_\_init\_\_} inicializa --- e o
+     segundo só roda se o primeiro devolveu uma instância da classe. Sobrescrever
+     \texttt{\_\_new\_\_} sem devolver \texttt{super().\_\_new\_\_(cls)} é a
+     receita para objetos meio-construídos. Vale para subtipo de imutável
+     (\texttt{tuple}, \texttt{str}, \texttt{int}), onde no \texttt{\_\_init\_\_}
+     já é tarde para definir o valor.};
+\end{tikzpicture}
+```
+A criação em dois tempos: `__new__` constrói, `__init__` inicializa — e o segundo pode não acontecer.
+:::
+
+O caso em que ele é obrigatório é o subtipo imutável, porque quando o `__init__` roda já é tarde para definir o valor:
+
+```python
+class Coordenada(tuple):
+    def __new__(cls, lat, lon):
+        return super().__new__(cls, (lat, lon))
+
+    @property
+    def lat(self):
+        return self[0]
+```
+
+```text
+Coordenada(-23.55, -46.63)  lat: -23.55
+TypeError: 'Coordenada' object does not support item assignment
+```
+
+Fora de subtipos de imutáveis e de alguns casos de *cache* de instâncias, `__new__` raramente é a resposta certa — e, para o caso da coordenada, o `NamedTuple` do @sec-cap046 faz o mesmo em duas linhas.
+
+## Desenhando a API
+
+Com as três formas na mão, dá para desenhar uma classe cuja superfície pública conta a história inteira:
+
+```python
+class Leitura:
+    FAIXA = (-40.0, 0.0)
+    _total = 0
+
+    def __init__(self, ident, potencia):
+        self.ident = ident
+        self.potencia = self._validar(potencia)
+        Leitura._total += 1
+
+    # --- construtores alternativos -------------------------------------
+    @classmethod
+    def de_csv(cls, linha):
+        ident, pot = linha.strip().split(",")
+        return cls(ident, pot)
+
+    @classmethod
+    def de_json(cls, texto):
+        d = json.loads(texto)
+        return cls(d["ident"], d["potencia"])
+
+    @classmethod
+    def lote_de_csv(cls, linhas):
+        return [cls.de_csv(l) for l in linhas if l.strip()]
+
+    # --- consulta sobre a classe ---------------------------------------
+    @classmethod
+    def total_criadas(cls):
+        return cls._total
+
+    # --- função pura, sem self nem cls ----------------------------------
+    @staticmethod
+    def dbm_para_mw(dbm):
+        return 10 ** (dbm / 10)
+
+    # --- interno --------------------------------------------------------
+    @classmethod
+    def _validar(cls, valor):
+        valor = float(valor)
+        menor, maior = cls.FAIXA
+        if not menor <= valor <= maior:
+            raise ValueError(f"{valor} fora de [{menor}, {maior}]")
+        return valor
+
+
+class LeituraXgs(Leitura):
+    FAIXA = (-45.0, 0.0)
+```
+
+```text
+lote        : [Leitura('onu-00042', -21.4), Leitura('onu-00043', -29.8)]
+de_json     : Leitura('onu-00044', -18.2)
+subclasse   : LeituraXgs('onu-00045', -42.0)
+tipo        : LeituraXgs
+estatico    : 0.007244
+total       : 5
+ValueError  : -42.0 fora de [-40.0, 0.0]
+```
+
+Três decisões merecem destaque. `_validar` é `classmethod` porque lê `cls.FAIXA` — é o que permite `LeituraXgs` aceitar `-42.0` enquanto `Leitura` recusa o mesmo valor, sem reescrever uma linha de validação. `lote_de_csv` chama `cls.de_csv`, e não `Leitura.de_csv`, então o lote de uma subclasse vem com o tipo certo. E `__init__` continua sendo o construtor canônico e mínimo: todos os outros caminhos convergem para ele, o que garante que a validação nunca é contornada.
+
+Uma última convenção, sobre nomes. `de_csv`, `de_json` e `de_dict` seguem o padrão `de_<origem>` da biblioteca padrão (`from_bytes`, `fromisoformat`). O par simétrico é o método de instância `para_<destino>` — `para_json()`, não `Leitura.serializar(obj)`. Converter *de* algo é da classe; converter *para* algo é do objeto.
+
+## 🐍 Jeito Pythônico
+
+**`@classmethod` para construtor alternativo**, com o nome dizendo a origem. Um `__init__` mínimo e canônico; todos os outros caminhos passam por ele.
+
+```python
+# antipadrão: um __init__ que adivinha
+class ONU:
+    def __init__(self, origem):
+        if isinstance(origem, str):
+            ...          # é CSV? é JSON? é o ident?
+        elif isinstance(origem, dict):
+            ...
+```
+
+```python
+# pythônico: um caminho por origem
+class ONU:
+    def __init__(self, ident, potencia): ...
+    @classmethod
+    def de_csv(cls, linha): ...
+    @classmethod
+    def de_json(cls, texto): ...
+```
+
+**Dentro de `classmethod`, use `cls`, nunca o nome da classe.** É o que faz a subclasse funcionar; escrever o nome quebra em silêncio.
+
+**Cuidado com a assimetria em atributo de classe.** `cls.contador += 1` cria um contador por subclasse; `Classe.contador += 1` mantém um só. Escolha de propósito.
+
+**`@staticmethod` só quando outro método da classe o chama** ou quando ele faz parte da interface que subclasses trocam. Fora disso, é função de módulo — o módulo já é o namespace do Python.
+
+**`__new__` só para subtipo imutável ou controle real de criação.** Se ele devolver outra coisa, o `__init__` não roda.
+
+**Nomes simétricos:** `de_<origem>` como `classmethod`, `para_<destino>` como método de instância.
+
+**Agrupe a classe por seções** — construtores, consultas, mutações, internos — e ponha os métodos internos com sublinhado por último. Quem lê a classe pela primeira vez lê de cima para baixo.
+
+Sobre versões:
+
+- **Python 2.2** — `staticmethod` e `classmethod` aparecem junto com as classes de novo estilo.
+- **Python 3.0** — `__new__` passa a ser convertido em `staticmethod` automaticamente.
+- **Python 3.9** — `classmethod` passa a poder ser encadeado com `property`; o recurso é **revertido no 3.11** por causa de comportamentos inconsistentes, então não conte com ele.
+- **Python 3.10** — `staticmethod` e `classmethod` passam a ser chamáveis diretamente (`Classe.__dict__["m"](...)`) e a copiar `__doc__` corretamente.
+- **Python 3.11** — `enum.property` e `enum.member` resolvem o conflito entre `property` e membros de enumeração (@sec-cap046).
+
+## 🧪 Laboratório
+
+Objetivo: comparar os três tipos de método na prática, provar que `cls` respeita a subclasse e o nome literal não, ver `__new__` rodando antes do `__init__`, e terminar com uma classe cuja API se explica sozinha.
+
+**1. O trabalho braçal.**
+
+```bash
+mkdir -p ~/lab45 && cd ~/lab45
+```
+
+`construtores.py`: monte objetos a partir de CSV e de dicionário sem construtor alternativo, e conte quantas linhas de conversão o chamador precisa escrever.
+
+**2. Os construtores.** Em `classmethod.py`, escreva `de_csv` e `de_dict`. Confirme o que mais importa:
+
+```text
+na subclasse  : ONUXgs('onu-00044', -18.2)
+tipo correto  : ONUXgs
+```
+
+**3. `cls` contra o nome literal.** Rode `clsvshard.py`:
+
+```text
+flexivel: Filha
+rigida  : Base
+```
+
+**4. O estático.** Em `staticmethod.py`, confirme que o método funciona chamado pela classe e pela instância, e que a ida e volta da conversão fecha em `-21.4000`.
+
+**5. Os três lado a lado.** Rode `tresformas.py`. Confirme o `TypeError` do método de instância chamado pela classe e a tabela de tipos:
+
+```text
+o que sai do dict da classe:
+  instancia  -> function
+  declasse   -> classmethod
+  estatico   -> staticmethod
+
+depois do acesso por ponto:
+  declasse   -> method
+  estatico   -> function
+```
+
+Explique por que `estatico` volta a ser `function` depois do ponto.
+
+**6. O contador.** Rode `contador.py` e confirme `criados: 3`. Depois troque `Coletor._criados += 1` por `cls._criados += 1`, crie instâncias de uma subclasse e veja os contadores se separarem.
+
+**7. A instância única.** Rode `singleton.py` e confirme `mesma instancia: True`. Depois escreva dois "testes" em sequência sem chamar `limpar()` e veja o primeiro contaminar o segundo.
+
+**8. O saco de funções.** Rode `estaticoruim.py` e reescreva `Util` como duas funções de módulo. Confirme que nada se perde.
+
+**9. `__new__`.** Rode `newinit.py` e confirme a ordem das duas mensagens. Depois faça `__new__` devolver uma string e confirme que o `__init__` **não** roda.
+
+**10. O imutável.** Rode `imutavel.py` e confirme:
+
+```text
+Coordenada(-23.55, -46.63)  lat: -23.55
+TypeError: 'Coordenada' object does not support item assignment
+```
+
+Tente escrever a mesma classe usando só `__init__` e veja por que não dá.
+
+**11. A API completa.** Escreva `api.py` e reproduza:
+
+```text
+subclasse   : LeituraXgs('onu-00045', -42.0)
+ValueError  : -42.0 fora de [-40.0, 0.0]
+```
+
+O mesmo valor aceito por uma classe e recusado pela outra, com uma única implementação de validação. Depois troque `cls.FAIXA` por `Leitura.FAIXA` dentro de `_validar` e veja `LeituraXgs` parar de funcionar.
+
+**12. O lote.** Confirme que `LeituraXgs.lote_de_csv([...])` devolve objetos `LeituraXgs`. Depois troque `cls.de_csv` por `Leitura.de_csv` dentro de `lote_de_csv` e veja o tipo mudar sem aviso.
+
+## Resumo
+
+- Método de instância recebe o objeto; `@classmethod` recebe a classe; `@staticmethod` não recebe nada e é uma função morando na classe.
+- No dicionário da classe eles são `function`, `classmethod` e `staticmethod`; depois do acesso por ponto, viram `function`, `method` (ligado à classe) e `function` de novo.
+- O uso que justifica `@classmethod` é o construtor alternativo: `de_csv`, `de_json`, `de_dict` — um `__init__` canônico e um caminho nomeado por origem.
+- `cls` é a classe **pela qual o método foi chamado**. Usar `cls(...)` faz a subclasse receber o tipo certo; escrever o nome da classe quebra isso em silêncio.
+- `classmethod` que lê constante de `cls` (`cls.FAIXA`) permite à subclasse mudar a política sem reescrever o método.
+- A assimetria de leitura e escrita vale para atributo de classe: `cls.x += 1` cria um por subclasse, `Classe.x += 1` mantém um só.
+- `@staticmethod` se justifica quando outro método da classe o chama ou quando subclasses o trocam. Fora disso, é função de módulo — em Python o namespace é o módulo.
+- `__new__` constrói, `__init__` inicializa. Se `__new__` devolver algo que não é instância da classe, o `__init__` não roda.
+- `__new__` é obrigatório para subtipo de imutável, porque no `__init__` já é tarde para definir o valor.
+- Convenção de nomes: `de_<origem>` é da classe, `para_<destino>` é do objeto.
+
+Escrever tudo isso à mão para uma classe que é só um punhado de campos é trabalho repetido: `__init__`, `__repr__`, `__eq__`, `__hash__`, os construtores. O próximo capítulo mostra as três ferramentas da biblioteca padrão que geram esse código por você.
