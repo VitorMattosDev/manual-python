@@ -1,3 +1,613 @@
 # Atributos, propriedades e encapsulamento {#sec-cap042}
 
-*(em elaboracao)*
+A classe do @sec-cap041 organizou os dados, mas deixou uma porta escancarada:
+
+```python
+a = ONU("onu-00042", -21.4)
+a.potencia = "muito ruim"              # ninguém impediu
+a.critica()
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab42/estrago.py", line 13, in <module>
+    a.critica()
+    ~~~~~~~~~^^
+  File "/home/vitor/lab42/estrago.py", line 7, in critica
+    return self.potencia < -28.0
+           ^^^^^^^^^^^^^^^^^^^^^
+TypeError: '<' not supported between instances of 'str' and 'float'
+```
+
+A atribuição errada não reclamou. O erro apareceu depois, num método que não tem culpa nenhuma, e num programa real apareceria três camadas adiante, no relatório noturno, com o dado ruim já gravado no banco. Distância entre a causa e o sintoma é o que torna esse bug caro.
+
+A resposta de linguagens como Java é trancar o atributo e obrigar todo mundo a passar por `getPotencia()` e `setPotencia()`. Python faz outra coisa — e é uma escolha de projeto, não uma limitação. Este capítulo mostra qual é a escolha, por que ela funciona, e como interceptar o acesso a um atributo **sem** mudar quem já usa a classe.
+
+## Não existe atributo privado
+
+```python
+class Coletor:
+    def __init__(self):
+        self.destino = "olt-borda-01"  # público
+        self._buffer = []              # interno, por convenção
+        self.__chave = "s3cr3t"        # com mangling
+```
+
+```text
+publico  : olt-borda-01
+interno  : []  (acessivel, so mal-educado)
+AttributeError: 'Coletor' object has no attribute '__chave'
+no dict  : ['destino', '_buffer', '_Coletor__chave']
+de fora  : s3cr3t
+por dentro: s3cr3t
+```
+
+Três níveis, nenhum deles proteção de verdade.
+
+**Sem sublinhado** é a interface pública: pode usar, e você se compromete a não quebrar.
+
+**Um sublinhado à frente** (`_buffer`) é o aviso "isto é interno, pode mudar sem aviso na próxima versão". O interpretador não faz nada com essa informação — só as ferramentas fazem: `from modulo import *` pula esses nomes, o autocompletar do editor os esconde, e o revisor da PR reclama. É a convenção da PEP 8, e é o que se usa em 95% dos casos.
+
+**Dois sublinhados à frente** (`__chave`) acionam o *name mangling*: dentro do corpo da classe, o compilador reescreve o nome para `_Coletor__chave`. Por isso `c.__chave` de fora falha e `c._Coletor__chave` funciona. **Não é privacidade** — é renomeação previsível, e qualquer um que leia a mensagem de erro descobre o nome real em cinco segundos.
+
+O propósito real do mangling é outro, e é bom:
+
+```python
+class Base:
+    def __init__(self):
+        self.__estado = "da Base"      # vira _Base__estado
+
+
+class Filha(Base):
+    def __init__(self):
+        super().__init__()
+        self.__estado = "da Filha"     # vira _Filha__estado, não colide
+```
+
+```text
+base : da Base
+filha: da Filha
+dict : {'_Base__estado': 'da Base', '_Filha__estado': 'da Filha'}
+com um sublinhado: sobrescreveu
+```
+
+Duas classes na mesma hierarquia guardaram estado com o mesmo nome e **não** se atropelaram. Com um sublinhado só, a filha teria sobrescrito silenciosamente o estado da base — como a última linha mostra. Esse é o caso de uso do duplo sublinhado: atributo interno de uma classe feita para ser herdada, quando você não controla as subclasses. Em código de aplicação, é quase sempre exagero.
+
+::: {#fig-niveis-acesso}
+```{.tikz}
+%%| filename: niveis-acesso
+%%| alt: Os tres niveis de visibilidade de atributo em Python - publico, um sublinhado por convencao e dois sublinhados com name mangling - e o que cada um garante de verdade
+\begin{tikzpicture}[
+  nvl/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!7,
+              text width=3.6cm, align=center, minimum height=0.95cm,
+              font=\ttfamily\scriptsize},
+  pub/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.6cm, align=center, minimum height=0.95cm,
+              font=\ttfamily\scriptsize},
+  itn/.style={draw=manualyellow!80!black, very thick, rounded corners,
+              fill=manualyellow!20, text width=3.6cm, align=center,
+              minimum height=0.95cm, font=\ttfamily\scriptsize},
+  mng/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.6cm, align=center, minimum height=0.95cm,
+              font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west},
+  hd/.style={font=\scriptsize\bfseries, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.2) rectangle (15.0,-5.6);
+
+  \node[hd] at (2.2, 1.45) {como se escreve};
+  \node[hd] at (7.0, 1.45) {o que o Python faz};
+  \node[hd] at (12.0, 1.45) {o que garante};
+
+  \node[pub] at (2.2, 0.55) {destino};
+  \node[lb, text width=4.2cm] at (5.0, 0.95) {nada};
+  \node[lb, text width=3.6cm] at (10.2, 0.95) {interface pública: você promete não quebrar};
+
+  \node[itn] at (2.2,-1.05) {\_buffer};
+  \node[lb, text width=4.2cm] at (5.0,-0.55)
+    {nada --- só as ferramentas reagem (\texttt{import *}, editor, linter)};
+  \node[lb, text width=3.6cm] at (10.2,-0.55)
+    {aviso: pode mudar sem versão nova};
+
+  \node[mng] at (2.2,-2.85) {\_\_chave};
+  \node[lb, text width=4.2cm] at (5.0,-2.35)
+    {renomeia para \texttt{\_Coletor\_\_chave} dentro do corpo da classe};
+  \node[lb, text width=3.6cm] at (10.2,-2.35)
+    {não colidir com subclasse --- e \textbf{só} isso};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.0)
+    {Nenhum dos três impede o acesso. Python aposta que a convenção basta:
+     quem escreve \texttt{obj.\_buffer} sabe que está fora do contrato e assume
+     o risco. A vantagem é que o atributo público pode virar
+     \texttt{@property} depois, \textbf{sem quebrar} quem já usa --- o que
+     torna o \texttt{get\_x()/set\_x()} preventivo desnecessário.};
+\end{tikzpicture}
+```
+Os três níveis de visibilidade. Nenhum é proteção; o duplo sublinhado serve para evitar colisão em hierarquia, não para esconder.
+:::
+
+## O acessador preventivo é um antipadrão
+
+Quem vem do Java escreve isto por reflexo:
+
+```python
+# o jeito que NÃO se escreve em Python
+class Java:
+    def __init__(self, potencia):
+        self._potencia = potencia
+
+    def get_potencia(self):
+        return self._potencia
+
+    def set_potencia(self, valor):
+        self._potencia = valor
+```
+
+```python
+j.set_potencia(j.get_potencia() - 1)
+```
+
+```text
+ceremonia: -22.4
+direto   : -22.4
+```
+
+Seis linhas e uma chamada ilegível para fazer o que `p.potencia -= 1` faz. E o argumento clássico a favor — "se um dia precisar validar, a interface já está pronta" — **não vale em Python**, porque a interface pode ser trocada depois sem que ninguém perceba. É exatamente isso que a `property` permite.
+
+A regra é: **comece com atributo público simples.** Só quando existir uma razão concreta — validação, valor derivado, efeito colateral, compatibilidade — transforme em propriedade. Ninguém que usa a classe precisa saber que a troca aconteceu.
+
+## `@property`
+
+```python
+class ONU:
+    def __init__(self, ident, potencia):
+        self.ident = ident
+        self.potencia = potencia       # já passa pelo setter
+
+    @property
+    def potencia(self):
+        return self._potencia
+
+    @potencia.setter
+    def potencia(self, valor):
+        if not isinstance(valor, (int, float)):
+            raise TypeError(f"potencia deve ser numero, recebi {type(valor).__name__}")
+        if not -40.0 <= valor <= 0.0:
+            raise ValueError(f"potencia fora da faixa optica: {valor}")
+        self._potencia = float(valor)
+```
+
+```text
+-- construcao
+    [setter] com -21.4
+-- leitura
+    [getter]
+   -21.4
+-- escrita valida
+    [setter] com -25.0
+-- escrita invalida (tipo)
+    [setter] com 'muito ruim'
+  TypeError: potencia deve ser numero, recebi str
+-- escrita invalida (faixa)
+    [setter] com -80.0
+  ValueError: potencia fora da faixa optica: -80.0
+-- valor preservado: -25.0
+```
+
+O erro agora nasce **onde o dado ruim entrou**, com uma mensagem que diz o que era esperado. E repare no primeiro `[setter]` da saída: a atribuição dentro do `__init__` passa pela validação como qualquer outra. É de graça, e é o motivo de guardar em `self.potencia = potencia` em vez de `self._potencia = potencia` no construtor.
+
+Quando o dado ruim é rejeitado, o valor anterior permanece — `-25.0`, não meio-atribuído. Validar antes de gravar dá essa garantia de graça.
+
+Três nomes iguais, três funções diferentes: `@property` cria o objeto, `@potencia.setter` devolve uma cópia dele com o *setter* preenchido, e o nome final `potencia` fica amarrado à última. Por isso a ordem importa e por isso os três métodos têm o mesmo nome.
+
+::: {#fig-property-intercepta}
+```{.tikz}
+%%| filename: property-intercepta
+%%| alt: Como a property intercepta o acesso ao atributo - o objeto property mora no dicionario da classe e o acesso por ponto chama fget, fset ou fdel em vez de ler o dicionario da instancia
+\begin{tikzpicture}[
+  acc/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=4.0cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  prp/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=4.4cm, align=center, minimum height=1.5cm,
+              font=\ttfamily\scriptsize},
+  fun/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.4cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  dct/.style={draw=manualyellow!80!black, very thick, rounded corners,
+              fill=manualyellow!20, text width=3.8cm, align=center,
+              minimum height=0.8cm, font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.4) rectangle (15.0,-5.8);
+
+  \node[acc] at (2.0, 1.5) {a.potencia};
+  \node[acc] at (2.0, 0.2) {a.potencia = v};
+  \node[acc] at (2.0,-1.1) {del a.potencia};
+
+  \draw[fl] (4.0, 1.5) -- (5.4, 0.7);
+  \draw[fl] (4.0, 0.2) -- (5.4, 0.2);
+  \draw[fl] (4.0,-1.1) -- (5.4,-0.3);
+
+  \node[prp] at (7.6, 0.2)
+    {ONU.\_\_dict\_\_['potencia']\\{\normalfont\scriptsize é um objeto}\\property};
+
+  \draw[fl] (9.8, 0.9) -- (11.0, 1.3);
+  \draw[fl] (9.8, 0.2) -- (11.0, 0.2);
+  \draw[fl] (9.8,-0.5) -- (11.0,-0.9);
+
+  \node[fun] at (12.8, 1.3) {fget(a)};
+  \node[fun] at (12.8, 0.2) {fset(a, v)};
+  \node[fun] at (12.8,-0.9) {fdel(a)};
+
+  \node[dct] at (7.6,-2.5) {a.\_\_dict\_\_\\'\_potencia': -21.4};
+  \draw[fl] (12.8,-1.35) .. controls (12.8,-2.5) .. (9.6,-2.5);
+  \node[lb, text width=3.0cm] at (11.6,-2.05) {o valor real fica aqui};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.4)
+    {A \texttt{property} mora no dicionário da \textbf{classe}, não no da
+     instância --- e tem prioridade sobre o dicionário da instância, ao
+     contrário de um atributo comum. Por isso ela consegue interceptar
+     \textbf{toda} atribuição, inclusive a do \texttt{\_\_init\_\_}. O valor
+     de verdade costuma ficar num atributo com sublinhado, e é convenção que o
+     nome seja o mesmo com \texttt{\_} na frente.};
+\end{tikzpicture}
+```
+A `property` é um objeto no dicionário da classe que intercepta o acesso por ponto e desvia para `fget`, `fset` ou `fdel`.
+:::
+
+Isso não é mágica de sintaxe: `property` é um objeto comum, e dá para inspecioná-lo.
+
+```text
+na instancia : property
+no dict da inst: {'_potencia': -21.4}
+acesso pela classe: <property object at 0x7d14aba3d0d0>
+fget: potencia
+fset: potencia
+fdel: None
+```
+
+O mecanismo por trás — o protocolo de descritores — é o assunto do @sec-cap053. Aqui basta saber que ele existe e explica a prioridade sobre o `__dict__` da instância.
+
+## Somente leitura e valor derivado
+
+Omitir o *setter* torna o atributo imutável de fora, e é o caso mais comum de propriedade depois da validação:
+
+```python
+class Coleta:
+    def __init__(self, ident, potencia_dbm):
+        self._ident = ident
+        self.potencia_dbm = potencia_dbm
+
+    @property
+    def ident(self):
+        return self._ident
+
+    @property
+    def potencia_mw(self):
+        return 10 ** (self.potencia_dbm / 10)
+```
+
+```text
+ident      : onu-00042
+potencia_mw: 0.007244
+AttributeError: property 'ident' of 'Coleta' object has no setter
+derivada acompanha: 0.501187
+```
+
+A mensagem "has no setter" é do **Python 3.11** para cá; antes era um `AttributeError: can't set attribute` genérico, que dava muito mais trabalho para diagnosticar.
+
+`potencia_mw` mostra o outro uso: **valor calculado que se lê como atributo**. Poderia ser um método `potencia_mw()`, mas a propriedade comunica melhor — é uma característica do objeto, não uma ação. O critério prático: se é barato de calcular e não tem efeito colateral, propriedade; se é caro ou muda alguma coisa, método com parênteses, porque os parênteses avisam ao leitor que ali acontece trabalho.
+
+E, por ser derivada, ela nunca fica dessincronizada. Mudar `potencia_dbm` muda `potencia_mw` no acesso seguinte — que é a diferença entre calcular na hora e guardar uma cópia no `__init__`.
+
+## O `deleter`
+
+O terceiro gancho é o menos usado, e serve para invalidação:
+
+```python
+    @token.deleter
+    def token(self):
+        self._token = None
+```
+
+```text
+antes : abc123
+    [deleter] invalidando
+RuntimeError: sessao encerrada
+```
+
+`del s.token` virou "encerre a sessão". Use com parcimônia: `del` fazendo mais do que apagar surpreende quem lê.
+
+## Quando calcular é caro: `cached_property`
+
+Uma propriedade recalcula a cada acesso. Se o cálculo custa, isso aparece:
+
+```python
+from functools import cached_property
+
+
+class Relatorio:
+    @property
+    def media_cara(self): ...
+
+    @cached_property
+    def media_cacheada(self): ...
+```
+
+```text
+property, tres acessos:
+    calculando (property)
+    calculando (property)
+    calculando (property)
+cached_property, tres acessos:
+    calculando (cached_property)
+valor: -25.275
+foi parar no __dict__: True
+depois do del, recalcula:
+    calculando (cached_property)
+```
+
+`cached_property` (Python **3.8**) calcula na primeira leitura e **grava o resultado no `__dict__` da instância**. Como um atributo comum do dicionário tem prioridade sobre ela — ao contrário da `property` —, os acessos seguintes nem chegam ao descritor. É por isso que o cache é gratuito depois de quente, e é por isso que `del r.media_cacheada` o invalida: apagar a chave do dicionário devolve o controle ao descritor.
+
+Duas ressalvas. Ela não funciona em classe com `__slots__` (não há `__dict__` onde guardar), e o valor **não** acompanha mudanças nos dados de origem — se `self.leituras` mudar, a média cacheada continua a antiga. Use só para o que é imutável depois de construído.
+
+## Duas armadilhas
+
+**Atribuir a uma propriedade sem *setter*** falha até dentro do `__init__`:
+
+```python
+class Errado:
+    @property
+    def valor(self):
+        return 42
+
+    def __init__(self):
+        self.valor = 10                # tenta gravar numa property sem setter
+```
+
+```text
+AttributeError: property 'valor' of 'Errado' object has no setter
+```
+
+O `__init__` não tem passe livre. Se o valor precisa ser gravado, grave no atributo com sublinhado (`self._valor = 10`), que é o que a propriedade lê.
+
+**A prioridade sobre o `__dict__` é o oposto do atributo comum:**
+
+```text
+atributo comum, dict vence: 99
+com property, a classe vence: 42  dict: {'valor': 99}
+```
+
+A instância tem `'valor': 99` no dicionário e mesmo assim `c.valor` dá `42`. Não é bug: descritores de dados (os que têm `__set__`, e `property` tem) vêm **antes** do `__dict__` na busca. Chegar a esse estado exige mexer em `__dict__` na mão — mais uma razão para não fazer isso.
+
+## `__getattr__`: a rede de segurança
+
+Quando a busca normal de atributo falha inteira, o Python dá uma última chance:
+
+```python
+class Registro:
+    def __init__(self, campos):
+        self._campos = campos
+
+    def __getattr__(self, nome):
+        # só chamado quando a busca normal falha
+        try:
+            return self._campos[nome]
+        except KeyError:
+            raise AttributeError(
+                f"{type(self).__name__!r} object has no attribute {nome!r}"
+            ) from None
+```
+
+```text
+    [__getattr__] procurando 'ident'
+achou   : onu-00042
+    [__getattr__] procurando 'potencia'
+achou   : -21.4
+normal  : True
+    [__getattr__] procurando 'inexistente'
+AttributeError: 'Registro' object has no attribute 'inexistente'
+```
+
+Repare que `r._campos` **não** disparou o gancho: ele existe no `__dict__`, então a busca normal resolveu. `__getattr__` só entra quando tudo o mais falhou — é o que o torna barato.
+
+Dois cuidados. Ele precisa levantar `AttributeError` para o que não conhece, senão `hasattr` e `getattr` com padrão passam a mentir. E acessar `self._campos` dentro dele é perigoso se `_campos` puder não existir ainda (durante a desserialização, por exemplo): a busca falha, `__getattr__` é chamado de novo, e a recursão infinita acontece. Existe também `__getattribute__`, que intercepta **todos** os acessos e é muito mais fácil de quebrar — os dois são tratados a fundo no @sec-cap053.
+
+## A classe completa
+
+```python
+class ONU:
+    FAIXA = (-40.0, 0.0)
+    LIMITE_CRITICO = -28.0
+
+    def __init__(self, ident, potencia, porta):
+        self.ident = ident
+        self.potencia = potencia
+        self.porta = porta
+
+    @property
+    def potencia(self):
+        return self._potencia
+
+    @potencia.setter
+    def potencia(self, valor):
+        try:
+            valor = float(valor)
+        except (TypeError, ValueError):
+            raise TypeError(
+                f"potencia de {self.ident}: esperava numero, recebi "
+                f"{type(valor).__name__} ({valor!r})"
+            ) from None
+        menor, maior = self.FAIXA
+        if not menor <= valor <= maior:
+            raise ValueError(
+                f"potencia de {self.ident}: {valor} fora da faixa "
+                f"[{menor}, {maior}] dBm"
+            )
+        self._potencia = valor
+
+    @property
+    def critica(self):
+        return self._potencia < self.LIMITE_CRITICO
+
+    @property
+    def potencia_mw(self):
+        return 10 ** (self._potencia / 10)
+```
+
+```text
+ONU('onu-00042', -21.4, '1/1/1')  critica: False  mW: 0.00724
+ONU('onu-00043', -29.8, '1/1/2')  critica: True
+  TypeError: potencia de onu-00099: esperava numero, recebi str ('muito ruim')
+  TypeError: potencia de onu-00099: esperava numero, recebi NoneType (None)
+  ValueError: potencia de onu-00099: -80.0 fora da faixa [-40.0, 0.0] dBm
+  ValueError: potencia de onu-00099: 12.0 fora da faixa [-40.0, 0.0] dBm
+```
+
+Quatro decisões de projeto valem ser apontadas. A validação por `float(valor)` em vez de `isinstance` aceita a string `"-29.8"` que veio do CSV — coerção deliberada, não descuido, e o `from None` do @sec-cap039 esconde o `ValueError` interno do `float` que só confundiria. A mensagem inclui o `ident`, então o log diz **qual** equipamento tem o dado ruim. `TypeError` para tipo errado e `ValueError` para valor fora de faixa segue a convenção da biblioteca padrão. E `FAIXA` é lida de `self`, então uma subclasse para outro padrão óptico só troca a constante.
+
+## 🐍 Jeito Pythônico
+
+**Atributo público até prova em contrário.** Não escreva `get_x()`/`set_x()` preventivo: a `property` permite trocar depois sem quebrar quem usa. Esse é o argumento inteiro.
+
+```python
+# antipadrão
+class ONU:
+    def __init__(self, p):
+        self._p = p
+    def get_potencia(self):
+        return self._p
+    def set_potencia(self, v):
+        self._p = v
+```
+
+```python
+# pythônico
+class ONU:
+    def __init__(self, potencia):
+        self.potencia = potencia       # e vira @property no dia em que precisar
+```
+
+**Um sublinhado para o que é interno.** Dois só para não colidir com subclasse de código alheio — e raramente.
+
+**`property` para validar, derivar ou depreciar.** Não para embrulhar leitura e escrita triviais.
+
+**Propriedade é leitura barata e sem efeito colateral.** Se calcula muito ou muda estado, é método com parênteses. Se calcula muito e o resultado é imutável, é `cached_property`.
+
+**Valide no *setter*, não no `__init__`.** Assim toda atribuição posterior é validada também — que é o ponto.
+
+**`TypeError` para tipo errado, `ValueError` para valor errado**, e a mensagem diz o que se esperava, o que veio e de qual objeto.
+
+**Não mexa em `__dict__` direto.** `getattr`/`setattr` respeitam propriedades; o dicionário as atropela.
+
+Sobre versões:
+
+- **Python 2.2** — `property` aparece junto com as classes de novo estilo e o protocolo de descritores.
+- **Python 3.8** — `functools.cached_property`.
+- **Python 3.11** — a mensagem de erro passa a ser `property 'x' of 'C' object has no setter`, em vez do antigo `can't set attribute`.
+- **Python 3.12** — `cached_property` deixa de usar uma trava por classe; o gargalo que existia em código com muitas *threads* some.
+- **Python 3.13** — o `@property` de método `__doc__` passa a preservar a documentação de forma mais consistente em subclasses.
+
+## 🧪 Laboratório
+
+Objetivo: sentir o custo do atributo aberto, medir o que o sublinhado protege de verdade, converter atributo em propriedade sem mudar quem usa, e terminar com uma classe que recusa dado ruim na entrada.
+
+**1. O estrago.**
+
+```bash
+mkdir -p ~/lab42 && cd ~/lab42
+```
+
+`estrago.py`: atribua uma string em `potencia` e chame `critica()`. Repare que o traceback aponta o método, não a atribuição:
+
+```text
+TypeError: '<' not supported between instances of 'str' and 'float'
+```
+
+**2. Os três níveis.** Em `sublinhado.py`, crie os três atributos e confirme:
+
+```text
+no dict  : ['destino', '_buffer', '_Coletor__chave']
+de fora  : s3cr3t
+```
+
+Conclua por que o duplo sublinhado não é segurança.
+
+**3. Para que serve o mangling.** Rode `mangling.py` e confirme que `Base` e `Filha` coexistem com `__estado`. Depois refaça com **um** sublinhado e veja a filha atropelar a base.
+
+**4. O antipadrão.** Escreva `getset.py` com as duas versões e compare a legibilidade de `j.set_potencia(j.get_potencia() - 1)` com `p.potencia -= 1`.
+
+**5. A propriedade.** Em `property.py`, ponha `print` no *getter* e no *setter* e rode. Confirme que o `__init__` dispara o *setter*:
+
+```text
+-- construcao
+    [setter] com -21.4
+```
+
+Depois tente atribuir `"muito ruim"` e `-80.0` e confirme que o valor anterior sobreviveu.
+
+**6. Somente leitura.** Em `somenteleitura.py`, faça `ident` sem *setter* e confirme a mensagem do 3.11+:
+
+```text
+AttributeError: property 'ident' of 'Coleta' object has no setter
+```
+
+Mude `potencia_dbm` e confirme que `potencia_mw` acompanha.
+
+**7. O `deleter`.** Rode `deleter.py` e confirme que `del s.token` invalida em vez de apagar.
+
+**8. O cache.** Rode `preguicoso.py` e conte as linhas de "calculando":
+
+```text
+property, tres acessos:
+    calculando (property)
+    calculando (property)
+    calculando (property)
+cached_property, tres acessos:
+    calculando (cached_property)
+```
+
+Confirme com `"media_cacheada" in vars(r)` que o valor foi para o dicionário da instância, e invalide com `del`.
+
+**9. A property por dentro.** Em `naoclasse.py`, imprima `ONU.potencia` (pela classe, não pela instância) e os atributos `fget`, `fset` e `fdel`.
+
+**10. As duas armadilhas.** Rode `sobrescreve.py` e confirme os dois resultados:
+
+```text
+atributo comum, dict vence: 99
+com property, a classe vence: 42  dict: {'valor': 99}
+```
+
+**11. `__getattr__`.** Em `getattr.py`, confirme que `r._campos` **não** dispara o gancho e que `r.inexistente` levanta `AttributeError`. Depois remova o `raise AttributeError` (devolvendo `None`) e veja `hasattr(r, "qualquer_coisa")` passar a mentir.
+
+**12. A classe completa.** Escreva `validado.py` e rode a bateria de valores ruins:
+
+```text
+  TypeError: potencia de onu-00099: esperava numero, recebi str ('muito ruim')
+  ValueError: potencia de onu-00099: -80.0 fora da faixa [-40.0, 0.0] dBm
+```
+
+Confirme que `"-29.8"` (string vinda de CSV) é aceita, e explique por quê.
+
+## Resumo
+
+- Python não tem atributo privado. Há três convenções: público, `_interno` (aviso, respeitado só por ferramentas) e `__duplo` (renomeado para `_Classe__nome`).
+- O duplo sublinhado existe para **evitar colisão entre classes de uma hierarquia**, não para esconder — `obj._Classe__nome` acessa normalmente.
+- Acessador preventivo (`get_x`/`set_x`) é antipadrão em Python, porque um atributo público pode virar `property` depois sem quebrar quem já usa.
+- `@property` põe um objeto no dicionário da **classe** que intercepta o acesso por ponto e desvia para `fget`, `fset` e `fdel`.
+- Validar no *setter* faz o erro nascer onde o dado ruim entrou, inclusive na atribuição dentro do `__init__` — e o valor anterior sobrevive à rejeição.
+- Propriedade sem *setter* é somente leitura e falha até dentro do `__init__`; grave no atributo com sublinhado.
+- Valor derivado como propriedade nunca dessincroniza. Se o cálculo é caro e a origem imutável, `cached_property` (3.8+) grava o resultado no `__dict__` e some do caminho.
+- Uma `property` tem prioridade sobre o `__dict__` da instância; um atributo comum não. É o protocolo de descritores em ação.
+- `__getattr__` é a última chance quando a busca falha inteira — e precisa levantar `AttributeError` para o que não conhece, senão `hasattr` mente.
+- `TypeError` para tipo errado, `ValueError` para valor fora de faixa, e a mensagem identifica o objeto.
+
+A classe está sólida por dentro. O próximo capítulo trata do que acontece quando ela ganha parentes: uma ONU GPON e uma ONU XGS-PON compartilham quase tudo, e é a herança que decide o que cada uma recebe — junto com a regra, nem sempre óbvia, de qual método é escolhido quando duas classes-mãe oferecem o mesmo nome.
