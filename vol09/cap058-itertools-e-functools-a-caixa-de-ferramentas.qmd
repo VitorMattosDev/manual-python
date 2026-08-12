@@ -1,3 +1,455 @@
 # itertools e functools: a caixa de ferramentas funcional {#sec-cap058}
 
-*(em elaboracao)*
+Duas funções aparecem em quase todo código Python que processa dados, e quase sempre escritas à mão. A primeira agrupa registros por uma chave; a segunda guarda o resultado de um cálculo caro para não repeti-lo. Ambas cabem em dez ou quinze linhas — e ambas já existem, testadas, na biblioteca padrão.
+
+`itertools` e `functools` são as duas caixas de ferramentas que sobraram da influência funcional no desenho da linguagem. `itertools` compõe **iteradores**: combina, filtra, agrupa e fatia fluxos sem materializar nenhum deles. `functools` compõe **funções**: memoiza, fixa argumentos, despacha por tipo e completa protocolos.
+
+O que os une é o efeito no código: um laço com contador, um dicionário de acumulação e três `if` de controle viram uma linha declarativa que diz o que se quer, não como percorrer. E, no caso de `itertools`, essa linha ainda usa memória constante.
+
+Este capítulo não é um catálogo — a documentação oficial já é excelente nisso. É a seleção do que se usa de verdade, com as armadilhas de cada um.
+
+## Iteradores infinitos, e o `islice` que os torna úteis
+
+Três funções produzem fluxos sem fim:
+
+```python
+print("count       :", list(itertools.islice(itertools.count(10, 5), 5)))
+print("cycle       :", list(itertools.islice(itertools.cycle("abc"), 7)))
+print("repeat      :", list(itertools.repeat(0.0, 4)))
+```
+
+```text
+count       : [10, 15, 20, 25, 30]
+cycle       : ['a', 'b', 'c', 'a', 'b', 'c', 'a']
+repeat      : [0.0, 0.0, 0.0, 0.0]
+repeat sem n: ['x', 'x', 'x']
+```
+
+Repare no `islice` em volta de todos: `list(itertools.count())` trava o processo até consumir toda a memória da máquina. Fluxo infinito exige um limitador — `islice`, um `break`, ou uma função como `takewhile` que decide parar.
+
+`count` é o gerador de identificadores sequenciais e o contador de `enumerate` quando o passo não é 1. `cycle` distribui trabalho de forma circular. `repeat` alimenta um valor constante para `zip` ou `map`, e é mais rápido que uma expressão geradora equivalente.
+
+## `chain`: percorrer várias coisas como se fossem uma
+
+```text
+chain       : [1, 2, 3, 4, 5]
+from_iterable: [1, 2, 3, 4, 5, 6]
+islice meio : [5, 7, 9, 11]
+```
+
+`chain(a, b)` percorre as duas sequências em sequência sem concatená-las — não há lista nova, não há cópia. Para uma lista de listas (ou um gerador de geradores, que é o caso comum), `chain.from_iterable` faz o achatamento de um nível sem precisar desempacotar com `*`, o que importa quando a coleção externa é grande ou preguiçosa.
+
+`islice(iteravel, inicio, fim, passo)` é o fatiamento que funciona em qualquer iterável, inclusive nos que não suportam índice — um arquivo aberto, um gerador, um cursor de banco. Ele descarta os elementos iniciais um a um (não há como "pular" num iterador), mas nunca materializa nada.
+
+## `groupby`: o poder e a armadilha
+
+Agrupar registros por chave é o uso mais frequente e o mais mal-entendido do módulo:
+
+```python
+ordenado = sorted(REG, key=itemgetter(0))
+for dia, grupo in itertools.groupby(ordenado, key=itemgetter(0)):
+    itens = list(grupo)
+    print(f"  {dia}: {len(itens)} leituras, media {sum(x[2] for x in itens)/len(itens):.2f}")
+```
+
+```text
+  2026-08-12: 3 leituras, media -30.53
+  2026-08-13: 3 leituras, media -27.50
+  2026-08-14: 1 leituras, media -22.00
+```
+
+Funciona — porque os dados foram **ordenados pela mesma chave** antes. `groupby` agrupa apenas elementos **consecutivos**, como o `uniq` do Unix. Sem a ordenação:
+
+```text
+groupby SEM ordenar antes:
+  a: ['a']
+  b: ['b']
+  a: ['a', 'a']
+  c: ['c']
+  b: ['b']
+grupos gerados: 5 | valores distintos: 3
+```
+
+Cinco grupos para três valores distintos, e a chave `a` aparecendo duas vezes. Nenhum erro, nenhum aviso — só um relatório errado. É o defeito clássico do `groupby`, e a razão de `defaultdict(list)` continuar sendo a escolha certa quando os dados **não** vêm ordenados: ordenar custa `O(n log n)` e exige tudo na memória, enquanto o `defaultdict` agrupa numa passada.
+
+::: {#fig-groupby-consecutivo}
+```{.tikz}
+%%| filename: groupby-consecutivo
+%%| alt: A mesma sequencia agrupada sem ordenacao previa produzindo cinco grupos e com ordenacao produzindo tres grupos
+\begin{tikzpicture}[
+  itm/.style={draw=manualblue, thick, rounded corners, fill=manualblue!11,
+              minimum height=0.7cm, minimum width=0.8cm,
+              font=\ttfamily\small},
+  grp/.style={draw=manualred, very thick, rounded corners, dashed,
+              inner sep=3.5pt},
+  gok/.style={draw=manualgreen, very thick, rounded corners, inner sep=3.5pt},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-7.0);
+
+  \node[ttl] at (-0.4, 2.9) {sem ordenar --- \texttt{groupby} agrupa só o que é vizinho};
+  \foreach \idx/\vlr in {0/a, 1/b, 2/a, 3/a, 4/c, 5/b}
+    {\node[itm] at (1.4+\idx*1.4, 1.7) {\vlr};}
+  \draw[grp] (0.88, 1.25) rectangle (1.92, 2.15);
+  \draw[grp] (2.28, 1.25) rectangle (3.32, 2.15);
+  \draw[grp] (3.68, 1.25) rectangle (6.12, 2.15);
+  \draw[grp] (6.48, 1.25) rectangle (7.52, 2.15);
+  \draw[grp] (7.88, 1.25) rectangle (8.92, 2.15);
+  \node[lb, text=manualred] at (10.4, 1.7) {5 grupos para 3 valores};
+  \node[lb, text=manualred] at (10.4, 1.1) {a chave ``a'' aparece 2 vezes};
+
+  \node[ttl] at (-0.4,-0.6) {ordenado pela mesma chave --- o resultado esperado};
+  \foreach \idx/\vlr in {0/a, 1/a, 2/a, 3/b, 4/b, 5/c}
+    {\node[itm] at (1.4+\idx*1.4,-1.8) {\vlr};}
+  \draw[gok] (0.88,-2.25) rectangle (4.72,-1.35);
+  \draw[gok] (5.08,-2.25) rectangle (7.52,-1.35);
+  \draw[gok] (7.88,-2.25) rectangle (8.92,-1.35);
+  \node[lb, text=manualgreen!55!black] at (10.4,-1.8) {3 grupos, um por valor};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.0)
+    {O \texttt{groupby} é o \texttt{uniq} do Unix, não o \texttt{GROUP BY} do SQL:
+     ele quebra o fluxo sempre que a chave muda em relação ao elemento anterior.
+     Isso é o que permite agrupar um arquivo maior que a memória --- e é o que
+     produz relatório errado, sem erro nenhum, quando a ordenação foi esquecida.
+     Dado que já chega ordenado (consulta com \texttt{ORDER BY}, log em ordem
+     cronológica) é o caso em que ele brilha; dado desordenado pede
+     \texttt{defaultdict(list)}.};
+\end{tikzpicture}
+```
+`groupby` quebra o fluxo a cada mudança de chave — só isso.
+:::
+
+Há uma segunda armadilha, e ela apaga dados:
+
+```text
+consumir o grupo depois e vazio:
+   [('a', []), ('b', []), ('c', [])]
+```
+
+O grupo é um iterador **compartilhado com o iterador principal**: assim que `groupby` avança para o próximo grupo, o anterior fica esgotado. Guardar os grupos numa lista para usar depois devolve listas vazias. A regra é consumir cada grupo **dentro** do laço — com `list(grupo)`, `sum(...)` ou o que for — antes de pedir o próximo.
+
+## Acumular, parear, combinar
+
+```text
+accumulate soma  : [1, 3, 6, 10, 15]
+accumulate max   : [3, 3, 4, 4, 5]
+accumulate inicial: [100, 101, 103, 106]
+```
+
+`accumulate` produz as somas parciais — saldo corrente, total acumulado num relatório. Com uma função de dois argumentos, produz qualquer varredura: `max` dá o máximo até aqui, o que resolve "recorde histórico" numa linha. Com `initial=`, começa de um saldo anterior.
+
+```text
+pairwise    : [(10, 12), (12, 15), (15, 11)]
+```
+
+`pairwise` (3.10+) entrega cada elemento com o seguinte. É a ferramenta para diferenças sucessivas, detecção de degrau e validação de sequência — e substitui o `zip(lista, lista[1:])`, que só funciona em sequência indexável e ainda faz uma cópia.
+
+```text
+product     : [('a', 1), ('a', 2), ('b', 1), ('b', 2)]
+permutations: [('a', 'b'), ('a', 'c'), ('b', 'a'), ('b', 'c'), ('c', 'a'), ('c', 'b')]
+combinations: [('a', 'b'), ('a', 'c'), ('a', 'd'), ('b', 'c'), ('b', 'd'), ('c', 'd')]
+comb c/ rep : [('a', 'a'), ('a', 'b'), ('b', 'b')]
+zip_longest : [(1, 'a'), (2, 'b'), (3, '-')]
+```
+
+`product` é o laço aninhado escrito como expressão — e `product(x, repeat=3)` substitui três `for` encaixados. Em `permutations` a ordem importa e em `combinations` não; a diferença fica clara comparando as duas saídas. `zip_longest` completa o mais curto com `fillvalue` em vez de truncar, que é o que `zip` faz em silêncio (e é onde `zip(..., strict=True)`, da 3.10, entra como rede de segurança).
+
+Cuidado com a explosão combinatória: `product` de cinco listas de dez elementos são cem mil tuplas. Como são iteradores preguiçosos, nada estoura na criação — estoura no `list()`.
+
+```text
+batched     : [(0, 1, 2), (3, 4, 5), (6, 7, 8), (9,)]
+```
+
+`batched` (3.12+) fatia um iterável em blocos de tamanho fixo, com o último possivelmente menor. É o que todo mundo escrevia à mão para inserir em lote no banco ou paginar chamadas de API.
+
+## Filtros que param
+
+```text
+takewhile   : [-29.8, -31.7]
+dropwhile   : [-21.4, -30.1, -27.0]
+filterfalse : [-21.4, -27.0]
+compress    : ['a', 'c', 'e']
+```
+
+A diferença entre `takewhile` e `filter` é essencial: `filter` testa **todos** os elementos; `takewhile` **para** no primeiro que falha. Num arquivo de log ordenado por data, `takewhile` deixa de ler assim que passa da data procurada — em dez gigabytes, a diferença é o dia inteiro. `dropwhile` é o complemento: descarta o começo e entrega todo o resto, sem testar mais nada.
+
+`compress` seleciona por uma máscara paralela, e é o padrão para aplicar um filtro já calculado a várias sequências ao mesmo tempo.
+
+## `tee` e o preço de duplicar um iterador
+
+```text
+soma via t1 : -140.0
+max via t2  : -21.4
+fonte original apos tee: []
+```
+
+`tee` permite percorrer o mesmo iterador duas vezes — mas as duas últimas linhas contam a história completa: o iterador original ficou **vazio**, porque `tee` o consome, e para servir os dois consumidores ele mantém em memória tudo que um leu e o outro ainda não. Se um percorre o fluxo inteiro antes de o outro começar, `tee` guarda o fluxo inteiro — a economia de memória desapareceu.
+
+`tee` só compensa quando os dois consumidores avançam mais ou menos juntos. Para "somar e achar o máximo", uma passada única que faz as duas contas é melhor; se os dados cabem na memória, `list()` é mais honesto do que `tee`.
+
+## A economia que justifica tudo
+
+```text
+lista intermediaria : pico    84.34 MiB  total 999999000000
+gerador             : pico     0.45 KiB  total 999999000000
+```
+
+Somar os pares até dois milhões custou 84 MiB com listas intermediárias e menos de meio kilobyte com iteradores — o mesmo resultado. É a mesma lição do @sec-cap050, agora com o vocabulário completo para escrever tubos inteiros sem materializar nenhum estágio.
+
+## `functools`: `lru_cache`
+
+Memoização é o segundo dos dois casos que abriram o capítulo. `lru_cache` a instala com uma linha:
+
+```python
+@functools.lru_cache(maxsize=None)
+def fib(n):
+    return n if n < 2 else fib(n - 1) + fib(n - 2)
+```
+
+```text
+sem cache fib(30) :   0.0942 s -> 832040
+com cache fib(30) : 0.000057 s -> 832040
+cache_info        : CacheInfo(hits=28, misses=31, maxsize=None, currsize=31)
+apos clear        : CacheInfo(hits=0, misses=0, maxsize=None, currsize=0)
+```
+
+Mil e seiscentas vezes mais rápido, com o mesmo resultado. O `cache_info()` mostra por quê: 31 cálculos e 28 acertos. Sem cache, a recursão recalcula as mesmas subárvores exponencialmente.
+
+::: {#fig-cache-recursao}
+```{.tikz}
+%%| filename: cache-recursao
+%%| alt: A arvore de chamadas de fib de 4 sem cache com subarvores repetidas, e com cache em que as repeticoes viram acertos sem descer
+\begin{tikzpicture}[
+  nd/.style={draw=manualblue, thick, circle, fill=manualblue!11,
+             inner sep=1.4pt, minimum size=0.78cm, font=\ttfamily\scriptsize},
+  rep/.style={draw=manualred, very thick, circle, fill=manualred!10,
+              inner sep=1.4pt, minimum size=0.78cm, font=\ttfamily\scriptsize},
+  hit/.style={draw=manualgreen, very thick, circle, fill=manualgreen!16,
+              inner sep=1.4pt, minimum size=0.78cm, font=\ttfamily\scriptsize},
+  seg/.style={manualgray, thick},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-6.6);
+
+  \node[ttl] at (-0.4, 3.1) {\texttt{fib(4)} sem cache --- 9 chamadas};
+  \node[nd] (a4) at (3.0, 2.2) {f(4)};
+  \node[nd] (a3) at (1.5, 1.1) {f(3)};
+  \node[rep] (a2b) at (4.6, 1.1) {f(2)};
+  \node[nd] (a2) at (0.7, 0.0) {f(2)};
+  \node[rep] (a1b) at (2.3, 0.0) {f(1)};
+  \node[nd] (a1c) at (3.9,-1.1) {f(1)};
+  \node[nd] (a0c) at (5.3,-1.1) {f(0)};
+  \node[nd] (a1) at (0.1,-1.1) {f(1)};
+  \node[nd] (a0) at (1.4,-1.1) {f(0)};
+  \draw[seg] (a4) -- (a3);  \draw[seg] (a4) -- (a2b);
+  \draw[seg] (a3) -- (a2);  \draw[seg] (a3) -- (a1b);
+  \draw[seg] (a2) -- (a1);  \draw[seg] (a2) -- (a0);
+  \draw[seg] (a2b) -- (a1c); \draw[seg] (a2b) -- (a0c);
+  \node[lb, text=manualred] at (6.2, 1.1) {já foi calculado antes};
+
+  \node[ttl] at (8.0, 3.1) {com \texttt{lru\_cache} --- 5 cálculos};
+  \node[nd] (b4) at (11.4, 2.2) {f(4)};
+  \node[nd] (b3) at (9.9, 1.1) {f(3)};
+  \node[hit] (b2b) at (13.0, 1.1) {f(2)};
+  \node[nd] (b2) at (9.1, 0.0) {f(2)};
+  \node[hit] (b1b) at (10.7, 0.0) {f(1)};
+  \node[nd] (b1) at (8.5,-1.1) {f(1)};
+  \node[nd] (b0) at (9.8,-1.1) {f(0)};
+  \draw[seg] (b4) -- (b3);  \draw[seg] (b4) -- (b2b);
+  \draw[seg] (b3) -- (b2);  \draw[seg] (b3) -- (b1b);
+  \draw[seg] (b2) -- (b1);  \draw[seg] (b2) -- (b0);
+  \node[lb, text=manualgreen!55!black] at (11.6, 0.0) {acerto:\\não desce};
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.4)
+    {Cada nó em vermelho é uma subárvore inteira recalculada do zero; com o cache
+     ela vira uma consulta e os filhos deixam de existir. Em \texttt{fib(4)} a
+     economia é modesta, mas ela é exponencial: o \texttt{fib(30)} medido caiu de
+     0,0942 s para 0,000057 s, e o \texttt{cache\_info} reportou 31 cálculos
+     contra 28 acertos. O ganho só existe porque a função é pura --- mesma
+     entrada, mesma saída, sem efeito colateral.};
+\end{tikzpicture}
+```
+O cache troca a subárvore repetida por uma consulta.
+:::
+
+Três condições e uma armadilha. O cache exige que a função seja **pura**: mesma entrada, mesma saída, sem efeito colateral. Memoizar uma função que lê o banco de dados devolve dado velho para sempre; memoizar uma que grava arquivo faz a gravação acontecer uma vez só.
+
+Os argumentos precisam ser *hashable*:
+
+```text
+onu-00043
+TypeError: unhashable type: 'list'
+```
+
+Passar uma lista ou um dicionário levanta `TypeError` — a solução é converter para tupla ou `frozenset` na fronteira.
+
+E `maxsize=None` (ou o `@functools.cache` da 3.9, que é o mesmo) significa **cache sem limite**: numa função chamada com muitas entradas distintas, é vazamento de memória com outro nome. Em serviço de longa duração, prefira um `maxsize` explícito. Cuidado especial com método de instância decorado: o `self` entra na chave, o cache é da classe, e a instância nunca é coletada.
+
+## `partial`, `reduce` e os decoradores restantes
+
+```text
+partial   : 127.0.0.1:8080 timeout=5.0 tls=False
+func/args : conectar ('127.0.0.1',) {'timeout': 5.0, 'tls': False}
+```
+
+`partial` fixa argumentos e devolve um chamável novo. É a alternativa legível ao `lambda` para adaptar uma função a uma API que espera um argumento só — *callback*, `key=` de ordenação, `map`. E, ao contrário do `lambda`, ela preserva acesso à função original e aos argumentos fixados, o que ajuda na depuração e no `repr`.
+
+```text
+reduce soma : 10
+sum e melhor: 10
+reduce util : {1, 2, 3, 4}
+```
+
+`reduce` saiu dos embutidos no Python 3 por decisão de Guido: quase todo uso real é `sum`, `min`, `max`, `any` ou `all`, que são mais legíveis. Ele continua útil quando a operação de dobra não tem embutido próprio — unir uma lista de conjuntos, compor uma cadeia de transformações. Se precisar de `reduce` com um `lambda` de três linhas, um laço `for` explícito é mais legível.
+
+```text
+1a leitura : -27.633 | calculos: 1
+2a leitura : -27.633 | calculos: 1
+```
+
+`cached_property` calcula na primeira leitura e guarda o resultado **na instância** — o contador confirma que o cálculo aconteceu uma vez. É o padrão para atributo derivado e caro. O preço é que o valor nunca é recalculado: se os dados do objeto mudam, a propriedade mente. Use em objeto imutável na prática, ou apague o atributo (`del obj.media`) para forçar o recálculo.
+
+```text
+float : -29.80 dBm
+list  : -29.80 dBm, -31.74 dBm
+outro : <dict: {'a': 1}>
+```
+
+`singledispatch` transforma uma função em ponto de despacho por tipo do primeiro argumento — a alternativa ao `if isinstance(...)` em cascata, e a forma de estender o comportamento para um tipo novo **sem tocar** na função original. O registro pela anotação de tipo (3.7+) deixa o código limpo.
+
+```text
+ordenado : [Potencia(-31.7), Potencia(-29.8), Potencia(-21.4)]
+maior?   : True | <= : False
+```
+
+`total_ordering` completa os seis operadores de comparação a partir de `__eq__` e um só dos outros. É conveniência sobre o que o @sec-cap048 mostrou: escreve-se dois métodos, ganham-se seis. As implementações geradas são um pouco mais lentas que as escritas à mão — o que importa em ordenação de milhões de itens e em mais nada.
+
+E, claro, `functools.wraps`, que o @sec-cap051 já usou: sem ele, o decorador apaga nome e docstring da função decorada.
+
+## 🐍 Jeito Pythônico
+
+**Ordene antes do `groupby`, ou use `defaultdict`.** A escolha é sobre a origem dos dados:
+
+```python
+# antipadrão: relatório silenciosamente errado
+for chave, grupo in groupby(registros, key=itemgetter("onu")):
+    ...
+```
+
+```python
+# pythônico quando os dados já vêm ordenados (SQL com ORDER BY, log cronológico)
+for chave, grupo in groupby(registros, key=itemgetter("onu")):
+    ...
+
+# pythônico quando não vêm: uma passada, sem ordenar
+por_onu = defaultdict(list)
+for r in registros:
+    por_onu[r["onu"]].append(r)
+```
+
+**Consuma cada grupo dentro do laço.** Guardar o iterador do grupo para depois devolve vazio.
+
+**`takewhile` em vez de `filter` quando a entrada é ordenada** — ele para em vez de percorrer o resto.
+
+**`islice` antes de qualquer iterador infinito**, e antes de qualquer `print` de depuração sobre um gerador grande.
+
+**`batched` (3.12+) para lotes**, no lugar do laço com índice e fatiamento.
+
+**`pairwise` para diferenças sucessivas**, no lugar de `zip(x, x[1:])`.
+
+**`lru_cache` só em função pura, e com `maxsize` em serviço longo.** `@cache` sem limite é ótimo em script e é vazamento em servidor.
+
+**`partial` no lugar de `lambda` para fixar argumento** — preserva introspecção.
+
+**`cached_property` para atributo derivado caro**, lembrando que ele não se atualiza.
+
+**`singledispatch` no lugar da cascata de `isinstance`** quando o conjunto de tipos pode crescer.
+
+Uma nota de altitude: essas ferramentas encurtam código, mas encadear seis funções de `itertools` numa expressão só produz uma linha que ninguém lê. Se a composição não couber confortavelmente numa linha e num nome, um gerador escrito com `yield` costuma ser mais claro — e é igualmente preguiçoso.
+
+Sobre versões:
+
+- **Python 3.2** — `lru_cache` e `total_ordering`.
+- **Python 3.4** — `singledispatch`, e `partialmethod`.
+- **Python 3.7** — `singledispatch` passa a aceitar o registro pela anotação de tipo.
+- **Python 3.8** — `cached_property` e `singledispatchmethod`; `accumulate` ganha `initial=`.
+- **Python 3.9** — `functools.cache`, apelido de `lru_cache(maxsize=None)`.
+- **Python 3.10** — `itertools.pairwise`; `zip(..., strict=True)` como alternativa segura ao `zip_longest`.
+- **Python 3.12** — `itertools.batched`.
+- **Python 3.13** — `batched` ganha o parâmetro `strict=`, que recusa um último lote incompleto.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o erro do `groupby`, medir o `lru_cache` e montar um tubo de análise que roda em memória constante.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab58 && cd ~/lab58
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. Infinito com limite.** Confirme `islice(count(10, 5), 5)`. Depois **não** rode `list(count())` — em vez disso, escreva num comentário o que aconteceria e por quê.
+
+**3. O erro do `groupby`.** Agrupe `["a","b","a","a","c","b"]` sem ordenar e confirme:
+
+```text
+grupos gerados: 5 | valores distintos: 3
+```
+
+Ordene e confirme que passam a ser 3. Depois faça o mesmo com registros reais agrupados por ONU e verifique que a média de uma das ONUs sai errada na versão sem ordenação — este é o ponto do laboratório.
+
+**4. O grupo que evapora.** Guarde os pares `(chave, grupo)` numa lista e só depois converta cada grupo:
+
+```text
+   [('a', []), ('b', []), ('c', [])]
+```
+
+Corrija consumindo dentro do laço.
+
+**5. `takewhile` que economiza.** Gere um arquivo de 500 mil linhas ordenadas por data. Conte quantas linhas são lidas para pegar só as do primeiro dia, com `filter` e com `takewhile` — instrumente com um contador global no predicado. A diferença no número de testes é o resultado do exercício.
+
+**6. `accumulate` e `pairwise`.** Calcule o saldo corrente de uma lista de movimentações com `accumulate`, e as variações entre leituras consecutivas com `pairwise`. Depois use `accumulate(valores, max)` para achar o recorde histórico a cada ponto.
+
+**7. `batched`.** Divida 10 mil registros em lotes de 500 e imprima o tamanho de cada lote. Confirme que o último pode ser menor, e teste `strict=True` (3.13+) com um total que não divide exato.
+
+**8. A medida do cache.** Compare `fib(30)` com e sem `lru_cache`:
+
+```text
+sem cache fib(30) :   0.0942 s -> 832040
+com cache fib(30) : 0.000057 s -> 832040
+cache_info        : CacheInfo(hits=28, misses=31, maxsize=None, currsize=31)
+```
+
+Depois tente `fib(35)` sem cache e cronometre — e explique por que o tempo cresceu tanto mais que a entrada.
+
+**9. As armadilhas do cache.** Decore uma função que recebe uma lista e confirme o `TypeError`. Corrija recebendo tupla. Depois decore uma função que lê a hora atual (`datetime.now()`) e confirme que ela devolve o mesmo valor para sempre — escreva por que isso é o comportamento correto do cache e um bug do seu código.
+
+**10. `partial` e `singledispatch`.** Reescreva três `lambda` de `key=` usando `partial` e `itemgetter`. Depois implemente `formatar` com `singledispatch` para `float`, `list` e `dict`, e acrescente um tipo novo **sem editar** a função original.
+
+**11. O tubo completo.** Escreva `analise.py` que lê um CSV grande (gere 1 milhão de linhas), e em uma única passada preguiçosa: descarta cabeçalho com `islice`, converte com `map`, filtra com `filterfalse`, agrupa por dia com `groupby` (o arquivo já está ordenado por data) e grava um resumo. Meça o pico com `tracemalloc` e confirme que ele **não** cresce com o tamanho do arquivo — dobre as linhas e refaça a medida.
+
+## Resumo
+
+- `itertools` compõe iteradores sem materializar nenhum estágio; `functools` compõe funções.
+- `count`, `cycle` e `repeat` são infinitos e exigem `islice`, `takewhile` ou `break` — `list()` neles trava o processo.
+- `chain` percorre várias sequências como uma só, sem concatenar; `chain.from_iterable` achata um nível de uma coleção preguiçosa.
+- `groupby` agrupa apenas elementos **consecutivos**: é o `uniq`, não o `GROUP BY`. Sem ordenação prévia produz grupos repetidos e relatório errado, sem erro nenhum.
+- O iterador de cada grupo é compartilhado e se esgota quando `groupby` avança: consuma dentro do laço.
+- Dado desordenado pede `defaultdict(list)`, que agrupa numa passada; dado já ordenado pede `groupby`, que funciona em arquivo maior que a memória.
+- `takewhile` para no primeiro elemento que falha, enquanto `filter` testa todos — a diferença é enorme em entrada ordenada e grande.
+- `tee` consome o iterador original e guarda em memória o que um consumidor leu e o outro não: só compensa quando os dois avançam juntos.
+- `pairwise` (3.10) para diferenças sucessivas e `batched` (3.12) para lotes substituem os laços com índice que todo mundo escrevia.
+- Iteradores mantiveram o pico de memória em 0,45 KiB onde as listas intermediárias custaram 84 MiB, com resultado idêntico.
+- `lru_cache` fez `fib(30)` cair de 0,0942 s para 0,000057 s, mas exige função pura, argumentos *hashable*, e `maxsize` limitado em serviço de longa duração.
+- `partial` fixa argumentos preservando introspecção; `cached_property` guarda atributo derivado e nunca o atualiza; `singledispatch` substitui a cascata de `isinstance`; `total_ordering` gera seis comparações a partir de duas.
+
+Com estruturas (@sec-cap057) e composição (este capítulo), falta o cálculo. O @sec-cap059 fecha o trio com `math`, `statistics` e `random` — incluindo por que `sum(valores)/len(valores)` é pior que `statistics.mean`, e por que o `random` padrão jamais deve gerar uma senha.
