@@ -1,3 +1,600 @@
 # Decoradores de função {#sec-cap051}
 
-*(em elaboracao)*
+O tubo de geradores do @sec-cap050 entrou em produção e a primeira pergunta da operação foi previsível: qual etapa está lenta? A resposta exige medir cada uma, e a forma óbvia é editar cada função:
+
+```python
+def coletar():
+    inicio = time.perf_counter()
+    ...
+    dt = time.perf_counter() - inicio
+    print(f"coletar levou {dt:.1f}s")
+```
+
+Repetido em oito funções, com o nome escrito à mão em cada uma. Quando a operação pedir também um `log` de quem chamou, e depois uma repetição automática em caso de falha de rede, o corpo de cada função vai ter mais infraestrutura do que trabalho — e a lógica que interessa fica soterrada.
+
+O problema é conhecido: um comportamento transversal, que vale para muitas funções e não pertence a nenhuma. Python resolve isso com uma construção que já apareceu várias vezes neste manual sem ser explicada — o `@property` do @sec-cap042, o `@staticmethod` do @sec-cap045, o `@dataclass` do @sec-cap046, o `@total_ordering` do @sec-cap048. Todos são decoradores, e todos são a mesma ideia simples: uma função que recebe uma função e devolve outra no lugar.
+
+## Uma função que devolve função
+
+O @sec-cap021 estabeleceu que funções são objetos: podem ser passadas, guardadas e devolvidas. O @sec-cap020 mostrou que uma função aninhada lembra o ambiente onde nasceu. Um decorador é exatamente essas duas coisas juntas:
+
+```python
+def temporizador(func):
+    print(f"  [decorando {func.__name__}]")
+
+    def envelope():
+        inicio = time.perf_counter()
+        resultado = func()
+        dt = time.perf_counter() - inicio
+        print(f"  [{func.__name__} levou {dt:.1f}s]")
+        return resultado
+
+    return envelope
+```
+
+`temporizador` não mede nada. Ele constrói e devolve `envelope`, uma função nova que — por ser uma *closure* — lembra qual `func` deve chamar. Usá-lo é reatribuir o nome:
+
+```python
+coletar = temporizador(coletar)
+```
+
+```text
+1. sem acucar sintatico
+  [decorando coletar]
+  [coletar levou 0.1s]
+   resultado: ['onu-00043', 'onu-00045']
+   nome agora: envelope
+```
+
+O nome `coletar` agora aponta para o `envelope`. Quem chamar `coletar()` chamará o envelope, que cronometra e delega. A função original não sumiu — continua viva, referenciada pela *closure*, e só é alcançável por ali.
+
+A sintaxe `@` é açúcar para essa reatribuição, e nada mais:
+
+```python
+@temporizador
+def exportar():
+    ...
+```
+
+```text
+  [decorando exportar]
+
+2. com o @, identico
+  [exportar levou 0.1s]
+   resultado: exportado
+```
+
+Repare **quando** o `[decorando exportar]` foi impresso: na definição, antes de qualquer chamada. Um decorador roda no momento em que o módulo é importado. Isso é a fonte de metade dos comportamentos surpreendentes deste capítulo — e de recursos úteis, como registrar automaticamente tudo que foi definido.
+
+## Embrulhando qualquer assinatura
+
+O `envelope` acima só serve para funções sem argumentos. A forma geral usa `*args` e `**kwargs`, que o @sec-cap019 apresentou:
+
+```python
+def registra(func):
+    def envelope(*args, **kwargs):
+        print(f"  [{func.__name__}({args}, {kwargs})]")
+        return func(*args, **kwargs)
+
+    return envelope
+```
+
+```text
+  [somar((2, 3), {})]
+posicionais : 5
+  [formatar(('onu-00043',), {'casas': 2})]
+nomeados    : onu-00043 (dBm, 2 casas)
+```
+
+O mesmo decorador serve para as duas funções, com assinaturas diferentes: `*args, **kwargs` aceita tudo e repassa tudo. É a forma canônica, e vale escrevê-la assim mesmo quando a função decorada é conhecida — porque a assinatura dela pode mudar.
+
+O erro mais frequente do capítulo inteiro cabe numa linha esquecida:
+
+```python
+def esquecido(func):
+    def envelope(*args, **kwargs):
+        func(*args, **kwargs)          # faltou o return
+    return envelope
+```
+
+```text
+decorador sem return devolve: None
+```
+
+A função decorada passou a devolver `None`. Sem exceção, sem aviso: o valor foi calculado, e jogado fora. Toda função decorada por esse decorador vira uma função que não retorna nada — e o `None` só causa erro alguns quadros de pilha adiante, longe da causa.
+
+## O que o envelope apaga
+
+Trocar a função por outra tem um custo:
+
+```text
+envelope   doc=None
+           assinatura=(*args, **kwargs)
+mediana    doc='Devolve a mediana das leituras.'
+           assinatura=(valores, casas=1)
+```
+
+A primeira linha é a função decorada por um decorador ingênuo. Ela se chama `envelope`, não tem *docstring*, e sua assinatura declarada é `(*args, **kwargs)`. O `help()` fica inútil, o `repr` mente, o depurador mostra o nome errado, e ferramentas que dependem de introspecção — `pytest`, Sphinx, frameworks web que leem parâmetros — deixam de funcionar.
+
+A correção é uma linha:
+
+```python
+from functools import wraps
+
+
+def preservado(func):
+    @wraps(func)
+    def envelope(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    return envelope
+```
+
+```text
+o original ainda esta acessivel: mediana
+mas nao no decorador cru       : False
+```
+
+`@wraps(func)` copia `__name__`, `__doc__`, `__module__`, `__qualname__` e as anotações do original para o envelope, e ainda guarda a função original em `__wrapped__` — que é o que permite a `inspect.signature` mostrar a assinatura verdadeira. Trate `@wraps` como obrigatório: um decorador sem ele é um decorador quebrado. O que exatamente ele copia, e o que ainda escapa, é assunto do @sec-cap052.
+
+## Decorador com parâmetro: três camadas
+
+Um decorador configurável — "repita três vezes", "espere dois segundos" — precisa de mais um nível. `@repetir(3)` não é o decorador: é uma chamada **cujo resultado** é o decorador.
+
+```python
+def repetir(vezes):
+    print(f"  [1. fabrica chamada com vezes={vezes}]")
+
+    def decorador(func):
+        print(f"  [2. decorador chamado com {func.__name__}]")
+
+        @wraps(func)
+        def envelope(*args, **kwargs):
+            print(f"  [3. envelope rodando {vezes}x]")
+            for _ in range(vezes):
+                resultado = func(*args, **kwargs)
+            return resultado
+
+        return envelope
+
+    return decorador
+```
+
+```text
+na definicao da funcao:
+  [1. fabrica chamada com vezes=3]
+  [2. decorador chamado com sondar]
+
+so agora, na chamada:
+  [3. envelope rodando 3x]
+      sondando onu-00043
+      sondando onu-00043
+      sondando onu-00043
+resultado: onu-00043 ok
+```
+
+A saída separa os dois tempos com clareza. As camadas 1 e 2 rodaram na **definição** da função, uma vez cada. A camada 3 roda a cada **chamada**. É a mesma distinção do decorador simples, com um degrau a mais.
+
+::: {#fig-tres-camadas}
+```{.tikz}
+%%| filename: tres-camadas
+%%| alt: As tres camadas de um decorador com parametro - a fabrica que recebe a configuracao, o decorador que recebe a funcao e o envelope que recebe os argumentos da chamada
+\begin{tikzpicture}[
+  src/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=4.6cm, align=left, minimum height=1.1cm,
+              font=\ttfamily\scriptsize},
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.4cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.4cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-7.6);
+
+  \node[src] (fonte) at (2.6, 2.7) {@repetir(3)\\def sondar(onu):};
+  \node[src, text width=6.0cm] (eq) at (10.0, 2.7)
+    {sondar = repetir(3)(sondar)};
+  \node[lb, anchor=center] at (5.95, 2.7) {equivale a};
+
+  \node[bx] (c1) at (3.0, 1.0) {repetir(3)\\devolve decorador};
+  \node[bx] (c2) at (3.0,-0.9) {decorador(sondar)\\devolve envelope};
+  \node[cx] (c3) at (3.0,-2.8) {envelope(onu)\\chama sondar 3x};
+
+  \draw[fl] (c1) -- (c2);
+  \draw[fl] (c2) -- (c3);
+
+  \node[lb, text width=8.4cm] at (5.6, 1.0)
+    {\textbf{camada 1 --- a fábrica.} Recebe a configuração do decorador.
+     Roda \emph{uma vez}, na definição.};
+  \node[lb, text width=8.4cm] at (5.6,-0.9)
+    {\textbf{camada 2 --- o decorador.} Recebe a função. Roda \emph{uma vez},
+     na definição, logo depois.};
+  \node[lb, text width=8.4cm, text=manualgreen!55!black] at (5.6,-2.8)
+    {\textbf{camada 3 --- o envelope.} Recebe os argumentos da chamada. Roda
+     \emph{a cada chamada}.};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.2)
+    {Sem parâmetro, as camadas 1 e 2 se fundem numa só --- por isso
+     \texttt{@temporizador} não leva parênteses e \texttt{@repetir(3)} leva. A
+     configuração fica presa na \emph{closure} das camadas de dentro, que é
+     onde \texttt{vezes} continua visível quando o envelope roda, muito depois
+     de a fábrica ter terminado.};
+\end{tikzpicture}
+```
+Um decorador com parâmetro tem três camadas, e cada uma roda num momento diferente.
+:::
+
+Essa diferença explica um erro comum: escrever `@repetir` sem os parênteses. O decorador receberia a **função** onde espera o número `3`, e o `for _ in range(vezes)` falharia com um `TypeError` obscuro, na primeira chamada, sobre um objeto função não ser inteiro.
+
+Dá para aceitar as duas formas, com um `func=None` e argumentos só nomeados:
+
+```python
+def tentar(func=None, *, vezes=2):
+    def decorador(f):
+        @wraps(f)
+        def envelope(*args, **kwargs):
+            for tentativa in range(1, vezes + 1):
+                try:
+                    return f(*args, **kwargs)
+                except ValueError as e:
+                    print(f"      tentativa {tentativa} falhou: {e}")
+            raise RuntimeError(f"{f.__name__} falhou {vezes} vezes")
+
+        return envelope
+
+    if func is None:
+        return decorador
+    return decorador(func)
+```
+
+```text
+      tentativa 1 falhou: link oscilando
+@tentar sem parenteses  : estabilizou
+      tentativa 1 falhou: fibra rompida
+      tentativa 2 falhou: fibra rompida
+      tentativa 3 falhou: fibra rompida
+@tentar(vezes=3)        : sempre_ruim falhou 3 vezes
+```
+
+`@tentar` e `@tentar(vezes=3)` funcionam. O `*` na assinatura é essencial: obriga os parâmetros de configuração a serem nomeados, e assim `func` nunca é confundido com eles. É o padrão que `dataclasses.dataclass` usa.
+
+## Empilhamento
+
+Vários decoradores sobre a mesma função se aplicam de baixo para cima:
+
+```python
+@marcar("A")
+@marcar("B")
+@marcar("C")
+def alvo():
+    ...
+```
+
+```text
+ordem de APLICACAO (de baixo para cima):
+  [aplicando C sobre alvo]
+  [aplicando B sobre alvo]
+  [aplicando A sobre alvo]
+
+ordem de EXECUCAO (de cima para baixo):
+    entra A
+    entra B
+    entra C
+      corpo de alvo
+    sai   C
+    sai   B
+    sai   A
+```
+
+Duas ordens opostas, e as duas importam. A **aplicação** vai de baixo para cima porque `alvo = A(B(C(alvo)))` — o mais próximo da `def` embrulha primeiro. A **execução** vai de fora para dentro, porque `A` é a camada mais externa: ela entra primeiro e sai por último.
+
+(O `[aplicando B sobre alvo]` diz "alvo" e não "envelope" porque o `@wraps` de dentro de `C` já tinha restaurado o nome — um efeito colateral útil de decoradores bem escritos.)
+
+::: {#fig-empilhamento}
+```{.tikz}
+%%| filename: empilhamento
+%%| alt: Decoradores empilhados formam camadas concentricas - a aplicacao acontece de baixo para cima e a execucao de fora para dentro
+\begin{tikzpicture}[
+  src/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=3.4cm, align=left, minimum height=1.1cm,
+              font=\ttfamily\scriptsize},
+  cor/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!7},
+  ncl/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=2.6cm, align=center,
+              minimum height=0.8cm, font=\ttfamily\scriptsize},
+  rot/.style={font=\ttfamily\scriptsize, text=manualblue!70!black,
+              anchor=north west},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-7.0);
+
+  \node[src] (fonte) at (2.0, 1.9) {@A\\@B\\@C\\def alvo():};
+  \node[lb, text width=3.8cm] at (0.3,-0.6) {equivale a\\\texttt{alvo = A(B(C(alvo)))}};
+
+  \draw[cor] (6.0,-2.2) rectangle (13.8, 2.6);
+  \draw[cor] (6.8,-1.7) rectangle (13.0, 2.0);
+  \draw[cor] (7.6,-1.2) rectangle (12.2, 1.4);
+  \node[rot] at (6.15, 2.5) {A};
+  \node[rot] at (6.95, 1.9) {B};
+  \node[rot] at (7.75, 1.3) {C};
+  \node[ncl] at (9.9, 0.1) {corpo de alvo};
+
+  \node[lb, anchor=east, text width=2.4cm] at (5.8, 0.1) {a chamada entra};
+  \draw[fl] (5.9, 0.1) -- (7.5, 0.1);
+
+  \node[lb, text width=3.8cm] at (6.0,-2.9)
+    {execução: entra A, B, C --- sai C, B, A};
+  \node[lb, text width=3.2cm] at (10.4,-2.9)
+    {aplicação: C, B, A};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.8)
+    {O decorador mais próximo da \texttt{def} embrulha primeiro e fica na camada
+     mais \emph{interna}; o de cima fica na mais externa. Por isso a ordem
+     importa: um decorador de autenticação acima de um de cache barra o acesso
+     antes de consultar o cache, e abaixo dele serve resposta cacheada a quem
+     não deveria ver.};
+\end{tikzpicture}
+```
+Decoradores empilhados são camadas concêntricas: o de baixo é o mais interno.
+:::
+
+A ordem não é detalhe estético. Um `@autenticar` acima de um `@cache` verifica a permissão antes de consultar o cache; invertido, o cache responde antes de qualquer verificação. O mesmo vale para `@staticmethod`, que precisa ficar **por fora** — é o que o exemplo do fim deste capítulo mostra.
+
+## Decoradores com estado
+
+Contar chamadas exige guardar um número entre execuções, e há três lugares para pô-lo:
+
+```python
+def contar_closure(func):
+    chamadas = 0
+
+    @wraps(func)
+    def envelope(*args, **kwargs):
+        nonlocal chamadas
+        chamadas += 1
+        return func(*args, **kwargs)
+
+    envelope.chamadas = lambda: chamadas
+    return envelope
+
+
+def contar_atributo(func):
+    @wraps(func)
+    def envelope(*args, **kwargs):
+        envelope.chamadas += 1
+        return func(*args, **kwargs)
+
+    envelope.chamadas = 0
+    return envelope
+
+
+class Contar:
+    def __init__(self, func):
+        wraps(func)(self)
+        self.func = func
+        self.chamadas = 0
+
+    def __call__(self, *args, **kwargs):
+        self.chamadas += 1
+        return self.func(*args, **kwargs)
+```
+
+```text
+closure  : 3
+atributo : 3
+classe   : 3
+
+tipo de cada um:
+  a -> function
+  c -> Contar
+  c e chamavel? True | nome: c
+```
+
+Os três contam certo. A diferença é como o estado é lido de fora. A *closure* precisa de um acessório (`lambda`) porque `nonlocal` não é visível de fora. O atributo na função é o meio-termo idiomático: `b.chamadas` é direto, e funciona porque funções aceitam atributos arbitrários. A classe com `__call__` — o gancho do @sec-cap048 — é a mais explícita, com o estado num atributo comum de instância.
+
+O preço da classe está na saída: o objeto decorado deixa de ser uma `function` e passa a ser um `Contar`. Para uma função de módulo isso raramente incomoda. Para um **método**, incomoda muito: um objeto que não é função não implementa o protocolo de descritor, e por isso não recebe o `self` automaticamente — assunto do @sec-cap053. Decorador de método escrito como classe é uma fonte clássica de erro; para métodos, prefira a função aninhada.
+
+## Nem todo decorador embrulha
+
+Um decorador pode devolver a função **intacta** e usar o momento da definição para outra coisa:
+
+```python
+FORMATOS = {}
+
+
+def formato(nome):
+    def decorador(func):
+        FORMATOS[nome] = func
+        return func              # devolve intacta
+
+    return decorador
+
+
+@formato("csv")
+def como_csv(registros):
+    ...
+```
+
+```text
+registrados: ['csv', 'texto']
+csv        : onu-00043,-29.8
+a funcao nao foi embrulhada: como_csv
+```
+
+Nenhuma chamada foi interceptada, nenhum envelope foi criado, e `como_csv` continua sendo ela mesma. O decorador serviu só para registrar a função num catálogo no momento do `import`. É assim que funcionam as rotas do Flask e do FastAPI, os *fixtures* do pytest e os pontos de extensão de quase todo *framework* — e é um uso em que `@wraps` não faz falta, porque nada foi embrulhado.
+
+## Decorando métodos
+
+Um método é uma função definida dentro de uma classe, e o decorador a vê antes de qualquer mágica de `self`:
+
+```python
+class Coletor:
+    @registra
+    def sondar(self, onu):
+        return f"{self.pop}/{onu}"
+
+    @staticmethod
+    @registra
+    def validar(onu):
+        return onu.startswith("onu-")
+```
+
+```text
+  [args recebidos: (<__main__.Coletor object at 0x702ee7d5b230>, 'onu-00043')]
+metodo   : pop-centro/onu-00043
+  [args recebidos: ('onu-00045',)]
+estatico : True
+```
+
+(O endereço muda a cada execução.) A instância chega como o **primeiro elemento de `args`**, porque no momento da chamada `self` é só mais um argumento posicional. Um decorador escrito com `*args, **kwargs` funciona em métodos sem nenhuma adaptação — e um decorador que declara `def envelope(x)` não funciona.
+
+A ordem com `@staticmethod` importa, e o modo como ela falha é instrutivo:
+
+```text
+staticmethod POR FORA (recomendado):
+  Fora.m       -> ok onu-1
+  via instancia-> ok onu-2
+  tipo no dict : staticmethod
+
+staticmethod POR DENTRO:
+  Dentro.m     -> ok onu-3
+  via instancia-> TypeError: Dentro.m() takes 1 positional argument but 2 were given
+  tipo no dict : function
+```
+
+Com `@staticmethod` por dentro, a chamada pela **classe** funciona — desde o Python 3.10 um objeto `staticmethod` é chamável diretamente, e antes disso nem isso funcionava. Mas a chamada pela **instância** quebra: o que ficou no dicionário da classe é o `envelope`, uma função comum, então o acesso por instância o transforma em método vinculado e injeta `self`. O decorador repassa o `self` para uma função estática que não o espera.
+
+O sintoma é traiçoeiro porque depende de como o método é chamado: o teste que exercita `Classe.metodo(...)` passa, e o código de produção que usa `objeto.metodo(...)` falha. A regra é simples — `@staticmethod` e `@classmethod` sempre por fora, aplicados por último.
+
+## 🐍 Jeito Pythônico
+
+**`@wraps` sempre.** Um decorador sem ele apaga nome, *docstring* e assinatura, e quebra toda ferramenta que usa introspecção.
+
+```python
+# antipadrão
+def dec(func):
+    def envelope(*args, **kwargs):
+        return func(*args, **kwargs)
+    return envelope
+```
+
+```python
+# pythônico
+def dec(func):
+    @wraps(func)
+    def envelope(*args, **kwargs):
+        return func(*args, **kwargs)
+    return envelope
+```
+
+**`*args, **kwargs` no envelope, sempre** — inclusive quando a função decorada tem assinatura conhecida. É o que faz o decorador servir a métodos e sobreviver a mudanças de assinatura.
+
+**Não esqueça o `return`.** O envelope que chama e não devolve transforma toda função decorada numa que devolve `None`.
+
+**Argumentos de configuração só nomeados** (`def dec(func=None, *, vezes=2)`) quando o decorador precisa funcionar com e sem parênteses.
+
+**A ordem do empilhamento é semântica, não estilo.** Autenticação por fora do cache; `@staticmethod` e `@classmethod` sempre por fora.
+
+**Estado do decorador num atributo do envelope,** não numa variável global. `funcao.chamadas` é inspecionável e não colide.
+
+**Decorador de método: função aninhada, não classe com `__call__`** — o objeto de classe não implementa o protocolo de descritor e não recebe `self`.
+
+**Um decorador que só registra deve devolver a função intacta.** Embrulhar sem necessidade custa uma chamada extra e um quadro de pilha em todo traceback.
+
+**Cuidado com o que roda na importação.** O corpo do decorador executa no `import`; abrir conexão, ler arquivo ou consultar rede ali torna o *import* lento e frágil.
+
+Sobre versões:
+
+- **Python 2.4** — a sintaxe `@` para funções (PEP 318). Antes, só a reatribuição manual.
+- **Python 2.5** — `functools.wraps`.
+- **Python 3.0** — decoradores de classe (PEP 3129), assunto do @sec-cap052.
+- **Python 3.2** — `functools.wraps` passa a preencher `__wrapped__`, o que faz `inspect.signature` enxergar a assinatura original.
+- **Python 3.9** — a expressão do decorador deixa de ser restrita a nomes pontilhados e pode ser qualquer expressão (PEP 614): `@lista_de_decoradores[0]` passa a ser válido.
+
+## 🧪 Laboratório
+
+Objetivo: construir um decorador da forma manual até a versão com parâmetro, ver os dois momentos de execução, e reproduzir os quatro erros que mais aparecem.
+
+**1. Sem açúcar.**
+
+```bash
+mkdir -p ~/lab51 && cd ~/lab51
+```
+
+Em `manual.py`, escreva `temporizador` e aplique-o com `coletar = temporizador(coletar)`. Depois use `@temporizador` em outra função e confirme que o comportamento é idêntico. Repare em que momento o `print` de dentro do decorador aparece.
+
+**2. Qualquer assinatura.** Em `args_kwargs.py`, escreva o envelope com `*args, **kwargs` e decore duas funções de assinaturas diferentes. Depois troque por `def envelope(a, b)` e confirme que a segunda função quebra.
+
+**3. O `return` esquecido.** Remova o `return` do envelope e confirme:
+
+```text
+decorador sem return devolve: None
+```
+
+**4. Metadados.** Em `metadados.py`, compare um decorador cru com um `@wraps`:
+
+```text
+envelope   doc=None
+           assinatura=(*args, **kwargs)
+mediana    doc='Devolve a mediana das leituras.'
+           assinatura=(valores, casas=1)
+```
+
+Rode `help(media)` e `help(mediana)` e veja a diferença do lado de quem lê.
+
+**5. Três camadas.** Em `com_parametros.py`, ponha um `print` em cada camada de `@repetir(3)` e confirme que 1 e 2 rodam na definição e 3 a cada chamada. Depois escreva `@repetir` sem parênteses e leia o `TypeError` que aparece.
+
+**6. As duas formas.** Escreva `tentar(func=None, *, vezes=2)` e confirme que `@tentar` e `@tentar(vezes=3)` funcionam. Remova o `*` da assinatura e descubra o que quebra quando alguém escreve `@tentar(3)`.
+
+**7. Empilhamento.** Em `empilhados.py`, aplique três decoradores marcados e confirme as duas ordens:
+
+```text
+  [aplicando C sobre alvo]
+  [aplicando B sobre alvo]
+  [aplicando A sobre alvo]
+    entra A
+    entra B
+    entra C
+```
+
+**8. Estado.** Em `com_estado.py`, implemente o contador das três maneiras e confirme que os três dão 3. Compare `type(a)` com `type(c)`.
+
+**9. O decorador de método escrito como classe.** Aplique a classe `Contar` a um **método** de uma classe e chame-o numa instância. Leia o `TypeError` sobre o argumento faltando e relacione com o item anterior.
+
+**10. Registro.** Em `registro_e_metodo.py`, escreva o decorador que só cadastra e devolve a função intacta. Confirme que `como_csv.__name__` continua correto e que o dicionário foi preenchido **na importação** — importe o módulo sem chamar nada e verifique.
+
+**11. `self` no `args`.** Decore um método comum e confirme que a instância chega como primeiro elemento de `args`. Depois inverta a ordem de `@staticmethod` e `@registra` e teste as **duas** formas de chamar:
+
+```text
+  Dentro.m     -> ok onu-3
+  via instancia-> TypeError: Dentro.m() takes 1 positional argument but 2 were given
+```
+
+Confirme que só a chamada pela instância quebra, e explique por que um teste escrito como `Classe.metodo(...)` não pegaria o defeito.
+
+**12. O tubo instrumentado.** Volte ao tubo de geradores do @sec-cap050 e decore os três estágios com um `@contar_atributo`. Confirme que os contadores refletem a preguiça: pedir um único resultado incrementa cada estágio uma vez.
+
+## Resumo
+
+- Um decorador é uma função que recebe uma função e devolve outra; `@dec` acima de uma `def` é açúcar exato para `f = dec(f)`.
+- O corpo do decorador roda na **definição**, no momento do `import`; o envelope roda a cada **chamada**.
+- O envelope se escreve com `*args, **kwargs` e precisa **devolver** o resultado — esquecer o `return` faz toda função decorada devolver `None` em silêncio.
+- Trocar a função por um envelope apaga `__name__`, `__doc__` e a assinatura. `@wraps(func)` restaura tudo e grava `__wrapped__`; um decorador sem ele está quebrado.
+- Decorador com parâmetro tem três camadas: a fábrica recebe a configuração, o decorador recebe a função, o envelope recebe os argumentos. As duas primeiras rodam uma vez, na definição.
+- `def dec(func=None, *, opcao=...)` faz o decorador aceitar `@dec` e `@dec(opcao=...)`; o `*` é o que impede a confusão entre a função e a configuração.
+- Decoradores empilhados se aplicam de baixo para cima e executam de fora para dentro. A ordem é semântica: autenticação por fora do cache, `@staticmethod` por fora de tudo.
+- O estado de um decorador cabe na *closure*, num atributo do envelope ou numa classe com `__call__`; o atributo é o meio-termo idiomático, e a classe não serve para métodos.
+- Um decorador pode devolver a função intacta e usar apenas o momento da definição — é assim que funcionam registros de rotas, *plugins* e *fixtures*.
+- Em métodos, a instância chega como primeiro elemento de `args`, então um envelope genérico funciona sem adaptação.
+
+Decoradores mudam o que uma função faz sem tocar no corpo dela. A mesma sintaxe se aplica a classes, e a biblioteca padrão traz um punhado de decoradores prontos que resolvem problemas caros — memoização, despacho por tipo, ordenação total. O @sec-cap052 percorre esse arsenal e volta à questão dos metadados, para mostrar o que `@wraps` copia, o que ele não consegue copiar e como depurar uma pilha de decoradores quando o traceback vira uma escada de envelopes.

@@ -84,7 +84,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 048** - Métodos especiais: o protocolo por trás da sintaxe - `vol08/cap048-metodos-especiais-o-protocolo-por-tras-da.qmd`
 - [x] **cap 049** - Iteradores e o protocolo de iteração - `vol08/cap049-iteradores-e-o-protocolo-de-iteracao.qmd`
 - [x] **cap 050** - Geradores, yield e a avaliação preguiçosa - `vol08/cap050-geradores-yield-e-a-avaliacao-preguicosa.qmd`
-- [ ] **cap 051** - Decoradores de função - `vol08/cap051-decoradores-de-funcao.qmd`
+- [x] **cap 051** - Decoradores de função - `vol08/cap051-decoradores-de-funcao.qmd`
 - [ ] **cap 052** - Decoradores de classe, functools e metadados preservados - `vol08/cap052-decoradores-de-classe-functools-e-metadados.qmd`
 - [ ] **cap 053** - Descritores, `__slots__` e o acesso a atributos - `vol08/cap053-descritores-slots-e-o-acesso-a-atributos.qmd`
 - [ ] **cap 054** - Metaclasses e `__init_subclass__`: quando (não) usar - `vol08/cap054-metaclasses-e-init-subclass-quando-nao-usar.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (50 concluidos).
+**Total:** 104 capitulos em 16 volumes (51 concluidos).
 
