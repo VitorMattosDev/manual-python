@@ -1,3 +1,658 @@
 # JSON, CSV e formatos tabulares {#sec-cap062}
 
-*(em elaboracao)*
+O extrator do @sec-cap061 funciona: as 40 mil linhas de log viraram dicionários com `ip`, `rota`, `status` e `bytes`. Agora começa a segunda metade do trabalho, que é onde os dados costumam se perder — alguém precisa **guardar** isso, e outro alguém precisa **ler** o que foi guardado.
+
+A tentação, nesse ponto, é escrever o próprio formato: um campo por linha, separado por vírgula, fácil de gerar com f-string. Ele funciona por três semanas, até o dia em que um campo contém uma vírgula. Ou uma quebra de linha. Ou aspas. Aí o arquivo inteiro fica ilegível e ninguém sabe dizer quando começou.
+
+Este capítulo é sobre os dois formatos que já resolveram isso: JSON, que carrega estrutura, e CSV, que carrega tabela. Os dois estão na biblioteca padrão, os dois têm armadilhas conhecidas, e as armadilhas são quase todas de ida e volta — o dado sai e não volta igual.
+
+## JSON: o formato universal de estrutura
+
+```python
+import json
+
+leitura = {
+    "onu": "onu-00043",
+    "potencia": -29.8,
+    "ativa": True,
+    "alarmes": ["temperatura", "sinal"],
+    "vizinha": None,
+}
+
+print(json.dumps(leitura))
+```
+
+```text
+{"onu": "onu-00043", "potencia": -29.8, "ativa": true, "alarmes": ["temperatura", "sinal"], "vizinha": null}
+```
+
+Quatro nomes resolvem o módulo inteiro: `dumps` (objeto → string), `loads` (string → objeto), `dump` (objeto → arquivo) e `load` (arquivo → objeto). O `s` no fim significa *string*; sem ele, o destino é um arquivo.
+
+Repare no que mudou: `True` virou `true` e `None` virou `null`. JSON não é Python — é um formato com seis tipos (objeto, vetor, string, número, booleano e nulo), e cada valor Python precisa caber num deles.
+
+Para leitura humana, `indent`:
+
+```python
+print(json.dumps(leitura, indent=2, ensure_ascii=False))
+```
+
+```text
+{
+  "onu": "onu-00043",
+  "potencia": -29.8,
+  "ativa": true,
+  "alarmes": [
+    "temperatura",
+    "sinal"
+  ],
+  "vizinha": null
+}
+```
+
+### `ensure_ascii`, que quase sempre atrapalha
+
+```python
+d = {"cidade": "São João da Boa Vista", "situação": "não conectada"}
+
+json.dumps(d)
+json.dumps(d, ensure_ascii=False)
+```
+
+```text
+{"cidade": "S\u00e3o Jo\u00e3o da Boa Vista", "situa\u00e7\u00e3o": "n\u00e3o conectada"}
+{"cidade": "São João da Boa Vista", "situação": "não conectada"}
+```
+
+O padrão escapa tudo que não seja ASCII, herança de uma época em que não se podia contar com o transporte preservar os bytes. Os dois textos são JSON válido e produzem o mesmo objeto na volta, mas o primeiro é ilegível e ocupa três vezes mais espaço em texto acentuado. Hoje, com UTF-8 em toda parte (@sec-cap014), `ensure_ascii=False` é o que se quer — e junto com ele, `encoding="utf-8"` explícito na abertura do arquivo.
+
+### A ida e volta que não é redonda
+
+```python
+volta = json.loads(json.dumps(leitura))
+volta == leitura
+```
+
+```text
+True
+```
+
+Para esse dicionário, sim. Mas basta um tipo a mais:
+
+```python
+original = {"quando": (2026, 8, 12), "chave_int": {1: "um"}}
+ida = json.loads(json.dumps(original))
+```
+
+```text
+tupla virou : list
+chave int   : {'1': 'um'}
+```
+
+Duas perdas silenciosas, sem aviso nenhum. **Tupla vira lista**, porque JSON só tem um tipo de sequência. E **chave numérica vira string**, porque em JSON toda chave de objeto é string. Nenhuma das duas levanta exceção — o programa segue, e o `dados[1]` que funcionava passa a dar `KeyError` do outro lado da serialização.
+
+Outros tipos são mais honestos e falham alto:
+
+```text
+date      -> TypeError: Object of type date is not JSON serializable
+Decimal   -> TypeError: Object of type Decimal is not JSON serializable
+set       -> TypeError: Object of type set is not JSON serializable
+```
+
+`datetime`, `Decimal`, `set`, `bytes`, `complex` e qualquer classe própria não têm representação em JSON. O parâmetro `default=` recebe uma função chamada só para o que o módulo não sabe converter:
+
+```python
+def conversor(obj):
+    if isinstance(obj, (datetime.date, datetime.datetime)):
+        return obj.isoformat()
+    if isinstance(obj, decimal.Decimal):
+        return str(obj)
+    if isinstance(obj, set):
+        return sorted(obj)
+    raise TypeError(f"{type(obj).__name__} nao serializavel")
+
+json.dumps(registro, default=conversor, ensure_ascii=False)
+```
+
+```text
+{"quando": "2026-08-12", "exato": "0.1", "alarmes": ["sinal", "temperatura"]}
+```
+
+Repare que o `raise` final é obrigatório: sem ele, um tipo esquecido devolveria `None` e viraria `null` no arquivo — trocando um erro barulhento por um dado errado.
+
+Na volta, `object_hook` faz o caminho inverso:
+
+```python
+def reidrata(dic):
+    if "quando" in dic:
+        dic["quando"] = datetime.date.fromisoformat(dic["quando"])
+    return dic
+
+json.loads(texto, object_hook=reidrata)
+```
+
+```text
+{'onu': 'onu-00043', 'quando': datetime.date(2026, 8, 12)} date
+```
+
+::: {#fig-json-ida-volta}
+```{.tikz}
+%%| filename: json-ida-volta
+%%| alt: O mapa de tipos entre Python e JSON, com os que voltam identicos, os dois que voltam diferentes em silencio e os que levantam TypeError
+\begin{tikzpicture}[
+  py/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=2.6cm, align=center, minimum height=0.62cm,
+             font=\ttfamily\scriptsize},
+  js/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=2.6cm, align=center, minimum height=0.62cm,
+             font=\ttfamily\scriptsize},
+  perd/.style={draw=manualyellow!75!black, very thick, rounded corners,
+               fill=manualyellow!20, text width=2.6cm, align=center,
+               minimum height=0.62cm, font=\ttfamily\scriptsize},
+  ruim/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+               text width=2.6cm, align=center, minimum height=0.62cm,
+               font=\ttfamily\scriptsize},
+  ida/.style={->,>=stealth, thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 5.6) rectangle (15.6,-5.2);
+
+  \node[ttl] at (-0.4, 5.2) {o que sobrevive a \texttt{json.loads(json.dumps(x))}};
+
+  \node[lb, text=manualblue]  at (0.6, 4.5) {Python};
+  \node[lb, text=manualgreen] at (5.4, 4.5) {JSON};
+  \node[lb, text=manualblue]  at (9.9, 4.5) {volta como};
+
+  \node[py] (p1) at (1.7, 3.8) {dict};
+  \node[py] (p2) at (1.7, 3.0) {list};
+  \node[py] (p3) at (1.7, 2.2) {str};
+  \node[py] (p4) at (1.7, 1.4) {int / float};
+  \node[py] (p5) at (1.7, 0.6) {True / False};
+  \node[py] (p6) at (1.7,-0.2) {None};
+  \node[perd] (p7) at (1.7,-1.0) {tuple};
+  \node[perd] (p8) at (1.7,-1.8) {\{1: 'um'\}};
+  \node[ruim] (p9) at (1.7,-2.6) {date, Decimal,\\set, bytes};
+
+  \node[js] (j1) at (6.5, 3.8) {object};
+  \node[js] (j2) at (6.5, 3.0) {array};
+  \node[js] (j3) at (6.5, 2.2) {string};
+  \node[js] (j4) at (6.5, 1.4) {number};
+  \node[js] (j5) at (6.5, 0.6) {true / false};
+  \node[js] (j6) at (6.5,-0.2) {null};
+  \node[js] (j7) at (6.5,-1.0) {array};
+  \node[js] (j8) at (6.5,-1.8) {\{"1": "um"\}};
+  \node[ruim] (j9) at (6.5,-2.6) {TypeError};
+
+  \node[py]   (v1) at (11.3, 3.8) {dict};
+  \node[py]   (v2) at (11.3, 3.0) {list};
+  \node[py]   (v3) at (11.3, 2.2) {str};
+  \node[py]   (v4) at (11.3, 1.4) {int / float};
+  \node[py]   (v5) at (11.3, 0.6) {True / False};
+  \node[py]   (v6) at (11.3,-0.2) {None};
+  \node[perd] (v7) at (11.3,-1.0) {list};
+  \node[perd] (v8) at (11.3,-1.8) {\{'1': 'um'\}};
+  \node[ruim] (v9) at (11.3,-2.6) {default=...};
+
+  \foreach \yy in {3.8, 3.0, 2.2, 1.4, 0.6, -0.2, -1.0, -1.8, -2.6} {
+    \draw[ida] (3.05, \yy) -- (5.15, \yy);
+    \draw[ida] (7.85, \yy) -- (9.95, \yy);
+  }
+
+  \node[lb, text=manualyellow!75!black, text width=3.4cm] at (13.0,-1.4)
+    {mudam de tipo\\sem avisar};
+  \node[lb, text=manualred, text width=3.4cm] at (13.0,-2.6)
+    {só passam com\\conversor explícito};
+
+  \node[nt, text width=15.6cm] at (-0.4,-3.4)
+    {As seis primeiras linhas voltam idênticas, e é por isso que JSON é o
+     formato padrão de troca. As duas do meio são o perigo real: tupla vira
+     lista e chave numérica vira texto \emph{em silêncio}, então
+     \texttt{dados[1]} funciona antes de gravar e levanta \texttt{KeyError}
+     depois de ler. As últimas falham alto, o que é melhor --- e a função
+     passada em \texttt{default=} tem de terminar com \texttt{raise
+     TypeError}, ou um tipo esquecido vira \texttt{null} no arquivo e troca um
+     erro visível por um dado errado.};
+\end{tikzpicture}
+```
+Seis tipos voltam iguais; dois voltam diferentes sem avisar; o resto exige conversor.
+:::
+
+### Números: onde a precisão escorre
+
+```python
+json.dumps({"v": 0.1 + 0.2})
+json.loads('{"v": 0.1}', parse_float=decimal.Decimal)
+```
+
+```text
+{"v": 0.30000000000000004}
+{'v': Decimal('0.1')}
+```
+
+JSON tem um tipo numérico só, e o Python o lê como `float` — com todas as consequências do @sec-cap010. Para dinheiro e medição exata, `parse_float=decimal.Decimal` na leitura e `default=str` na escrita mantêm o valor íntegro.
+
+Há ainda um detalhe que quebra interoperabilidade:
+
+```python
+json.dumps({"v": float("nan")})
+```
+
+```text
+{"v": NaN}
+```
+
+Isso **não é JSON válido** — a especificação não tem `NaN` nem `Infinity`. O módulo os emite por padrão, e o analisador do outro lado (JavaScript, Go, um banco de dados) rejeita o arquivo. Em qualquer dado que saia do processo, `allow_nan=False`:
+
+```text
+ValueError: Out of range float values are not JSON compliant: inf
+```
+
+### Quando o texto não é JSON
+
+```text
+'{"a": 1,}'  -> Illegal trailing comma before end of object (linha 1, coluna 8)
+"{'a': 1}"   -> Expecting property name enclosed in double quotes (linha 1, coluna 2)
+'{"a": 1'    -> Expecting ',' delimiter (linha 1, coluna 8)
+''           -> Expecting value (linha 1, coluna 1)
+```
+
+`json.JSONDecodeError` é subclasse de `ValueError` e traz `msg`, `lineno`, `colno` e `pos` — o suficiente para apontar o problema num arquivo de 200 MB. As duas primeiras mensagens são o resumo das diferenças entre JSON e a sintaxe de dicionário do Python: **nada de vírgula sobrando, nada de aspas simples**.
+
+Vale saber de uma última assimetria: chave repetida não é erro.
+
+```python
+json.loads('{"a": 1, "a": 2}')
+```
+
+```text
+{'a': 2}
+```
+
+A última vence, em silêncio.
+
+## Arquivos, e o formato que resolve os grandes
+
+```python
+with arq.open("w", encoding="utf-8") as f:
+    json.dump([leitura], f, ensure_ascii=False, indent=2)
+
+with arq.open(encoding="utf-8") as f:
+    dados = json.load(f)
+```
+
+`json.load` lê o arquivo inteiro para a memória e constrói o objeto todo de uma vez. Para 200 MB de leituras isso é um problema — e é aqui que entra o formato que virou padrão de log estruturado, o **JSON Lines** (`.jsonl`): um objeto JSON completo por linha.
+
+```text
+{"onu": "onu-00043", "potencia": -29.8}
+{"onu": "onu-00045", "potencia": -31.7}
+{"onu": "onu-00052", "potencia": null}
+```
+
+```python
+with jl.open(encoding="utf-8") as f:
+    piores = [json.loads(l) for l in f if json.loads(l)["potencia"] is not None]
+```
+
+```text
+lidas sem carregar tudo: 2
+```
+
+Três vantagens que o JSON comum não tem: dá para processar linha a linha sem carregar o arquivo, dá para **acrescentar** ao fim sem reescrever nada, e uma linha corrompida não invalida o arquivo inteiro. É o formato natural para o log estruturado do @sec-cap060, e o que quase toda ferramenta de agregação espera.
+
+Dois parâmetros que aparecem em produção: `sort_keys=True` torna a saída determinística, o que permite comparar duas serializações ou versioná-las no Git; e `separators=(",", ":")` remove os espaços:
+
+```text
+padrao  : {"onu": "onu-00043", "potencia": -29.8, "ativa": true}
+compacto: {"onu":"onu-00043","potencia":-29.8,"ativa":true}
+54 vs 49 bytes
+```
+
+## CSV: por que não dá para usar `split`
+
+O formato parece trivial. Ele não é. Considere estas quatro linhas, geradas pelo `csv.writer`:
+
+```text
+onu,potencia,observacao
+onu-00043,-29.8,ok
+onu-00045,-31.7,"abaixo do limite, ""grave"""
+onu-00052,,"sem resposta
+reiniciar"
+```
+
+Um registro tem uma vírgula dentro do campo, aspas dentro do campo e um campo vazio; outro tem uma **quebra de linha** dentro do campo — de modo que o arquivo tem quatro registros em cinco linhas físicas. Agora o que o `split` faz com a terceira:
+
+```python
+bruto.split(",")
+```
+
+```text
+linha: 'onu-00045,-31.7,"abaixo do limite, ""grave"""'
+split : ['onu-00045', '-31.7', '"abaixo do limite', ' ""grave"""']
+```
+
+Quatro campos onde havia três, com aspas espalhadas. E o `csv.reader`:
+
+```python
+with csv_path.open(newline="", encoding="utf-8") as f:
+    for linha in csv.reader(f):
+        print(linha)
+```
+
+```text
+['onu', 'potencia', 'observacao']
+['onu-00043', '-29.8', 'ok']
+['onu-00045', '-31.7', 'abaixo do limite, "grave"']
+['onu-00052', '', 'sem resposta\nreiniciar']
+```
+
+Três campos, aspas desfeitas, quebra de linha preservada dentro do valor. As regras de citação do CSV existem por um motivo, e reimplementá-las com `split` e `replace` é o caminho conhecido para um analisador que funciona nos dados de teste.
+
+::: {#fig-csv-citacao}
+```{.tikz}
+%%| filename: csv-citacao
+%%| alt: Uma linha de CSV com virgula e aspas dentro do campo, mostrando o resultado errado de split e o resultado correto de csv.reader
+\begin{tikzpicture}[
+  arq/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=7.4cm, align=left, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  mau/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=3.0cm, align=center, minimum height=0.75cm,
+              font=\ttfamily\tiny},
+  bom/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.9cm, align=center, minimum height=0.75cm,
+              font=\ttfamily\tiny},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.6) rectangle (15.6,-6.4);
+
+  \node[ttl] at (-0.4, 4.2) {três campos, e as duas maneiras de contá-los};
+
+  \node[arq] at (4.2, 3.2)
+    {onu-00045,-31.7,"abaixo do\\limite, ""grave"""};
+  \node[lb, text=manualgray] at (8.3, 3.2) {a linha, como está no arquivo};
+
+  \draw[fl] (2.6, 2.5) -- (1.8, 1.6);
+  \draw[fl] (5.8, 2.5) -- (9.6, 1.6);
+
+  \node[lb, text=manualred]   at (-0.4, 1.2) {\texttt{linha.split(",")}
+                                              --- quatro campos};
+  \node[lb, text=manualgreen] at ( 8.0, 1.2) {\texttt{csv.reader}
+                                              --- três campos};
+
+  \node[mau] at (1.15, 0.3) {onu-00045};
+  \node[mau] at (1.15,-0.7) {-31.7};
+  \node[mau] at (1.15,-1.7) {"abaixo do limite};
+  \node[mau] at (1.15,-2.7) {\ ""grave"""};
+
+  \node[bom] at (9.9, 0.3) {onu-00045};
+  \node[bom] at (9.9,-0.7) {-31.7};
+  \node[bom] at (9.9,-1.7) {abaixo do limite,\\"grave"};
+
+  \node[lb, text=manualred, text width=4.2cm]   at (2.9,-1.9)
+    {a vírgula de dentro do\\campo virou separador};
+  \node[lb, text=manualgreen, text width=4.6cm] at (12.15,-1.9)
+    {aspas duplicadas desfeitas,\\campo inteiro preservado};
+
+  \node[nt, text width=15.6cm] at (-0.4,-3.6)
+    {O CSV cita um campo quando ele contém o separador, aspas ou quebra de
+     linha, e escapa a aspas dobrando-a. São poucas regras, mas elas interagem:
+     um campo citado pode conter uma quebra de linha, de modo que um arquivo de
+     quatro registros pode ocupar cinco linhas físicas --- e qualquer leitor
+     escrito com \texttt{for linha in arquivo} mais \texttt{split} erra a
+     contagem sem levantar exceção nenhuma. O módulo \texttt{csv} implementa as
+     regras inteiras, inclusive as variações de separador e de fim de linha, e
+     não custa mais do que o \texttt{split} que ele substitui.};
+\end{tikzpicture}
+```
+As regras de citação do CSV existem; `split` não as conhece.
+:::
+
+### `DictReader`, `DictWriter` e o que eles fazem com o inesperado
+
+```python
+with csv_path.open(newline="", encoding="utf-8") as f:
+    for linha in csv.DictReader(f):
+        print(linha["onu"], repr(linha["potencia"]))
+```
+
+```text
+onu-00043 '-29.8'
+onu-00045 '-31.7'
+onu-00052 ''
+```
+
+`DictReader` usa a primeira linha como cabeçalho e devolve dicionários, o que elimina os índices posicionais. Repare no ponto que custa caro: **tudo é string**. O `-29.8` é o texto `'-29.8'`, e o campo vazio é `''`, não `None`. Converter é trabalho de quem lê:
+
+```python
+def para_float(v):
+    return float(v) if v else None
+```
+
+```text
+[{'onu': 'onu-00043', 'potencia': -29.8}, {'onu': 'onu-00045', 'potencia': -31.7}, {'onu': 'onu-00052', 'potencia': None}]
+```
+
+E o comportamento com linha mal formada, que é bom conhecer antes de encontrá-lo:
+
+```text
+{'onu': 'onu-1', 'potencia': '-29.8', 'obs': None}
+{'onu': 'onu-2', 'potencia': '-30.1', 'obs': 'ok', None: ['sobrando']}
+```
+
+Campo faltando vira `None`; campo sobrando vai para uma chave `None` com uma **lista**. Nenhum dos dois levanta exceção — então validar o comprimento das linhas é responsabilidade de quem lê.
+
+Na escrita, `DictWriter` é o inverso, com dois parâmetros úteis: `extrasaction="ignore"` descarta chaves que não estão no cabeçalho (sem ele, `ValueError`), e `restval=` preenche as que faltam.
+
+```text
+'onu,potencia\r\nonu-00043,-29.8\r\n'
+sem extrasaction: dict contains fields not in fieldnames: 'extra'
+'onu-00099,SEM DADO\r\n'
+```
+
+### `newline=""`: o parâmetro que não é opcional
+
+```python
+with ruim.open("w", encoding="utf-8") as f:            # errado
+    csv.writer(f).writerow(["a", "b"])
+
+with bom.open("w", newline="", encoding="utf-8") as f:  # certo
+    csv.writer(f).writerow(["a", "b"])
+```
+
+```text
+sem newline='': b'a,b\r\r\n'
+com newline='': b'a,b\r\n'
+```
+
+O módulo `csv` escreve `\r\n` por conta própria, porque é o que o formato manda. No Windows, a tradução automática de fim de linha do modo texto transforma o `\r\n` em `\r\r\n`, e o arquivo sai com uma linha em branco entre cada registro — ou, dependendo do leitor, simplesmente errado.
+
+**Todo arquivo CSV se abre com `newline=""`**, na leitura e na escrita. Na leitura, o motivo é ainda melhor: sem ele, uma quebra de linha dentro de um campo citado pode ser traduzida e corromper o registro. É uma linha de código, e ela é obrigatória em qualquer plataforma — o código que só roda no Linux é o que esconde o defeito até o primeiro colega de Windows.
+
+### Dialetos, separadores e a planilha do outro
+
+Nem todo CSV usa vírgula. Em pt-BR, onde a vírgula é o separador decimal, o padrão de planilha é o ponto e vírgula:
+
+```python
+w = csv.writer(saida, delimiter=";", quoting=csv.QUOTE_ALL)
+w.writerow(["onu-00043", "-29,8", "ok"])
+```
+
+```text
+'"onu-00043";"-29,8";"ok"\r\n'
+```
+
+`delimiter`, `quotechar`, `quoting` (`QUOTE_MINIMAL`, `QUOTE_ALL`, `QUOTE_NONNUMERIC`, `QUOTE_NONE`), `escapechar` e `lineterminator` cobrem as variações. Para TSV, `delimiter="\t"`.
+
+Quando o arquivo vem de fora e ninguém sabe o formato, `Sniffer` chuta:
+
+```text
+delimitador detectado: ';'
+tem cabecalho: True
+```
+
+Chuta bem em arquivo limpo, e erra em arquivo pequeno ou irregular. Serve como padrão inicial, não como certeza — e nunca sem uma amostra de bom tamanho.
+
+### O BOM que o Excel deixa
+
+```python
+p.write_text("onu,potencia\nonu-00043,-29.8\n", encoding="utf-8-sig")
+```
+
+```text
+bytes iniciais: b'\xef\xbb\xbfonu'
+lido como utf-8    : ['\ufeffonu', 'potencia']
+lido como utf-8-sig: ['onu', 'potencia']
+```
+
+Aqueles três bytes no início são o BOM (@sec-cap014), que o Excel escreve para reconhecer o arquivo como UTF-8. Lido como `utf-8` puro, ele gruda no primeiro nome de coluna — e o resultado é um `KeyError: 'onu'` cuja mensagem parece dizer que a coluna não existe, quando ela está ali. `encoding="utf-8-sig"` na leitura resolve, e funciona igualmente bem em arquivo sem BOM. Para CSV destinado ao Excel, escrever com `utf-8-sig` evita que os acentos apareçam trocados.
+
+## Escolher entre os dois
+
+```text
+json:  205000 bytes
+csv :   85014 bytes
+csv e 59% menor
+```
+
+Cinco mil registros de dois campos. O CSV é 59% menor porque não repete os nomes das colunas em cada registro — e a diferença cresce com o número de campos.
+
+A decisão, porém, não é de tamanho: **CSV é para tabela, JSON é para estrutura**. Se todo registro tem os mesmos campos e nenhum deles é uma lista ou um objeto aninhado, CSV é mais compacto, abre em planilha e é lido por qualquer ferramenta. Se há aninhamento, campos opcionais ou tipos que importam, JSON. Achatar uma estrutura aninhada em colunas do tipo `endereco.cidade` funciona, mas é o sinal de que o formato está errado.
+
+Para dados grandes de verdade — milhões de linhas, leitura repetida, colunas de tipos fixos — os dois perdem para formatos binários colunares como Parquet, assunto do Volume 13. E para dados que precisam ser consultados em vez de lidos por inteiro, a resposta é um banco, dois capítulos à frente.
+
+## 🐍 Jeito Pythônico
+
+**`ensure_ascii=False` e `encoding="utf-8"` explícitos.** O padrão escapa acento sem necessidade e o `encoding` implícito varia com a plataforma.
+
+```python
+# antipadrão: encoding da plataforma, acentos escapados, sem newline
+open("dados.csv", "w").write(",".join(campos))
+```
+
+```python
+# pythônico
+with caminho.open("w", newline="", encoding="utf-8") as f:
+    csv.writer(f).writerow(campos)
+```
+
+**`newline=""` em todo arquivo CSV,** leitura e escrita, em toda plataforma.
+
+**`DictReader` e `DictWriter`,** não índices posicionais.
+
+**Converta os tipos na entrada.** Tudo que sai do CSV é string, e `''` não é `None`.
+
+**`default=` que termina em `raise`.** Devolver `None` para tipo desconhecido troca erro por dado errado.
+
+**`allow_nan=False`** em qualquer JSON que saia do processo — `NaN` não é JSON válido.
+
+**JSON Lines para log e fluxo**, JSON comum para configuração e resposta de API.
+
+**`sort_keys=True`** quando a saída for comparada ou versionada.
+
+**Nunca `split(",")` num CSV,** nem `eval` num JSON.
+
+**Nada de escrever o próprio formato delimitado.** As regras de citação parecem simples e não são.
+
+Sobre versões:
+
+- **Python 3.6** — `json.load`/`loads` aceitam `bytes` além de `str`.
+- **Python 3.9** — `csv` ganhou desempenho perceptível na leitura.
+- **Python 3.12** — `csv.QUOTE_NOTNULL` e `csv.QUOTE_STRINGS`, que distinguem campo vazio de `None` na ida e na volta.
+- **Python 3.13** — mensagens de erro do `json` mais precisas, com a posição exata (a vírgula sobrando do exemplo é uma delas).
+
+Sobre alternativas: `orjson` e `ujson` são bem mais rápidos que o módulo padrão e valem quando a serialização aparece no perfil de desempenho; `orjson` já lida com `datetime` e `UUID` sem `default=`. Para validar a estrutura do que chegou — e não só a sintaxe —, `pydantic` é o padrão do ecossistema, tema do Volume 14. E `pandas.read_csv` resolve a leitura tabular com conversão de tipos, no Volume 13.
+
+## 🧪 Laboratório
+
+Objetivo: escrever e ler os dois formatos, e provocar de propósito cada perda silenciosa.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab62 && cd ~/lab62
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. Ida e volta.** Serialize o dicionário `leitura` da abertura e confirme `json.loads(json.dumps(x)) == x`. Depois acrescente uma tupla e uma chave inteira e confirme que a igualdade **quebra** — sem exceção:
+
+```text
+tupla virou : list
+chave int   : {'1': 'um'}
+```
+
+**3. Acentos.** Compare `dumps` com e sem `ensure_ascii=False` sobre `"São João da Boa Vista"`. Meça o tamanho dos dois em bytes e confirme que os dois produzem o mesmo objeto na volta.
+
+**4. Tipos que explodem.** Tente serializar `datetime.date`, `Decimal` e `set`. Escreva o `conversor` com `default=`, confirme a saída, e depois **remova** o `raise` final e serialize um tipo não previsto. Observe o `null` aparecer no lugar do erro.
+
+**5. Volta com `object_hook`.** Reconstrua o `date` na leitura e confirme o tipo.
+
+**6. Números.** Rode `json.dumps({"v": 0.1 + 0.2})` e explique a saída. Depois leia `'{"v": 0.1}'` com `parse_float=decimal.Decimal`. Por fim, serialize `float("inf")` com e sem `allow_nan=False`.
+
+**7. JSON quebrado.** Provoque os quatro erros e imprima `e.msg`, `e.lineno` e `e.colno`:
+
+```text
+'{"a": 1,}'  -> Illegal trailing comma before end of object (linha 1, coluna 8)
+"{'a': 1}"   -> Expecting property name enclosed in double quotes (linha 1, coluna 2)
+```
+
+Depois leia `'{"a": 1, "a": 2}'` e explique o resultado.
+
+**8. JSON Lines.** Grave três leituras em `.jsonl`, acrescente uma quarta abrindo o arquivo em modo `"a"`, e filtre linha a linha sem carregar tudo. Corrompa a segunda linha e confirme que as outras três continuam legíveis.
+
+**9. O CSV difícil.** Escreva com `csv.writer` uma linha com vírgula no campo, uma com aspas e uma com quebra de linha. Abra o arquivo num editor e conte as **linhas físicas**. Depois leia com `csv.reader` e conte os **registros**.
+
+**10. `split` contra `csv.reader`.** Rode os dois sobre a linha com aspas e compare:
+
+```text
+split : ['onu-00045', '-31.7', '"abaixo do limite', ' ""grave"""']
+reader: ['onu-00045', '-31.7', 'abaixo do limite, "grave"']
+```
+
+**11. `newline=""`.** Grave o mesmo CSV com e sem o parâmetro e compare os **bytes**:
+
+```text
+sem newline='': b'a,b\r\r\n'
+com newline='': b'a,b\r\n'
+```
+
+**12. Tudo é string.** Leia com `DictReader` e confirme com `type()` que o campo numérico é `str` e o vazio é `''`. Converta com uma função que devolve `None` para vazio.
+
+**13. Linha torta.** Leia um CSV com uma linha curta e uma longa demais, e observe o `None` e a chave `None` com lista. Escreva a verificação que rejeitaria as duas.
+
+**14. Dialeto e BOM.** Grave com `delimiter=";"` e `QUOTE_ALL`. Depois grave com `encoding="utf-8-sig"`, leia como `utf-8` puro e observe o `﻿` grudado no nome da primeira coluna:
+
+```text
+lido como utf-8    : ['\ufeffonu', 'potencia']
+lido como utf-8-sig: ['onu', 'potencia']
+```
+
+**15. Tamanho.** Gere 5.000 registros nos dois formatos e compare. Depois acrescente um campo aninhado a cada registro e escreva por que o CSV deixa de servir.
+
+## Resumo
+
+- `dumps`/`loads` trabalham com string, `dump`/`load` com arquivo; JSON tem seis tipos, e cada valor Python precisa caber num deles.
+- `ensure_ascii=False` deixa o acento legível e o arquivo menor; o padrão escapa tudo fora do ASCII por herança histórica.
+- Tupla volta como lista e chave numérica volta como string, **sem exceção nenhuma** — as duas perdas silenciosas do formato.
+- `datetime`, `Decimal`, `set` e `bytes` levantam `TypeError`; `default=` converte na ida e `object_hook` reconstrói na volta.
+- Toda função passada em `default=` termina com `raise TypeError` — sem isso, um tipo esquecido vira `null`.
+- JSON só tem `float`; `parse_float=decimal.Decimal` preserva valores exatos na leitura.
+- `NaN` e `Infinity` não são JSON válido, e o módulo os emite por padrão; `allow_nan=False` em tudo que sai do processo.
+- `JSONDecodeError` traz `msg`, `lineno` e `colno`; chave repetida não é erro e a última vence.
+- JSON Lines permite processar, acrescentar e sobreviver a linha corrompida — o formato certo para log e fluxo.
+- CSV cita campos com separador, aspas ou quebra de linha, e escapa aspas dobrando-a; um arquivo de N registros pode ter mais de N linhas físicas.
+- `split(",")` erra a contagem de campos sem levantar exceção; o módulo `csv` implementa as regras inteiras e não custa mais.
+- `newline=""` é obrigatório na leitura e na escrita de CSV, em toda plataforma — sem ele o Windows grava `\r\r\n`.
+- `DictReader` devolve **strings** para tudo, e campo vazio é `''`, não `None`; converter tipos é trabalho de quem lê.
+- Linha curta vira `None` e linha longa vira uma chave `None` com lista; nenhuma das duas levanta exceção.
+- BOM lido como `utf-8` puro gruda no primeiro nome de coluna e produz um `KeyError` enganoso; `utf-8-sig` resolve nos dois casos.
+- CSV é para tabela e é bem menor; JSON é para estrutura. Achatar aninhamento em colunas é sinal de formato errado.
+
+O próximo capítulo fica no mesmo terreno, mas com um alvo diferente: arquivos que não carregam dados, e sim decisões — TOML, YAML e as formas de configurar um programa sem editá-lo.
