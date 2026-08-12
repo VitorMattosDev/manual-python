@@ -1,3 +1,474 @@
 # math, statistics e random {#sec-cap059}
 
-*(em elaboracao)*
+Três erros de cálculo aparecem em código Python com frequência desproporcional ao quanto são discutidos.
+
+O primeiro é medir a tendência central de um conjunto com um valor absurdo dentro dele. O segundo é somar potências ópticas em dBm como se fossem números comuns — o que dá um resultado plausível e fisicamente errado, porque a escala é logarítmica. O terceiro é gerar um *token* de recuperação de senha com `random.choice`, o que produz uma sequência que parece aleatória e é inteiramente reproduzível por quem descobrir a semente.
+
+Nenhum dos três quebra o programa. Todos produzem números que passam despercebidos numa revisão. Este capítulo percorre os três módulos numéricos da biblioteca padrão pelo ângulo de qual função responde a qual pergunta — e de quando a função óbvia é a errada.
+
+## `math`: o ponto flutuante e suas bordas
+
+Vale começar por uma medida que contraria o que se costuma ensinar. Somando dez vezes `0.1`, primeiro num laço escrito à mão e depois com `sum`:
+
+```text
+laco manual (o que sum fazia antes):
+  [0.1] * 10               laco=0.9999999999999999  sum=1.0
+  [1e16, 1.0, -1e16]       laco=0.0  sum=1.0
+```
+
+O laço reproduz os erros clássicos: dez décimos dão `0.9999999999999999`, e somar `1.0` a `1e16` perde o `1.0` inteiro, porque ele não cabe nos bits de mantissa disponíveis — a soma volta a `0.0`. O `sum` embutido acerta os dois. Desde o CPython 3.12, `sum` usa **somatório compensado** (o algoritmo de Neumaier) quando os valores são `float`, guardando o resíduo perdido em cada adição e devolvendo-o ao fim.
+
+Isso torna obsoleto o conselho antigo de "sempre use `math.fsum`"? Não inteiramente:
+
+```text
+[0.1] * 10                   sum=1.0                      fsum=1.0
+[1e16, 1.0, -1e16]           sum=1.0                      fsum=1.0
+[1e100, 1.0, -1e100]         sum=1.0                      fsum=1.0
+[1, 1e100, 1, -1e100] * 5    sum=4.0                      fsum=10.0  <- DIFEREM
+[0.1] * 100                  sum=10.0                     fsum=10.0
+[1e308, 1e308, -1e308]       sum=inf                      fsum=OverflowError: intermediate overflow in fsum
+```
+
+A compensação de `sum` corrige **um** nível de erro; `math.fsum` é exato para qualquer entrada, e a quarta linha mostra a diferença: `4.0` contra os `10.0` corretos. Em contrapartida, `fsum` levanta `OverflowError` num caso em que `sum` devolve `inf` sem reclamar.
+
+A regra atualizada: `sum` basta para dados comuns, inclusive financeiros em escala razoável; `fsum` para somas de magnitudes muito diferentes ou quando o resultado precisa ser reprodutível bit a bit. E, para dinheiro, nenhum dos dois — é `Decimal`, do @sec-cap010:
+
+```text
+Decimal para dinheiro:
+  float  : False
+  Decimal: True
+  soma de centavos float : 10.0
+  soma de centavos Decimal: 10.00
+```
+
+Mil centavos somam `10.0` em `float` e `10.00` em `Decimal`. Os valores são iguais; a diferença é que `Decimal` **preserva a escala** — sabe que o resultado tem duas casas —, e é isso que uma nota fiscal exige.
+
+### Comparar `float` sem se enganar
+
+```text
+0.1 + 0.2      : 0.30000000000000004
+== 0.3         : False
+isclose        : True
+isclose rel    : True
+isclose com 0  : False
+isclose abs_tol: True
+```
+
+`math.isclose` (PEP 485, Python 3.5) é a resposta certa para comparar `float`. A quarta linha guarda a única sutileza que importa: por padrão a tolerância é **relativa**, e comparar qualquer coisa com **zero** falha, porque uma fração de zero é zero. Sempre que um dos lados puder ser zero, `abs_tol` é obrigatório.
+
+### O resto do módulo, e o que ele evita
+
+```text
+hypot 3D    : 13.0
+dist        : 5.0
+prod        : 120
+comb 50/5   : 2118760
+perm 50/5   : 254251200
+gcd/lcm     : 12 60
+isqrt(10**18): 1000000000
+floor/ceil   : -3 -2 -2
+round(-2.5)  : -2 | round(2.5): 2
+log10 / log2 : 3.0 10.0
+inf/nan      : inf nan True
+nan == nan   : False
+```
+
+Cinco observações que valem mais do que a lista:
+
+`hypot` aceita qualquer número de dimensões desde a 3.8, e `dist` calcula a distância entre dois pontos — as duas evitam o `sqrt(dx**2 + dy**2)` escrito à mão, que estoura para valores grandes onde `hypot` não estoura.
+
+`isqrt` é a raiz quadrada **inteira** e exata. `int(math.sqrt(n))` passa pelo `float` e erra para inteiros muito grandes, silenciosamente — é o defeito clássico em código de teoria dos números e de criptografia.
+
+`floor`, `ceil` e `trunc` diferem justamente nos negativos: `-3`, `-2` e `-2`. E `round` não é nenhum dos três: ele arredonda para o **par mais próximo** no empate, e é por isso que `round(-2.5)` dá `-2` e `round(2.5)` dá `2`. Não é bug — é o arredondamento bancário, que evita o viés acumulado de sempre subir. Quem precisa de "meio para cima" usa `Decimal` com `ROUND_HALF_UP`.
+
+`nan != nan` é a regra da IEEE 754 e o motivo de `math.isnan` existir. Consequência prática: um `nan` numa lista quebra a ordenação em silêncio, e `x in lista` não o encontra.
+
+E a mais importante para quem trabalha com sinal: **escala logarítmica não se soma.**
+
+```python
+def dbm_para_mw(dbm):
+    return 10 ** (dbm / 10)
+```
+
+```text
+   -21.4 dBm = 0.007244 mW
+   -29.8 dBm = 0.001047 mW
+   -31.7 dBm = 0.000676 mW
+soma real (via mW) : -20.473 dBm
+media ingenua (dBm): -27.633 dBm
+```
+
+Somar três potências exige converter para a escala linear, somar e converter de volta: `-20,473 dBm`. A média aritmética dos dBm dá `-27,633` — um número que não significa nada de físico. O mesmo vale para pH, escala Richter e decibéis acústicos. Sempre que a unidade for logarítmica, a aritmética acontece na escala linear.
+
+## `statistics`: a pergunta antes da fórmula
+
+```text
+mean      : -28.233333333333334
+fmean     : -28.233333333333334
+median    : -29.8
+mode      : 3
+multimode : [1, 2]
+pstdev    : 3.7839
+stdev     : 4.0134
+variance  : 16.1075
+quantiles : [-31.35, -29.8, -24.5]
+```
+
+`mean` é preciso e devolve o tipo apropriado (funciona com `Decimal` e `Fraction`); `fmean` é bem mais rápido e sempre devolve `float` — a escolha certa para grandes volumes de dados numéricos.
+
+A distinção que mais gera erro é entre `stdev` e `pstdev`: `stdev` é o desvio **amostral**, que divide por `n - 1` porque os dados são uma amostra de uma população maior; `pstdev` divide por `n` e só se aplica quando os dados **são** a população inteira. Aqui a diferença é de 3,78 para 4,01 — 6%, o suficiente para mudar uma conclusão. Na dúvida, `stdev`: medições quase sempre são amostra.
+
+E `multimode` existe porque `mode` precisava escolher um vencedor arbitrário no empate; ele devolve todos.
+
+### O outlier e a escolha da medida
+
+```text
+media aparada e o outlier:
+  mean com outlier   : -35.4
+  median com outlier : -29.950000000000003
+  mean sem outlier   : -28.233
+  median sem outlier : -29.8
+```
+
+Uma única leitura defeituosa de `-99,9 dBm` — um transceptor desconectado — deslocou a média de `-28,2` para `-35,4`, sete decibéis. A mediana foi de `-29,8` para `-29,95`: quinze centésimos.
+
+::: {#fig-media-mediana}
+```{.tikz}
+%%| filename: media-mediana-outlier
+%%| alt: Duas linhas de valores numa escala, mostrando que acrescentar um unico valor absurdo desloca muito a media e quase nada a mediana
+\begin{tikzpicture}[
+  eixo/.style={very thick, manualgray},
+  pto/.style={circle, fill=manualblue, inner sep=0pt, minimum size=5.5pt},
+  bad/.style={circle, fill=manualred, inner sep=0pt, minimum size=6.5pt},
+  med/.style={->,>=stealth, very thick, manualred},
+  mdn/.style={->,>=stealth, very thick, manualgreen!65!black},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.8) rectangle (15.0,-8.2);
+
+  \node[ttl] at (-0.4, 3.3) {as 9 leituras normais};
+  \draw[eixo] (0.6, 1.7) -- (13.6, 1.7);
+  \foreach \vx in {1.322, 4.211, 7.100, 9.989, 12.878}
+    {\draw[eixo] (\vx, 1.6) -- (\vx, 1.8);}
+  \node[lb] at (1.322, 1.35) {-100};
+  \node[lb] at (4.211, 1.35) {-80};
+  \node[lb] at (7.100, 1.35) {-60};
+  \node[lb] at (9.989, 1.35) {-40};
+  \node[lb] at (12.878, 1.35) {-20};
+  \foreach \vx in {11.116, 11.188, 11.289, 11.419, 11.462, 11.592, 11.867,
+                   12.589, 12.676}
+    {\node[pto] at (\vx, 1.7) {};}
+  \draw[med] (11.688, 2.75) -- (11.688, 1.9);
+  \node[lb, text=manualred, anchor=south] at (11.688, 2.8) {média -28,23};
+  \draw[mdn] (11.462, 0.55) -- (11.462, 1.5);
+  \node[lb, text=manualgreen!55!black, anchor=north] at (11.462, 0.5) {mediana -29,80};
+
+  \node[ttl] at (-0.4,-1.1) {as mesmas 9 mais uma leitura defeituosa};
+  \draw[eixo] (0.6,-2.7) -- (13.6,-2.7);
+  \foreach \vx in {1.322, 4.211, 7.100, 9.989, 12.878}
+    {\draw[eixo] (\vx,-2.8) -- (\vx,-2.6);}
+  \node[lb] at (1.322,-3.05) {-100};
+  \node[lb] at (4.211,-3.05) {-80};
+  \node[lb] at (7.100,-3.05) {-60};
+  \node[lb] at (9.989,-3.05) {-40};
+  \node[lb] at (12.878,-3.05) {-20};
+  \foreach \vx in {11.116, 11.188, 11.289, 11.419, 11.462, 11.592, 11.867,
+                   12.589, 12.676}
+    {\node[pto] at (\vx,-2.7) {};}
+  \node[bad] at (1.337,-2.7) {};
+  \node[lb, text=manualred, anchor=north] at (1.337,-3.5) {-99,9\\transceptor solto};
+  \draw[med] (10.653,-1.65) -- (10.653,-2.5);
+  \node[lb, text=manualred, anchor=south] at (10.653,-1.6) {média -35,40};
+  \draw[mdn] (11.440,-4.55) -- (11.440,-2.9);
+  \node[lb, text=manualgreen!55!black, anchor=north] at (11.440,-4.6) {mediana -29,95};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.4)
+    {Um único valor absurdo puxou a média sete decibéis para longe do conjunto e
+     moveu a mediana em quinze centésimos. A média usa a magnitude de cada
+     observação; a mediana usa só a posição. Por isso a mediana é a medida certa
+     para latência, tempo de resposta e qualquer grandeza em que um valor
+     extremo represente defeito e não informação.};
+\end{tikzpicture}
+```
+A média responde por magnitude; a mediana, por posição.
+:::
+
+A escolha não é estética. Para tempo de resposta de um serviço, a média é dominada pelas poucas requisições lentíssimas e não descreve a experiência de ninguém — é por isso que se relata mediana e percentil 95, e não média. Para faturamento total, ao contrário, a média é exatamente o que interessa, porque a magnitude de cada venda importa.
+
+Quando a distribuição tem cauda e ainda assim se quer uma média, o caminho é aparar os extremos antes de calcular — ou trocar a pergunta por `quantiles`.
+
+O módulo também recusa entradas impossíveis, em vez de devolver algo:
+
+```text
+StatisticsError: mean requires at least one data point
+StatisticsError: stdev requires at least two data points
+```
+
+`StatisticsError` é subclasse de `ValueError`, então um `except ValueError` já a captura.
+
+### Correlação, regressão e distribuição
+
+```text
+correlation : 0.999419
+covariance  : 11.9857
+regressao   : inclinacao 1.9976 | intercepto 0.0357
+```
+
+Desde a 3.10, `statistics` faz correlação de Pearson e regressão linear simples sem `numpy` — suficiente para uma análise exploratória ou uma linha de tendência num relatório. `linear_regression` devolve uma tupla nomeada com `slope` e `intercept`; nos dados usados, a reta recuperada foi praticamente `y = 2x`, que era a relação embutida.
+
+O lembrete de sempre: correlação de 0,999 não implica causa, e a regressão linear pressupõe uma relação linear que convém confirmar antes de reportar.
+
+```text
+media/desvio: -28.233 4.013
+P(X < -32)  : 0.174
+percentil 95: -21.632
+```
+
+`NormalDist` (3.8) estima uma distribuição a partir da amostra e responde perguntas de probabilidade diretamente: `cdf` dá a probabilidade de ficar abaixo de um valor, `inv_cdf` dá o valor de um percentil. Para "quantos por cento das ONUs devem estar abaixo do limite de alarme", é uma linha — desde que a suposição de normalidade se sustente, o que em dados de rede raramente acontece nas caudas.
+
+## `random`: determinístico por dentro
+
+```text
+random()    : 0.639427
+randint     : 4
+choice      : c
+choices     : ['a', 'a', 'a', 'a', 'a', 'a']
+sample      : [4, 3, 11, 27, 29]
+shuffle     : ['b', 'd', 'c', 'a', 'f', 'e']
+gauss       : -0.3294
+uniform     : -25.8048
+
+mesma semente, mesma sequencia:
+random()    : 0.639427
+randint     : 4
+```
+
+Repare no `choices` com pesos `[10, 1, 1]`: seis `'a'` seguidos. Amostragem com peso é aleatória, não justa — o resultado é perfeitamente possível e uma boa lembrança de que amostra pequena não reflete a distribuição.
+
+E repare na repetição depois de `random.seed(42)`: **os mesmos números, na mesma ordem**. Isso é a propriedade mais importante do módulo, e ela é uma ferramenta ou uma vulnerabilidade dependendo do uso.
+
+Como ferramenta: semente fixa torna teste reprodutível, simulação auditável e *bug* determinístico. Um teste que usa dados aleatórios sem semente falha uma vez a cada mil execuções e ninguém consegue reproduzir.
+
+A diferença entre `random.seed(42)` e uma instância própria importa em biblioteca:
+
+```text
+duas instancias independentes: True
+global nao foi afetado: 0.74155
+```
+
+`random.seed()` mexe no gerador **global**, compartilhado por todo o processo — inclusive por bibliotecas de terceiros. Uma biblioteca que chama `random.seed()` sabota a reprodutibilidade de quem a usa. A forma correta é `random.Random(semente)`, uma instância isolada.
+
+### `random` nunca gera segredo
+
+```text
+random.choice com semente conhecida: hbrpoig8f1cb
+de novo, identico                 : hbrpoig8f1cb
+```
+
+Doze caracteres que parecem uma senha aleatória — e que qualquer pessoa que saiba a semente reproduz exatamente. Pior: o Mersenne Twister não é apenas reproduzível a partir da semente; ele é **reversível a partir da saída**. Observando 624 valores consecutivos de `random.random()`, é possível recuperar o estado interno completo e prever todos os valores seguintes. Um *token* de recuperação de senha, um identificador de sessão ou um código de verificação gerados com `random` são, na prática, previsíveis.
+
+`secrets` (3.6+) existe para isso:
+
+```text
+token_hex    : c2ee18e1489f83809240fcc3774cf5d5
+token_urlsafe: YJLVNgj75Ed4f74WqB7How
+randbelow    : 336
+choice       : c
+```
+
+::: {#fig-random-secrets}
+```{.tikz}
+%%| filename: random-vs-secrets
+%%| alt: O modulo random como maquina de estado deterministica alimentada por uma semente, contra o secrets alimentado pela entropia do sistema operacional
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.3cm, align=center, minimum height=1.1cm,
+             font=\ttfamily\scriptsize},
+  per/.style={draw=manualred, very thick, rounded corners, fill=manualred!8,
+              text width=4.3cm, align=center, minimum height=1.1cm,
+              font=\ttfamily\scriptsize},
+  seg/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=4.3cm, align=center,
+              minimum height=1.1cm, font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.8) rectangle (15.0,-8.4);
+
+  \node[ttl] at (-0.4, 3.3) {\texttt{random} --- simulação, teste, amostragem};
+  \node[per] (s1) at (2.4, 2.0) {semente 42};
+  \node[bx] (s2) at (7.6, 2.0) {Mersenne Twister\\estado de 19\,937 bits};
+  \node[per] (s3) at (12.8, 2.0) {0.639427, 4, 'c', \ldots};
+  \draw[fl] (s1) -- (s2);
+  \draw[fl] (s2) -- (s3);
+  \node[lb, text=manualred] at (-0.4, 0.7)
+    {mesma semente $\rightarrow$ mesma sequência, sempre --- e 624 saídas
+     observadas bastam para reconstruir o estado e prever o resto};
+
+  \node[ttl] at (-0.4,-1.5) {\texttt{secrets} --- senha, token, identificador de sessão};
+  \node[seg] (t1) at (2.4,-2.8) {entropia do sistema};
+  \node[bx] (t2) at (7.6,-2.8) {/dev/urandom\\BCryptGenRandom};
+  \node[seg] (t3) at (12.8,-2.8) {c2ee18e1489f8380\ldots};
+  \draw[fl] (t1) -- (t2);
+  \draw[fl] (t2) -- (t3);
+  \node[lb, text=manualgreen!55!black] at (-0.4,-4.1)
+    {sem semente, sem estado reproduzível --- observar saídas não ajuda a prever
+     a próxima};
+
+  \node[nt, text width=15.0cm] at (-0.4,-5.1)
+    {Os dois geram números que parecem igualmente aleatórios, e é exatamente por
+     isso que a escolha errada não é percebida em revisão de código nem em teste.
+     A regra é sobre a consequência, não sobre a aparência: se alguém puder ganhar
+     alguma coisa prevendo o número, o módulo é o \texttt{secrets}.};
+\end{tikzpicture}
+```
+Reprodutibilidade é a virtude de um e o defeito fatal do outro.
+:::
+
+`token_urlsafe(16)` é o gerador de *token* padrão: 16 bytes de entropia (128 bits, o suficiente) codificados em texto seguro para URL. Para senha inicial de usuário, `secrets.choice` sobre um alfabeto escolhido. Para comparar segredos, `secrets.compare_digest`, que leva tempo constante e não vaza informação pela duração da comparação — assunto que volta no @sec-cap066.
+
+## 🐍 Jeito Pythônico
+
+**`sum` para dados comuns, `fsum` para magnitudes díspares, `Decimal` para dinheiro.** O conselho de sempre usar `fsum` envelheceu com a compensação do `sum` na 3.12, mas `fsum` continua sendo o único exato.
+
+**`math.isclose` em vez de `==` entre `float`** — com `abs_tol` sempre que um dos lados puder ser zero.
+
+```python
+# antipadrão: falha por um bit e o teste fica intermitente
+assert total == 0.3
+```
+
+```python
+# pythônico
+assert math.isclose(total, 0.3)
+assert math.isclose(residuo, 0.0, abs_tol=1e-9)
+```
+
+**`statistics.mean` no lugar de `sum(x) / len(x)`** — não pelo desempenho, mas porque `mean` recusa lista vazia com uma mensagem clara em vez de `ZeroDivisionError`, e preserva o tipo de `Decimal` e `Fraction`. Para volume grande de `float`, `fmean`.
+
+**Mediana para latência e tempo de resposta; média para total e faturamento.** Se um valor extremo representa defeito, a média mente.
+
+**`stdev` (amostral) por padrão; `pstdev` só quando os dados são a população inteira.**
+
+**Escala logarítmica converte antes de somar.** dBm, pH e Richter não aceitam média aritmética.
+
+**Semente fixa em teste e simulação; instância própria em biblioteca.**
+
+```python
+# antipadrão: sabota o gerador global de quem importar o módulo
+random.seed(42)
+```
+
+```python
+# pythônico
+rng = random.Random(42)
+valores = [rng.random() for _ in range(10)]
+```
+
+**`secrets` para tudo que for segredo.** Senha, *token*, identificador de sessão, código de verificação, `nonce`. A regra prática: se alguém puder ganhar alguma coisa prevendo o número, não é `random`.
+
+**`isqrt` para raiz inteira exata**, nunca `int(math.sqrt(n))` em inteiros grandes.
+
+Sobre versões:
+
+- **Python 3.5** — `math.isclose` (PEP 485).
+- **Python 3.6** — o módulo `secrets` (PEP 506), criado justamente porque `random` vinha sendo usado para senha.
+- **Python 3.8** — `math.dist`, `math.prod`, `math.comb`, `math.perm`, `hypot` com N dimensões, `statistics.fmean`, `multimode`, `quantiles` e `NormalDist`.
+- **Python 3.9** — `math.lcm` e `math.nextafter`.
+- **Python 3.10** — `statistics.correlation`, `covariance` e `linear_regression`.
+- **Python 3.11** — `random.getrandbits` mais rápido; `math.exp2` e `math.cbrt`.
+- **Python 3.12** — `sum` passa a usar somatório compensado para `float`; `random.binomialvariate`; `linear_regression` ganha `proportional=`.
+- **Python 3.13** — `random` ganha interface de linha de comando (`python -m random`).
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir os três erros da abertura e construir um pequeno relatório estatístico honesto.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab59 && cd ~/lab59
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. O somatório.** Compare um laço `for` manual com `sum` e `fsum` sobre `[0.1] * 10`:
+
+```text
+  [0.1] * 10               laco=0.9999999999999999  sum=1.0
+```
+
+Depois encontre a entrada em que `sum` e `fsum` ainda divergem:
+
+```text
+[1, 1e100, 1, -1e100] * 5    sum=4.0                      fsum=10.0
+```
+
+E confirme o comportamento oposto: uma entrada em que `fsum` levanta `OverflowError` e `sum` devolve `inf`.
+
+**3. Comparação de `float`.** Escreva uma função `iguais(a, b)` com `isclose`. Teste com `0.1 + 0.2` contra `0.3`, e depois com um resíduo minúsculo contra `0.0`. Corrija a segunda com `abs_tol` e explique por que a tolerância relativa não funciona com zero.
+
+**4. Arredondamento.** Imprima `round(0.5)`, `round(1.5)`, `round(2.5)` e `round(-2.5)`. Explique o padrão. Depois obtenha "meio para cima" com `Decimal` e `ROUND_HALF_UP`.
+
+**5. A escala logarítmica.** Implemente `dbm_para_mw` e `mw_para_dbm`, e compare a soma correta com a média ingênua:
+
+```text
+soma real (via mW) : -20.473 dBm
+media ingenua (dBm): -27.633 dBm
+```
+
+**6. Média contra mediana.** Com as nove leituras, calcule as duas. Acrescente `-99.9` e recalcule:
+
+```text
+  mean com outlier   : -35.4
+  median com outlier : -29.950000000000003
+```
+
+Depois escreva `resumo(dados)` que devolve mediana, percentil 95 e desvio, e argumente num comentário por que ele não devolve a média.
+
+**7. Amostral contra populacional.** Calcule `stdev` e `pstdev` da mesma amostra, confirme os 6% de diferença e escreva qual dos dois se aplica a "medi a potência de 9 das 2000 ONUs da rede".
+
+**8. Regressão.** Gere `y = 2x + ruído` com `random.gauss` e semente fixa, e recupere a inclinação com `linear_regression`. Confirme que ela fica perto de 2. Aumente o ruído e observe a correlação cair.
+
+**9. Reprodutibilidade.** Rode o mesmo script duas vezes com `random.seed(42)` e confirme a saída idêntica. Depois troque por `random.Random(42)` e confirme que o gerador global permanece intocado:
+
+```text
+duas instancias independentes: True
+global nao foi afetado: 0.74155
+```
+
+**10. O erro que importa.** Gere um "token" de 12 caracteres com `random.choice` e semente `42`. Rode duas vezes e confirme que é idêntico:
+
+```text
+random.choice com semente conhecida: hbrpoig8f1cb
+de novo, identico                 : hbrpoig8f1cb
+```
+
+Depois gere o mesmo com `secrets.choice` e confirme que nunca se repete. Por fim, escreva `token_de_recuperacao()` usando `secrets.token_urlsafe(16)` e justifique o 16 num comentário.
+
+**11. Simulação.** Use `random.Random(7)` para simular 10 mil leituras de potência com distribuição normal centrada em `-28` e desvio `2`. Calcule a fração abaixo de `-32` de duas formas: contando na amostra, e com `NormalDist(-28, 2).cdf(-32)`. Compare os dois números.
+
+## Resumo
+
+- Desde o CPython 3.12, `sum` usa somatório compensado para `float` e acerta os casos clássicos que um laço `for` manual erra — mas `math.fsum` continua sendo o único exato para qualquer entrada.
+- `fsum` levanta `OverflowError` onde `sum` devolve `inf`; dinheiro não é caso nem de um nem de outro, é de `Decimal`.
+- `math.isclose` é a comparação correta entre `float`, e exige `abs_tol` quando um dos lados pode ser zero.
+- `round` arredonda para o par no empate (`round(2.5) == 2`); `floor`, `ceil` e `trunc` divergem nos negativos.
+- `isqrt` é exata para inteiros grandes, onde `int(math.sqrt(n))` erra em silêncio.
+- Escala logarítmica (dBm, pH, Richter) exige converter para a escala linear antes de somar ou promediar.
+- `mean` preserva o tipo e recusa entrada vazia; `fmean` é mais rápido e sempre devolve `float`.
+- `stdev` divide por `n - 1` (amostra) e `pstdev` por `n` (população) — 6% de diferença nos dados do capítulo.
+- Um único valor absurdo moveu a média em sete decibéis e a mediana em quinze centésimos: mediana e percentis para latência e tempo de resposta, média para totais.
+- `statistics` faz correlação, covariância, regressão linear e `NormalDist` sem dependência externa desde a 3.10.
+- `random` é determinístico: mesma semente, mesma sequência. Isso é ótimo para teste e simulação, e fatal para segredo — o Mersenne Twister é reconstruível a partir de 624 saídas observadas.
+- Biblioteca nunca chama `random.seed()`, que é global; usa `random.Random(semente)`.
+- `secrets` para senha, *token*, sessão e código de verificação; `secrets.compare_digest` para comparar segredos em tempo constante.
+
+Fecha aqui o núcleo de cálculo da biblioteca padrão. O @sec-cap060 encerra o volume com a peça que falta para um programa deixar de ser script: `logging` — o registro do que o programa fez, por que `print` não serve em produção, e como configurar níveis, destinos e formato sem transformar o código em ruído.
