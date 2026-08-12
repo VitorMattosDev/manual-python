@@ -1,3 +1,862 @@
-# Exceções: hierarquia e o bloco try, except, else e finally {#sec-cap038}
+# Exceções: hierarquia e o bloco `try`, `except`, `else` e `finally` {#sec-cap038}
 
-*(em elaboracao)*
+O importador de leituras rodou por seis meses sem reclamar. Na terça em que a OLT devolveu uma leitura vazia, ele parou no meio:
+
+```python
+niveis = []
+with open("leituras.csv", encoding="utf-8") as f:
+    next(f)
+    for linha in f:
+        onu, nivel = linha.rstrip("\n").split(",")
+        niveis.append((onu, float(nivel)))
+print("media:", sum(n for _, n in niveis) / len(niveis))
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab38/ingenuo.py", line 6, in <module>
+    niveis.append((onu, float(nivel)))
+                        ~~~~~^^^^^^^
+ValueError: could not convert string to float: 'indisponivel'
+```
+
+Duas linhas boas foram lidas, jogadas fora, e nenhuma média saiu. O arquivo tinha quatro leituras, duas delas defeituosas — e um importador que descarta duas linhas ruins e processa duas boas é infinitamente mais útil do que um que morre na primeira.
+
+O @sec-cap007 ensinou a **ler** um traceback. Este capítulo ensina a decidir o que fazer quando ele acontece: quais exceções capturar, onde, e — o que é mais difícil — quais deixar passar.
+
+## O bloco mínimo
+
+```python
+niveis = []
+descartadas = 0
+with open("leituras.csv", encoding="utf-8") as f:
+    next(f)
+    for numero, linha in enumerate(f, start=2):
+        try:
+            onu, nivel = linha.rstrip("\n").split(",")
+            niveis.append((onu, float(nivel)))
+        except ValueError as e:
+            descartadas += 1
+            print(f"  linha {numero}: descartada ({type(e).__name__}: {e})")
+print(f"{len(niveis)} validas, {descartadas} descartadas")
+print("media:", sum(n for _, n in niveis) / len(niveis))
+```
+
+```text
+  linha 4: descartada (ValueError: could not convert string to float: 'indisponivel')
+  linha 5: descartada (ValueError: could not convert string to float: '')
+2 validas, 2 descartadas
+media: -25.6
+```
+
+Duas decisões nesse bloco merecem atenção antes de qualquer teoria.
+
+**O `try` é pequeno.** Ele envolve as duas linhas que podem falhar, e nada mais. Um `try` que abraça o laço inteiro captura o mesmo erro, mas perde a informação de qual linha falhou e aborta as restantes — que era exatamente o defeito original.
+
+**A exceção capturada é específica.** `ValueError` é o que `float()` levanta com texto inválido, e é também o que o desempacotamento levanta quando a linha não tem exatamente duas colunas. Um `except Exception` capturaria isso e mais setenta outras coisas, inclusive o erro de digitação no seu próprio código.
+
+## A hierarquia
+
+Toda exceção é um objeto, e as classes formam uma árvore. Capturar uma classe captura toda a subárvore abaixo dela — e é essa regra que responde a "o que eu escrevo no `except`".
+
+::: {#fig-hierarquia-excecoes}
+```{.tikz}
+%%| filename: hierarquia-excecoes
+%%| alt: A arvore das excecoes embutidas a partir de BaseException, com as tres que ficam fora de Exception destacadas e os ramos de ArithmeticError, LookupError, OSError e ValueError
+\begin{tikzpicture}[
+  bs/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!9,
+             text width=3.0cm, align=center, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  ba/.style={draw=manualred, very thick, rounded corners, fill=manualred!10,
+             text width=3.0cm, align=center, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  ex/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!14,
+             text width=3.0cm, align=center, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  nd/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.0cm, align=center, minimum height=0.6cm,
+             font=\ttfamily\scriptsize},
+  lf/.style={draw=manualblue!55, thick, rounded corners=1pt, fill=manualblue!5,
+             text width=4.6cm, align=left, font=\ttfamily\scriptsize,
+             inner xsep=4pt},
+  pt/.style={draw=manualgray!50, thick},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.5, 1.4) rectangle (15.0,-9.2);
+
+  \node[bs] at (1.7, 0.7) {BaseException};
+
+  \node[ba] at (5.2,-0.2) {SystemExit};
+  \node[ba] at (5.2,-0.9) {KeyboardInterrupt};
+  \node[ba] at (5.2,-1.6) {GeneratorExit};
+  \node[ex] at (5.2,-2.5) {Exception};
+
+  \node[nd] at (8.7,-3.4) {ArithmeticError};
+  \node[lf] at (12.9,-3.4) {ZeroDivisionError\\OverflowError};
+
+  \node[nd] at (8.7,-4.4) {LookupError};
+  \node[lf] at (12.9,-4.4) {IndexError\\KeyError};
+
+  \node[nd] at (8.7,-5.6) {OSError};
+  \node[lf, text width=4.6cm] at (12.9,-5.6)
+    {FileNotFoundError\\PermissionError\\IsADirectoryError\\TimeoutError};
+
+  \node[nd] at (8.7,-6.9) {ValueError};
+  \node[lf] at (12.9,-6.9) {UnicodeDecodeError};
+
+  \node[nd] at (8.7,-7.7) {TypeError};
+  \node[nd] at (8.7,-8.4) {e mais 60};
+
+  \draw[pt] (1.7, 0.4) -- (1.7,-2.5);
+  \draw[pt] (1.7,-0.2) -- (3.68,-0.2);
+  \draw[pt] (1.7,-0.9) -- (3.68,-0.9);
+  \draw[pt] (1.7,-1.6) -- (3.68,-1.6);
+  \draw[pt] (1.7,-2.5) -- (3.68,-2.5);
+
+  \draw[pt] (5.2,-2.8) -- (5.2,-8.4);
+  \draw[pt] (5.2,-3.4) -- (7.18,-3.4);
+  \draw[pt] (5.2,-4.4) -- (7.18,-4.4);
+  \draw[pt] (5.2,-5.6) -- (7.18,-5.6);
+  \draw[pt] (5.2,-6.9) -- (7.18,-6.9);
+  \draw[pt] (5.2,-7.7) -- (7.18,-7.7);
+  \draw[pt] (5.2,-8.4) -- (7.18,-8.4);
+
+  \draw[pt] (10.22,-3.4) -- (10.5,-3.4);
+  \draw[pt] (10.22,-4.4) -- (10.5,-4.4);
+  \draw[pt] (10.22,-5.6) -- (10.5,-5.6);
+  \draw[pt] (10.22,-6.9) -- (10.5,-6.9);
+
+  \node[lb, text width=4.0cm] at (7.0,-0.9)
+    {\textcolor{manualred}{\textbf{fora} de \texttt{Exception}} --- e é por isso
+     que \texttt{except Exception} não engole Ctrl-C nem
+     \texttt{sys.exit()}};
+
+  \node[nt, text width=15.0cm] at (-0.3,-8.8)
+    {Capturar uma classe captura toda a subárvore abaixo dela:
+     \texttt{except OSError} pega as quatro da direita e mais nove;
+     \texttt{except LookupError} pega \texttt{IndexError} e \texttt{KeyError}
+     juntas.};
+\end{tikzpicture}
+```
+A árvore das exceções embutidas. As três em vermelho herdam de `BaseException`, e não de `Exception`.
+:::
+
+Confirmando no interpretador com o atributo `__mro__`, que toda classe tem e que devolve a cadeia de herança (assunto do Volume 7):
+
+```python
+for cls in (ValueError, FileNotFoundError, KeyboardInterrupt,
+            ZeroDivisionError, UnicodeDecodeError):
+    print(" -> ".join(c.__name__ for c in reversed(cls.__mro__[:-1])))
+```
+
+```text
+BaseException -> Exception -> ValueError
+BaseException -> Exception -> OSError -> FileNotFoundError
+BaseException -> KeyboardInterrupt
+BaseException -> Exception -> ArithmeticError -> ZeroDivisionError
+BaseException -> Exception -> ValueError -> UnicodeError -> UnicodeDecodeError
+```
+
+```python
+print(sorted(c.__name__ for c in BaseException.__subclasses__()))
+```
+
+```text
+['BaseExceptionGroup', 'Exception', 'GeneratorExit', 'KeyboardInterrupt', 'SystemExit']
+```
+
+Setenta e uma exceções embutidas, e a divisão mais importante da árvore está no primeiro nível: **`SystemExit`, `KeyboardInterrupt` e `GeneratorExit` não são filhas de `Exception`**. Não é detalhe de organização — é uma decisão de projeto. Essas três significam "o programa está terminando", não "algo deu errado", e por isso `except Exception` as deixa passar. É o que faz o Ctrl-C funcionar mesmo em código cheio de tratamento de erro.
+
+## `OSError` e a família do sistema de arquivos
+
+O grupo mais útil na prática é o do @sec-cap035 e do @sec-cap037:
+
+```python
+print(sorted(c.__name__ for c in OSError.__subclasses__()))
+```
+
+```text
+13 subclasses diretas de OSError:
+   BlockingIOError
+   ChildProcessError
+   ConnectionError
+   FileExistsError
+   FileNotFoundError
+   InterruptedError
+   IsADirectoryError
+   NotADirectoryError
+   PermissionError
+   ProcessLookupError
+   TimeoutError
+   UnsupportedOperation
+```
+
+Até o Python 3.3 tudo isso era um `IOError` genérico, e distinguir os casos exigia comparar `e.errno` com constantes. Hoje o `errno` continua lá, e o objeto traz tudo:
+
+```python
+import errno
+
+try:
+    open("nao-existe.csv")
+except OSError as e:
+    print("type    :", type(e).__name__)
+    print("errno   :", e.errno, "=", errno.errorcode[e.errno])
+    print("strerror:", e.strerror)
+    print("filename:", e.filename)
+```
+
+```text
+type    : FileNotFoundError
+errno   : 2 = ENOENT
+strerror: No such file or directory
+filename: nao-existe.csv
+```
+
+O `filename` é o que salva a mensagem de erro do seu programa: `"arquivo nao encontrado"` sem dizer qual arquivo é uma mensagem inútil.
+
+## Vários `except`, e a ordem importa
+
+```python
+def abrir(caminho):
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "[nao encontrado]"
+    except PermissionError:
+        return "[sem permissao]"
+    except OSError as e:
+        return f"[outro erro de sistema: {type(e).__name__}]"
+```
+
+```text
+leituras.csv     -> onu,nivel
+nao-existe.csv   -> [nao encontrado]
+semleitura.txt   -> [sem permissao]
+umdir            -> [outro erro de sistema: IsADirectoryError]
+```
+
+O Python testa os `except` **de cima para baixo** e para no primeiro que casa. Por isso o genérico vai por último. Invertendo:
+
+```python
+    except OSError:
+        return "[erro de sistema]"
+    except FileNotFoundError:      # nunca alcançado
+        return "[nao encontrado]"
+```
+
+```text
+[erro de sistema]
+```
+
+O segundo bloco virou código morto, e o Python não avisa — nem é erro de sintaxe, nem é aviso. Só um analisador estático como o Ruff (`B014`) pega.
+
+Quando o tratamento é o mesmo, a tupla evita repetição:
+
+```python
+for valor in ("-21.4", "indisponivel", None):
+    try:
+        print(f"{valor!r:16} -> {float(valor):.1f}")
+    except (ValueError, TypeError) as e:
+        print(f"{valor!r:16} -> {type(e).__name__}: {e}")
+```
+
+```text
+'-21.4'          -> -21.4
+'indisponivel'   -> ValueError: could not convert string to float: 'indisponivel'
+None             -> TypeError: float() argument must be a string or a real number, not 'NoneType'
+```
+
+Note que é `except (A, B)`, com parênteses. Sem eles é erro de sintaxe desde o Python 3 — e em Python 2 significava outra coisa, o que gerou uma classe inteira de bugs na migração.
+
+## `else` e `finally`
+
+O bloco completo tem quatro partes, e cada uma tem uma pergunta que responde.
+
+::: {#fig-fluxo-try}
+```{.tikz}
+%%| filename: fluxo-try
+%%| alt: O caminho de execucao pelas quatro partes do bloco try nos dois casos - quando nada falha e quando o try levanta uma excecao tratada - mostrando que o else so roda no primeiro e o finally roda nos dois
+\begin{tikzpicture}[
+  bl/.style={draw=manualgray!60, thick, rounded corners, fill=white,
+             text width=3.4cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\small},
+  on/.style={draw=manualgreen, very thick, rounded corners,
+             fill=manualgreen!15, text width=3.4cm, align=center,
+             minimum height=0.75cm, font=\ttfamily\small},
+  of/.style={draw=manualgray!35, thick, rounded corners, fill=manualgray!5,
+             text width=3.4cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\small, text=manualgray!65},
+  hd/.style={font=\small\bfseries, text=manualgray, align=center},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgreen},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.4) rectangle (15.0,-6.6);
+
+  \node[hd] at (3.2, 1.7) {o \texttt{try} não levantou nada};
+  \node[hd] at (10.4, 1.7) {o \texttt{try} levantou, e um \texttt{except} casou};
+
+  \node[on] at (3.2, 0.7) {try:};
+  \node[of] at (3.2,-0.5) {except:};
+  \node[on] at (3.2,-1.7) {else:};
+  \node[on] at (3.2,-2.9) {finally:};
+  \node[on] at (3.2,-4.1) {segue o programa};
+
+  \node[on] at (10.4, 0.7) {try:};
+  \node[on] at (10.4,-0.5) {except:};
+  \node[of] at (10.4,-1.7) {else:};
+  \node[on] at (10.4,-2.9) {finally:};
+  \node[on] at (10.4,-4.1) {segue o programa};
+
+  \draw[fl] (3.2, 0.3) -- (3.2,-1.3);
+  \draw[fl] (3.2,-2.1) -- (3.2,-2.5);
+  \draw[fl] (3.2,-3.3) -- (3.2,-3.7);
+
+  \draw[fl] (10.4, 0.3) -- (10.4,-0.1);
+  \draw[fl] (10.4,-0.9) -- (10.4,-2.5);
+  \draw[fl] (10.4,-3.3) -- (10.4,-3.7);
+
+  \node[lb, text width=2.6cm] at (0.9,-0.5) {pulado};
+  \node[lb, text width=2.6cm] at (13.0,-1.7) {pulado};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.8)
+    {\texttt{else} é o lugar do código que \textbf{depende} do \texttt{try} ter
+     dado certo, mas que você \textbf{não} quer dentro do \texttt{try} --- se
+     ele levantar a mesma exceção, não deve ser confundido com a original.
+     \texttt{finally} roda sempre: com sucesso, com exceção tratada, com exceção
+     não tratada (antes de o traceback subir) e até quando o bloco termina por
+     \texttt{return}, \texttt{break} ou \texttt{continue}.};
+\end{tikzpicture}
+```
+Os dois caminhos pelo bloco completo. `else` roda só quando não houve exceção; `finally` roda sempre.
+:::
+
+```python
+def ler(caminho):
+    print(f"-- {caminho}")
+    try:
+        f = open(caminho, encoding="utf-8")
+    except FileNotFoundError:
+        print("   except  : arquivo nao existe")
+        return None
+    else:
+        print("   else    : abriu, agora leio")
+        return f.read()
+    finally:
+        print("   finally : sempre roda")
+```
+
+```text
+-- leituras.csv
+   else    : abriu, agora leio
+   finally : sempre roda
+-- nao-existe.csv
+   except  : arquivo nao existe
+   finally : sempre roda
+```
+
+Repare que o `finally` rodou depois do `return` nos dois casos. Ele roda mesmo:
+
+```python
+def f():
+    try:
+        return "do try"
+    finally:
+        print("finally rodou antes de devolver")
+```
+
+```text
+finally rodou antes de devolver
+do try
+```
+
+O valor de retorno é calculado, o `finally` executa, e só então a função devolve. É essa garantia que faz do `finally` o lugar da limpeza — e é ela que o `with` do @sec-cap040 embala num objeto.
+
+### A armadilha do `return` dentro do `finally`
+
+```python
+def ruim():
+    try:
+        raise ValueError("erro de verdade")
+    finally:
+        return "tudo bem"          # <- engole a exceção
+```
+
+```text
+ruim() -> tudo bem
+```
+
+A exceção sumiu. Um `return`, um `break` ou um `continue` dentro do `finally` **descarta** a exceção que estava subindo, sem deixar rastro nenhum — nem no log, nem no traceback. É provavelmente a forma mais eficiente de esconder um defeito em Python, e o Ruff a marca com `B012`. A versão correta faz a limpeza e deixa a exceção seguir:
+
+```python
+def bom():
+    try:
+        raise ValueError("erro de verdade")
+    finally:
+        print("   limpeza feita")
+```
+
+```text
+   limpeza feita
+Traceback (most recent call last):
+  File "/home/vitor/lab38/engolir.py", line 17, in <module>
+    bom()
+    ~~~^^
+  File "/home/vitor/lab38/engolir.py", line 10, in bom
+    raise ValueError("erro de verdade")
+ValueError: erro de verdade
+```
+
+## O `except` cru, e por que não
+
+```python
+try:
+    ...
+except:            # <- captura tudo, inclusive o que não devia
+    ...
+```
+
+Um `except` sem classe captura `BaseException`, o topo da árvore. O que isso significa na prática:
+
+```python
+def com_except_cru():
+    try:
+        raise KeyboardInterrupt
+    except:
+        print("   engoli ate o Ctrl-C")
+```
+
+```text
+   engoli ate o Ctrl-C
+   KeyboardInterrupt passou por except Exception, como devia
+```
+
+Um laço com `except:` dentro não pode ser interrompido com Ctrl-C. Mas o dano maior é outro, e é diário:
+
+```python
+def media(niveis):
+    try:
+        return sum(niveis) / len(nivies)      # typo: nivies
+    except:
+        return 0.0
+
+
+print("media com except cru :", media([-21.4, -29.8]))
+```
+
+```text
+media com except cru : 0.0
+```
+
+A média de duas leituras válidas deu zero, o programa não reclamou, e o relatório saiu com um número errado. Com o `except` específico, o Python entrega o defeito de bandeja:
+
+```text
+  File "/home/vitor/lab38/esconde.py", line 13, in media2
+    return sum(niveis) / len(nivies)      # mesmo typo
+                             ^^^^^^
+NameError: name 'nivies' is not defined. Did you mean: 'niveis'?
+```
+
+Marcador de coluna apontando o nome errado e sugestão do nome certo — tudo isso o `except:` jogou fora.
+
+Quando você realmente precisa de uma rede ampla (o laço principal de um servidor, que não pode morrer por causa de uma requisição), a forma é `except Exception`, que preserva `KeyboardInterrupt` e `SystemExit` — e **sempre** com registro do que aconteceu:
+
+```python
+try:
+    processar(requisicao)
+except Exception:
+    logging.exception("falha ao processar %s", requisicao.id)
+```
+
+`logging.exception` grava a mensagem **com o traceback completo**, e é o que separa "engolir" de "tratar".
+
+## O objeto exceção
+
+```python
+try:
+    float("indisponivel")
+except ValueError as e:
+    print("str(e) :", str(e))
+    print("e.args :", e.args)
+    print("repr(e):", repr(e))
+```
+
+```text
+str(e) : could not convert string to float: 'indisponivel'
+e.args : ("could not convert string to float: 'indisponivel'",)
+repr(e): ValueError("could not convert string to float: 'indisponivel'")
+```
+
+`str(e)` dá a mensagem; `e.args` dá os argumentos brutos, úteis quando a exceção carrega mais de um (como `OSError`, que traz `errno` e `strerror`); `e.__traceback__` dá o objeto de pilha.
+
+Um detalhe que surpreende: o nome ligado por `as` é apagado ao sair do bloco.
+
+```python
+try:
+    int("indisponivel")
+except ValueError as e:
+    print("dentro do except:", e)
+print("fora do bloco:")
+print(e)
+```
+
+```text
+dentro do except: invalid literal for int() with base 10: 'indisponivel'
+fora do bloco:
+Traceback (most recent call last):
+  File "/home/vitor/lab38/escopo.py", line 6, in <module>
+    print(e)
+          ^
+NameError: name 'e' is not defined
+```
+
+O Python faz um `del e` implícito no fim do `except`. A razão é o ciclo de referências: a exceção aponta para o traceback, que aponta para os quadros da pilha, que apontam para as variáveis locais — incluindo `e`. Se você precisa do objeto depois, copie para outro nome dentro do bloco.
+
+## EAFP: pedir perdão em vez de permissão
+
+Há duas maneiras de escrever código que lida com o que pode não estar lá:
+
+```python
+def lbyl(olt):                     # Look Before You Leap
+    if olt in LIMITES:
+        return LIMITES[olt]
+    return PADRAO
+
+
+def eafp(olt):                     # Easier to Ask Forgiveness than Permission
+    try:
+        return LIMITES[olt]
+    except KeyError:
+        return PADRAO
+```
+
+```text
+lbyl       olt-borda-02=-27.0  olt-borda-99=-30.0
+eafp       olt-borda-02=-27.0  olt-borda-99=-30.0
+pythonico  olt-borda-02=-27.0  olt-borda-99=-30.0
+```
+
+A comunidade Python prefere EAFP, e há três razões concretas.
+
+**O teste prévio pode mentir.** Entre perguntar e agir, o mundo muda — outro processo apaga o arquivo, a conexão cai, o disco enche:
+
+```python
+p = Path("efemero.txt")
+p.write_text("existo\n", encoding="utf-8")
+
+if p.exists():
+    os.remove(p)          # <- simula outro processo apagando aqui
+    try:
+        print(p.read_text(encoding="utf-8"))
+    except FileNotFoundError as e:
+        print("LBYL falhou mesmo tendo perguntado antes:", type(e).__name__)
+```
+
+```text
+LBYL falhou mesmo tendo perguntado antes: FileNotFoundError
+```
+
+Isso tem nome — condição de corrida TOCTOU (*time of check to time of use*) — e não há como consertar com um `if` melhor. O `try` é a única forma correta, porque a operação e a verificação viram uma coisa só.
+
+**O teste prévio duplica a lógica.** `if olt in LIMITES` faz a busca; `LIMITES[olt]` faz a busca de novo. E toda vez que alguém muda a condição de acesso, há dois lugares para atualizar.
+
+**No caminho feliz, o `try` é mais barato.** Medindo os quatro casos:
+
+```bash
+python3 -m timeit -s "..." "com_try()"
+```
+
+```text
+sucesso  com try : 28.2 nsec por volta
+sucesso  com if  : 47.3 nsec por volta
+falha    com try : 108  nsec por volta
+falha    com if  : 29.4 nsec por volta
+```
+
+Montar o bloco `try` custa quase nada — o interpretador só registra um manipulador. Levantar e capturar a exceção, sim, custa: quase quatro vezes o `if`. A regra que sai da medição é direta: **EAFP quando a falha é excepcional; LBYL quando a falha é comum.** Um `try/except KeyError` dentro de um laço em que metade das chaves falta é mais lento do que o `if`.
+
+E, para este caso específico, nenhum dos dois: `LIMITES.get(olt, PADRAO)` diz o mesmo em uma linha. A melhor exceção é a que a biblioteca padrão já evitou por você — `dict.get`, `next(it, padrao)`, `getattr(obj, nome, padrao)`, `unlink(missing_ok=True)`.
+
+## Onde capturar
+
+A pergunta mais difícil não é *como*, é *onde*. O critério é: **capture no nível onde há uma decisão a tomar.**
+
+```python
+def carregar(caminho):
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        logging.warning("arquivo ausente: %s", caminho)
+        raise
+```
+
+```text
+WARNING arquivo ausente: nao-existe.csv
+Traceback (most recent call last):
+  File "/home/vitor/lab38/relevantar.py", line 15, in <module>
+    carregar("nao-existe.csv")
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/vitor/lab38/relevantar.py", line 8, in carregar
+    with open(caminho, encoding="utf-8") as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'nao-existe.csv'
+```
+
+Aqui a função de baixo nível **registra** e **relança**: ela sabe o que aconteceu, mas não sabe se o programa deve continuar sem esse arquivo. Quem sabe é quem chamou. O `raise` sem argumento relança a exceção original com o traceback intacto — e é diferente de `raise e`, que é assunto do @sec-cap039.
+
+Uma função de biblioteca que engole `FileNotFoundError` e devolve `None` transfere o problema: agora quem chama tem que testar `None` e não faz ideia do porquê. Deixar subir é quase sempre a decisão certa em código de biblioteca; capturar é decisão de quem escreve a aplicação.
+
+## `StopIteration` não é erro
+
+Uma exceção que você já usa sem saber:
+
+```python
+it = iter([1])
+print(next(it))
+try:
+    next(it)
+except StopIteration:
+    print("StopIteration: o for captura isso por voce")
+print("next com padrao:", next(it, "acabou"))
+```
+
+```text
+1
+StopIteration: o for captura isso por voce
+next com padrao: acabou
+```
+
+O `for` do @sec-cap016 é um `while` com `next()` dentro de um `try`. Exceção em Python não é só "erro": é um mecanismo de controle de fluxo, e o protocolo de iteração é a prova disso. `SystemExit` do @sec-cap034 é outro exemplo — sair do programa é levantar uma exceção.
+
+## Grupos de exceções
+
+Desde o **Python 3.11** (PEP 654), é possível levantar várias exceções de uma vez. O caso natural é o de um laço que não pode parar na primeira falha:
+
+```python
+def coletar(olts):
+    erros, resultados = [], []
+    for olt in olts:
+        try:
+            resultados.append((olt, consultar(olt)))
+        except OSError as e:
+            erros.append(e)
+    if erros:
+        raise ExceptionGroup("falhas na coleta", erros)
+    return resultados
+
+
+try:
+    coletar(["olt-borda-01", "olt-borda-02", "olt-borda-03"])
+except* TimeoutError as eg:
+    print("timeouts   :", [str(e) for e in eg.exceptions])
+except* PermissionError as eg:
+    print("permissoes :", [str(e) for e in eg.exceptions])
+```
+
+```text
+timeouts   : ['olt-borda-02 nao respondeu']
+permissoes : ['olt-borda-03 recusou a credencial']
+```
+
+O `except*` — com asterisco — é diferente do `except` comum em duas coisas: ele recebe um **grupo** com todas as exceções que casaram, e **todos** os blocos `except*` rodam, não só o primeiro. Sem tratamento, o traceback mostra a estrutura inteira:
+
+```text
+  + Exception Group Traceback (most recent call last):
+  |   File "<string>", line 2, in <module>
+  | ExceptionGroup: falhas na coleta (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | TimeoutError: olt-borda-02 nao respondeu
+    +---------------- 2 ----------------
+    | PermissionError: olt-borda-03 recusou a credencial
+    +------------------------------------
+```
+
+Isso nasceu para o `asyncio` — quando vinte tarefas rodam em paralelo, três podem falhar por motivos diferentes, e escolher uma para relançar perde as outras. Fora de código concorrente, é raro precisar; conhecer a sintaxe basta para não se assustar com o traceback.
+
+## O que o Python moderno diz por você
+
+Vale registrar quanto as mensagens melhoraram, porque muito código que existe por aí trata exceções que hoje se diagnosticam sozinhas:
+
+```python
+leitura = {"onu": "onu-00042"}
+print(leitura["onu"].uper())
+```
+
+```text
+AttributeError: 'str' object has no attribute 'uper'. Did you mean: 'upper'?
+```
+
+```python
+print(f(1, 0) + f(2, 1))
+```
+
+```text
+  File "<string>", line 4, in <module>
+    print(f(1, 0) + f(2, 1))
+          ~^^^^^^
+  File "<string>", line 3, in f
+    return a / b
+           ~~^~~
+ZeroDivisionError: division by zero
+```
+
+O marcador `~^^^^^^` do Python 3.11 (PEP 657) mostra **qual** das duas chamadas falhou — informação que antes exigia rodar no depurador. E as sugestões de nome (3.10 para atributos, 3.12 para módulos e palavras-chave) resolvem o erro de digitação sem sair do traceback.
+
+## 🐍 Jeito Pythônico
+
+**Capture o mais específico que resolver.** `except ValueError`, não `except Exception`; `except FileNotFoundError`, não `except OSError`, quando é só o arquivo ausente que você sabe tratar.
+
+```python
+# antipadrão
+try:
+    processar()
+except:
+    pass
+```
+
+```python
+# pythônico
+try:
+    processar()
+except FileNotFoundError:
+    logging.warning("entrada ausente, pulando")
+```
+
+**`try` curto.** Só as linhas que podem levantar o que você vai tratar. `try` grande captura o erro certo pelo motivo errado.
+
+**Nunca `except:` cru.** Se precisa de rede ampla, `except Exception` — e com `logging.exception`, nunca com `pass`.
+
+**Nada de `return`, `break` ou `continue` dentro de `finally`.** Eles descartam a exceção que estava subindo.
+
+**Do específico para o genérico**, na ordem dos `except`. O genérico primeiro transforma o resto em código morto.
+
+**EAFP para o caso excepcional, LBYL para o caso comum**, e nenhum dos dois quando a biblioteca padrão já tem a versão com valor padrão (`dict.get`, `next(it, x)`, `getattr(o, n, x)`).
+
+**Registre e relance** em código de biblioteca; decida em código de aplicação. `raise` sem argumento preserva o traceback.
+
+**`except (A, B)` com parênteses** quando o tratamento é o mesmo.
+
+Sobre versões:
+
+- **Python 3.0** — `except E as e` substitui `except E, e`; o nome é apagado ao sair do bloco.
+- **Python 3.3** — a PEP 3151 quebra `IOError`/`OSError` na família de treze subclasses; comparar `errno` deixa de ser necessário.
+- **Python 3.10** — sugestão de nome em `AttributeError` e `NameError`; parênteses em grupos de `except` na mesma linha.
+- **Python 3.11** — PEP 657 (marcador de coluna no traceback), PEP 654 (`ExceptionGroup` e `except*`), e `add_note` nas exceções.
+- **Python 3.12** — sugestões para módulo inexistente e para palavra-chave errada em chamada.
+- **Python 3.13** — traceback colorido no terminal (`PYTHON_COLORS=0` desliga) e mensagens mais precisas em erro de sintaxe.
+
+## 🧪 Laboratório
+
+Objetivo: transformar um importador frágil num tolerante, explorar a hierarquia, medir o custo de EAFP contra LBYL, ver o `except` cru esconder um defeito e provar que `finally` sempre roda.
+
+**1. O arquivo com defeito.**
+
+```bash
+mkdir -p ~/lab38 && cd ~/lab38
+python3 -c "
+from pathlib import Path
+Path('leituras.csv').write_text(
+    'onu,nivel\nonu-00042,-21.4\nonu-00043,-29.8\nonu-00044,indisponivel\nonu-00045,\n',
+    encoding='utf-8')
+"
+```
+
+**2. O importador que morre.** Escreva `ingenuo.py` (o primeiro bloco do capítulo) e rode:
+
+```text
+ValueError: could not convert string to float: 'indisponivel'
+```
+
+**3. O importador que sobrevive.** Escreva `tentativa.py`, com o `try` dentro do laço:
+
+```text
+  linha 4: descartada (ValueError: could not convert string to float: 'indisponivel')
+  linha 5: descartada (ValueError: could not convert string to float: '')
+2 validas, 2 descartadas
+media: -25.6
+```
+
+**4. A árvore.** Imprima o `__mro__` de cinco exceções e as subclasses de `BaseException` e de `OSError`.
+
+**5. O `errno`.** Capture `OSError` num arquivo inexistente e imprima `errno`, `strerror` e `filename`.
+
+**6. A ordem.** Crie um diretório e um arquivo sem permissão de leitura:
+
+```bash
+mkdir umdir
+echo x > semleitura.txt && chmod 000 semleitura.txt
+```
+
+Rode `ordem.py` com os quatro alvos e depois `invertida.py`, com `OSError` na frente.
+
+```text
+leituras.csv     -> onu,nivel
+nao-existe.csv   -> [nao encontrado]
+semleitura.txt   -> [sem permissao]
+umdir            -> [outro erro de sistema: IsADirectoryError]
+```
+
+**7. `else` e `finally`.** Rode `fluxo.py` nos dois caminhos e confirme que `finally` sai depois do `return`.
+
+**8. O `finally` que engole.** Rode `engolir.py` e veja `ruim()` devolver `"tudo bem"` com a exceção sumida, e `bom()` fazer a limpeza e deixar o traceback subir.
+
+**9. O `except` cru.** Rode `esconde.py`. A média de `[-21.4, -29.8]` sai `0.0` com o `except:` e vira `NameError` com o `except` específico:
+
+```text
+media com except cru : 0.0
+NameError: name 'nivies' is not defined. Did you mean: 'niveis'?
+```
+
+**10. O nome que some.** Rode `escopo.py` e confirme o `NameError` no `print(e)` depois do bloco.
+
+**11. A corrida.** Rode `corrida.py`: o `exists()` disse `True` e o `read_text` falhou assim mesmo.
+
+**12. A medição.**
+
+```bash
+python3 -m timeit -s "d = {'a': 1}
+def com_try():
+    try:
+        return d['a']
+    except KeyError:
+        return 0" "com_try()"
+```
+
+Repita para as quatro variações e compare:
+
+```text
+sucesso  com try : 28.2 nsec por volta
+sucesso  com if  : 47.3 nsec por volta
+falha    com try : 108  nsec por volta
+falha    com if  : 29.4 nsec por volta
+```
+
+**13. O traceback como texto.** Rode `capturar.py`, que guarda `traceback.format_exc()` numa variável e imprime só a última linha.
+
+**14. O grupo.** Rode `grupos.py` com os dois `except*` e depois levante um `ExceptionGroup` sem tratamento para ver o traceback em árvore.
+
+**15. Limpe a bagunça.**
+
+```bash
+chmod 644 semleitura.txt
+```
+
+## Resumo
+
+- Exceção é objeto e as classes formam uma árvore; capturar uma classe captura toda a subárvore. `except OSError` pega treze subclasses de uma vez.
+- `SystemExit`, `KeyboardInterrupt` e `GeneratorExit` herdam de `BaseException`, não de `Exception` — por isso `except Exception` não engole Ctrl-C.
+- Os `except` são testados de cima para baixo: do específico para o genérico. Invertido, o específico vira código morto sem aviso.
+- `except:` cru captura tudo, inclusive o `NameError` do seu erro de digitação. Se precisa de rede ampla, `except Exception` com `logging.exception`.
+- `else` roda só quando o `try` não levantou; `finally` roda sempre, inclusive depois de `return`. `return` dentro de `finally` **descarta** a exceção que subia.
+- O nome ligado por `as` é apagado no fim do bloco `except`, para quebrar o ciclo exceção/traceback/quadro.
+- EAFP é o estilo idiomático: o `if` prévio pode mentir (TOCTOU), duplica a lógica e, no caminho feliz, é mais lento que o `try`. Quando a falha é comum, o `if` ganha.
+- Melhor que os dois é a versão com padrão que já existe: `dict.get`, `next(it, x)`, `getattr(o, n, x)`, `unlink(missing_ok=True)`.
+- Em biblioteca, registre e relance com `raise` sem argumento; a decisão de engolir é de quem escreve a aplicação.
+- `ExceptionGroup` e `except*` (3.11) existem para quando várias operações falham em paralelo — todos os `except*` que casam executam, não só o primeiro.
