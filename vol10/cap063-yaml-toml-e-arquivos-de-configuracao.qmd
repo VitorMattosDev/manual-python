@@ -1,3 +1,549 @@
 # YAML, TOML e arquivos de configuração {#sec-cap063}
 
-*(em elaboracao)*
+O coletor dos dois capítulos anteriores tem, espalhados pelo código, um endereço de banco, um intervalo de 300 segundos, um limite de potência e o nível de registro. Todos escritos como literais. Mudar o intervalo para 60 segundos numa madrugada de incidente significa editar o fonte, e editar o fonte em produção significa que o que roda deixou de ser o que está no Git.
+
+A saída é óbvia e antiga: pôr essas decisões num arquivo. A pergunta é **qual formato** — e aqui o Python tem uma resposta oficial desde a versão 3.11, além de uma segunda que domina o mundo dos contêineres e traz uma armadilha que já derrubou serviço de gente séria.
+
+JSON, visto no @sec-cap062, é péssimo para isso: não aceita comentário, não perdoa vírgula sobrando e obriga a aspas em toda chave. Configuração é feita para ser lida e editada por gente, e é aí que TOML e YAML entram.
+
+## TOML: a resposta oficial
+
+```python
+import tomllib
+
+with open("config.toml", "rb") as f:
+    cfg = tomllib.load(f)
+```
+
+`tomllib` entrou na biblioteca padrão no Python 3.11 (PEP 680) e é o formato que o próprio ecossistema já adotou — o `pyproject.toml` do @sec-cap032 é TOML. Não há dependência a instalar.
+
+O arquivo se parece com isto:
+
+```toml
+# configuracao do coletor
+nome = "coletor-zona-sul"
+intervalo = 300
+ativo = true
+limite_potencia = -30.0
+
+[banco]
+host = "10.0.0.20"
+porta = 5432
+tempo_limite = 5.0
+
+[banco.pool]
+minimo = 2
+maximo = 10
+
+[[equipamento]]
+nome = "olt-central"
+ip = "10.0.0.1"
+portas = [1, 2, 3]
+
+[[equipamento]]
+nome = "olt-norte"
+ip = "10.0.0.2"
+portas = [4, 5]
+```
+
+E vira estrutura Python sem cerimônia nenhuma:
+
+```python
+cfg["nome"], cfg["banco"]["pool"]["maximo"]
+[e["nome"] for e in cfg["equipamento"]]
+```
+
+```text
+coletor-zona-sul 10
+['olt-central', 'olt-norte']
+```
+
+Três construções e o formato está explicado. `chave = valor` no topo é a raiz. `[banco]` abre uma **tabela**, que vira um dicionário aninhado — e `[banco.pool]` aninha mais um nível sem indentação nenhuma, o que evita a classe inteira de erros de espaçamento. `[[equipamento]]`, com colchete duplo, é um **vetor de tabelas**: cada bloco repetido acrescenta um item à lista.
+
+### Os tipos vêm prontos
+
+```text
+  nome             str
+  intervalo        int
+  ativo            bool
+  limite_potencia  float
+```
+
+Diferente do CSV, onde tudo é string, TOML tem tipos declarados na sintaxe: aspas fazem string, algarismos fazem número, `true`/`false` fazem booleano. E, ao contrário do JSON, distingue inteiro de ponto flutuante.
+
+Tem até tipos de data nativos, que já chegam como objetos do `datetime` (@sec-cap056):
+
+```toml
+lancamento = 2026-08-12
+inicio = 2026-08-12T03:14:22-03:00
+hora = 03:14:22
+```
+
+```text
+  lancamento  datetime.date(2026, 8, 12)                    date
+  inicio      datetime.datetime(2026, 8, 12, 3, 14, 22, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=75600))) datetime
+  hora        datetime.time(3, 14, 22)                      time
+```
+
+O deslocamento `-03:00` virou um `tzinfo` correto — sem `strptime`, sem formato combinado por escrito, sem ambiguidade.
+
+### O modo binário, que não é opcional
+
+```python
+with open("config.toml", "r", encoding="utf-8") as f:
+    tomllib.load(f)
+```
+
+```text
+TypeError: File must be opened in binary mode, e.g. use `open('foo.toml', 'rb')`
+```
+
+`tomllib.load` exige `"rb"`. A razão é boa: a especificação do TOML determina que o arquivo é UTF-8, então o módulo decodifica ele mesmo em vez de aceitar o que o `encoding` da plataforma tiver decidido. O erro é claro e vem com a solução — é dos poucos casos em que a mensagem ensina.
+
+### Quando o arquivo está errado
+
+```text
+  'a = '                   -> Invalid value (at end of document)
+  'a = "x"\na = "y"'       -> Cannot overwrite a value (at end of document)
+  '[a]\nb = 1\n[a]\nc = 2' -> Cannot declare ('a',) twice (at line 3, column 3)
+  'a = 01'                 -> Expected newline or end of document after a statement (at line 1, column 6)
+```
+
+`tomllib.TOMLDecodeError` é subclasse de `ValueError`. Repare na segunda e na terceira: **chave duplicada é erro** em TOML, ao contrário do JSON, onde a última vencia em silêncio. Numa configuração, isso é exatamente o que se quer — duas linhas `intervalo =` no mesmo arquivo é sempre um engano, e é bom saber disso na leitura e não em produção.
+
+A quarta linha antecipa um assunto: `01` não é um inteiro válido em TOML, justamente porque zero à esquerda é ambíguo. Guarde essa, porque o YAML resolveu o mesmo problema de outro jeito.
+
+### `tomllib` só lê
+
+```text
+tomllib tem dumps? False
+['TOMLDecodeError', 'load', 'loads']
+
+```
+
+Três nomes, e nenhum escreve. Foi decisão deliberada: gerar TOML corretamente — preservando comentários, ordem e estilo — é bem mais difícil que analisá-lo, e a biblioteca padrão não quis carregar isso. Quando for preciso escrever, `tomli-w` gera um arquivo novo e `tomlkit` edita preservando comentários e formatação.
+
+Mas vale perguntar se é preciso. Configuração é escrita por gente e lida por programa; programa que reescreve a própria configuração costuma ser um sinal de que aquilo era **estado**, e estado vai para um banco (@sec-cap065 trata disso) ou para um arquivo de dados, não para o `config.toml` que alguém versiona.
+
+## YAML: mais poderoso, e é esse o problema
+
+YAML não está na biblioteca padrão. `pip install pyyaml`, e o mesmo conteúdo fica assim:
+
+```yaml
+nome: coletor-zona-sul
+intervalo: 300
+ativo: true
+
+banco:
+  host: 10.0.0.20
+  porta: 5432
+  pool:
+    minimo: 2
+    maximo: 10
+
+equipamento:
+  - nome: olt-central
+    ip: 10.0.0.1
+    portas: [1, 2, 3]
+  - nome: olt-norte
+    ip: 10.0.0.2
+    portas: [4, 5]
+
+descricao: |
+  coletor da zona sul
+  roda de madrugada
+```
+
+```python
+import yaml
+
+with open("config.yaml", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
+```
+
+```text
+coletor-zona-sul 10
+['olt-central', 'olt-norte']
+'coletor da zona sul\nroda de madrugada\n'
+```
+
+É inegavelmente mais enxuto: sem aspas, sem colchetes duplos, aninhamento por indentação. O `|` preserva quebras de linha num bloco de texto, o que TOML só faz com aspas triplas. E tem um recurso que nenhum outro formato de configuração tem — **âncoras e mesclagem**:
+
+```yaml
+padrao: &padrao
+  tempo_limite: 5.0
+  tentativas: 3
+
+producao:
+  <<: *padrao
+  host: 10.0.0.20
+
+teste:
+  <<: *padrao
+  host: 127.0.0.1
+  tentativas: 1
+```
+
+```text
+producao: {'tempo_limite': 5.0, 'tentativas': 3, 'host': '10.0.0.20'}
+teste   : {'tempo_limite': 5.0, 'tentativas': 1, 'host': '127.0.0.1'}
+```
+
+`&padrao` define, `*padrao` referencia, `<<:` mescla — e `teste` sobrescreveu `tentativas` sem repetir o resto. É por isso que YAML domina onde há muito ambiente parecido: Kubernetes, GitHub Actions, Ansible, `docker-compose`.
+
+### O problema da Noruega
+
+Agora o preço. YAML tenta adivinhar o tipo de cada valor não citado, e adivinha demais:
+
+```yaml
+noruega: NO
+sim: yes
+versao: 1.20
+octal: 0o17
+cep: 01310
+telefone: +55 11 99999-9999
+vazio:
+nulo: null
+til: ~
+```
+
+```text
+  noruega    False                  bool
+  sim        True                   bool
+  versao     1.2                    float
+  octal      '0o17'                 str
+  cep        712                    int
+  telefone   '+55 11 99999-9999'    str
+  vazio      None                   NoneType
+  nulo       None                   NoneType
+  til        None                   NoneType
+```
+
+Leia devagar, porque cada linha é um incidente que já aconteceu.
+
+`NO`, o código ISO da Noruega, virou `False` — o bug tem nome próprio e é conhecido como *the Norway problem*. `yes` também é booleano, e junto com ele `on`, `off`, `y`, `n` e `true`/`false` em qualquer combinação de maiúsculas.
+
+`1.20` virou `1.2`: um número de versão perdeu o zero à direita e deixou de comparar igual à string que estava no outro arquivo.
+
+E a pior: **`01310` virou `712`**. Não é truncamento — é interpretação octal, herança do YAML 1.1 que o PyYAML implementa. Todo CEP, código de banco, número de agência e identificador com zero à esquerda é reinterpretado como base 8, em silêncio, e sai um número que existe e está errado. Compare com o TOML, que **recusa** `a = 01` com erro de sintaxe: um formato diz "isso é ambíguo, decida"; o outro decide sozinho.
+
+Ironicamente, `0o17` — a notação octal do YAML 1.2 e do próprio Python — virou string, porque o PyYAML segue o 1.1. A inconsistência é completa.
+
+A defesa é só uma: **cite tudo que for identificador**. `noruega: "NO"`, `cep: "01310"`, `versao: "1.20"`. E, quando o dado vem de fora, validar com esquema em vez de confiar no que o analisador decidiu.
+
+::: {#fig-yaml-coercao}
+```{.tikz}
+%%| filename: yaml-coercao
+%%| alt: Valores escritos num arquivo YAML e o que o safe_load devolve, com quatro casos em que o tipo muda sozinho e o valor deixa de estar correto
+\begin{tikzpicture}[
+  esc/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=4.0cm, align=left, minimum height=0.6cm,
+              font=\ttfamily\scriptsize, inner xsep=6pt},
+  okv/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+              text width=3.6cm, align=left, minimum height=0.6cm,
+              font=\ttfamily\scriptsize, inner xsep=6pt},
+  ruim/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+               text width=3.6cm, align=left, minimum height=0.6cm,
+               font=\ttfamily\scriptsize, inner xsep=6pt},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fr/.style={->,>=stealth, thick, manualred},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 5.2) rectangle (15.6,-5.6);
+
+  \node[ttl] at (-0.4, 4.8) {o que foi escrito, e o que o \texttt{safe\_load}
+                             devolveu};
+
+  \node[lb, text=manualblue]  at (0.4, 4.1) {no arquivo};
+  \node[lb, text=manualgray]  at (7.6, 4.1) {em Python};
+
+  \node[esc]  at (2.4, 3.4) {noruega: NO};
+  \node[esc]  at (2.4, 2.5) {sim: yes};
+  \node[esc]  at (2.4, 1.6) {versao: 1.20};
+  \node[esc]  at (2.4, 0.7) {cep: 01310};
+  \node[esc]  at (2.4,-0.2) {telefone: +55 11 9...};
+  \node[esc]  at (2.4,-1.1) {vazio:};
+
+  \node[ruim] at (9.3, 3.4) {False \quad bool};
+  \node[ruim] at (9.3, 2.5) {True \quad bool};
+  \node[ruim] at (9.3, 1.6) {1.2 \quad float};
+  \node[ruim] at (9.3, 0.7) {712 \quad int};
+  \node[okv]  at (9.3,-0.2) {'+55 11 9...' \quad str};
+  \node[okv]  at (9.3,-1.1) {None};
+
+  \foreach \yy in {3.4, 2.5, 1.6, 0.7} \draw[fr] (4.5, \yy) -- (7.4, \yy);
+  \foreach \yy in {-0.2, -1.1}         \draw[fl] (4.5, \yy) -- (7.4, \yy);
+
+  \node[lb, text=manualred, text width=3.9cm] at (11.4, 3.4)
+    {código ISO da Noruega};
+  \node[lb, text=manualred, text width=3.9cm] at (11.4, 1.6)
+    {o zero à direita sumiu};
+  \node[lb, text=manualred, text width=3.9cm] at (11.4, 0.7)
+    {lido como octal: 1310 na\\base 8 é 712 na base 10};
+
+  \node[nt, text width=15.6cm] at (-0.4,-2.1)
+    {Nenhum desses casos levanta exceção, e nenhum aparece em revisão de
+     código --- o defeito está no arquivo de configuração, que ninguém revisa
+     com o mesmo cuidado. O quarto é o mais grave: todo CEP, código de agência
+     e identificador com zero à esquerda vira outro número que também é válido.
+     O TOML resolve o mesmo caso recusando \texttt{a = 01} com erro de
+     sintaxe --- um formato manda decidir, o outro decide sozinho. A defesa em
+     YAML é citar todo identificador (\texttt{cep: "01310"}) e validar o
+     resultado com esquema, em vez de confiar na adivinhação.};
+\end{tikzpicture}
+```
+YAML infere o tipo de valores não citados, e erra em silêncio nos casos que mais importam.
+:::
+
+### `safe_load`, nunca `load`
+
+Historicamente, `yaml.load` construía **objetos Python arbitrários** a partir do arquivo, o que transforma um arquivo de configuração numa execução de código — a mesma classe de problema que o próximo capítulo detalha com o `pickle`. A partir do PyYAML 6 o descuido ficou impossível:
+
+```text
+yaml.load sem Loader levanta? TypeError: load() missing 1 required positional argument: 'Loader'
+```
+
+`yaml.safe_load` é a função a usar, sempre, e constrói apenas os tipos básicos. `yaml.safe_dump` é a contraparte na escrita, com `allow_unicode=True` para não escapar acentos e `sort_keys=False` para preservar a ordem.
+
+### E a indentação
+
+```python
+yaml.safe_load("a:\n\t- 1\n")
+```
+
+```text
+ScannerError
+while scanning for the next token
+```
+
+**Tabulação é proibida** em YAML, e o erro não menciona a palavra "tab" na primeira linha. Como o significado depende inteiramente da indentação, um espaço a mais ou a menos reaninha um bloco inteiro sem gerar erro nenhum — o arquivo continua válido e significa outra coisa. É a razão pela qual arquivo YAML grande é notoriamente difícil de manter, e o motivo pelo qual o TOML abandonou a indentação como sintaxe.
+
+## As camadas de uma configuração
+
+Nenhum programa sério é configurado por um arquivo só. O arranjo padrão tem quatro camadas, cada uma sobrescrevendo a anterior:
+
+```python
+def carregar(caminho, prefixo="COLETOR_"):
+    with open(caminho, "rb") as f:
+        conf = tomllib.load(f)
+    for chave, valor in os.environ.items():
+        if chave.startswith(prefixo):
+            conf[chave[len(prefixo):].lower()] = valor
+    return conf
+```
+
+```text
+nome     : coletor-emergencia
+intervalo: '60'
+```
+
+Note as aspas em `'60'`: **variável de ambiente é sempre string** (@sec-cap055). Se a camada de arquivo entregou um `int` e a de ambiente entrega `str`, o programa passa a receber tipos diferentes para a mesma chave conforme o ambiente — um defeito que só aparece em produção. Converter na fronteira, com uma tabela de tipos por chave, é o que evita isso.
+
+::: {#fig-camadas-config}
+```{.tikz}
+%%| filename: camadas-config
+%%| alt: As quatro camadas de configuracao, dos padroes no codigo ate os argumentos de linha de comando, cada uma sobrescrevendo a anterior, com os segredos entrando so pelo ambiente
+\begin{tikzpicture}[
+  cmd/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=2.9cm, align=center, minimum height=1.0cm,
+              font=\ttfamily\scriptsize},
+  seg/.style={->,>=stealth, very thick, manualgray},
+  chv/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=3.3cm, align=center,
+              minimum height=0.85cm, font=\scriptsize},
+  alr/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=4.4cm, align=center, minimum height=0.85cm,
+              font=\scriptsize},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.4) rectangle (15.6,-5.8);
+
+  \node[ttl] at (-0.4, 4.0) {quatro camadas --- a de baixo vale menos, a de
+                             cima vale mais};
+
+  \node[cmd] (a) at (1.9, 2.6) {padrões no\\código};
+  \node[cmd] (b) at (5.6, 2.6) {config.toml};
+  \node[cmd] (c) at (9.3, 2.6) {variáveis de\\ambiente};
+  \node[cmd] (d) at (13.0, 2.6) {argumentos da\\linha de comando};
+
+  \draw[seg] (a) -- (b);
+  \draw[seg] (b) -- (c);
+  \draw[seg] (c) -- (d);
+
+  \node[lb] at (0.45, 1.75) {menor precedência};
+  \node[lb] at (11.55, 1.75) {maior precedência};
+
+  \node[nt, text width=3.3cm] at (0.45, 1.25)
+    {sempre funciona\\sem arquivo nenhum};
+  \node[nt, text width=3.3cm] at (4.15, 1.25)
+    {versionado no Git,\\revisado, comentado};
+  \node[nt, text width=3.3cm] at (7.85, 1.25)
+    {muda por ambiente,\\tudo chega como texto};
+  \node[nt, text width=3.3cm] at (11.55, 1.25)
+    {sobrescreve pontual,\\numa execução só};
+
+  \draw[seg] (5.6, 0.2) -- (5.6,-0.8);
+  \draw[seg] (9.3, 0.2) -- (9.3,-0.8);
+  \node[alr] at (5.6,-1.3) {segredo nunca aqui:\\isto vai para o Git};
+  \node[chv] at (9.3,-1.3) {senha e token\\entram só por aqui};
+
+  \node[nt, text width=15.6cm] at (-0.4,-2.4)
+    {A camada de padrões garante que o programa roda sem configuração alguma,
+     o que torna a primeira execução possível e o teste automatizado simples. O
+     arquivo carrega o que é estável e merece revisão. O ambiente carrega o que
+     muda entre desenvolvimento, homologação e produção --- e é por onde
+     entram os segredos, porque arquivo de configuração é versionado e um
+     segredo versionado está comprometido para sempre, mesmo depois de removido.
+     O detalhe que morde: variável de ambiente é \emph{sempre} texto, então a
+     mesma chave chega como \texttt{int} pelo arquivo e como \texttt{str} pelo
+     ambiente se ninguém converter na fronteira.};
+\end{tikzpicture}
+```
+Padrões, arquivo, ambiente e linha de comando — nessa ordem de precedência.
+:::
+
+### Segredos não moram no arquivo
+
+A regra que merece uma linha própria: **senha, token e chave de API nunca vão para o arquivo de configuração**, porque ele é versionado. Um segredo commitado continua no histórico do Git depois de removido, e continua no clone de todo mundo que já baixou o repositório.
+
+Eles entram por variável de ambiente, por arquivo `.env` fora do controle de versão (com `.env` no `.gitignore` e um `.env.exemplo` sem valores dentro dele), ou por um cofre de verdade. O `config.toml` versionado declara que *existe* uma senha de banco; o valor vem de outro lugar.
+
+## Escolher
+
+Para **configuração de aplicação** escrita à mão, TOML: está na biblioteca padrão, tem tipos explícitos, recusa ambiguidade, e é o que o ecossistema Python já usa no `pyproject.toml`. Para **empacotamento e ferramentas**, TOML não é escolha — é o padrão.
+
+YAML entra quando o ambiente já é YAML (Kubernetes, GitHub Actions, Ansible), quando há muita configuração repetida que as âncoras eliminam, ou quando há blocos longos de texto. Nesses casos, `safe_load`, aspas em todo identificador e validação por esquema.
+
+JSON para configuração, só quando alguma ferramenta obriga. É o formato de troca entre programas, não de conversa com gente.
+
+E `.env` para segredos e para as poucas chaves que mudam por ambiente — plano, sem tipos, sem aninhamento, e por isso mesmo difícil de errar.
+
+## 🐍 Jeito Pythônico
+
+**TOML para configuração nova.** Está na biblioteca padrão desde a 3.11 e não tem ambiguidade de tipos.
+
+```python
+# antipadrão: JSON sem comentário, ou pior, configuração no código
+INTERVALO = 300
+```
+
+```python
+# pythônico
+with caminho.open("rb") as f:      # "rb" é obrigatório
+    cfg = tomllib.load(f)
+```
+
+**`yaml.safe_load`, nunca `yaml.load`.** Arquivo de configuração não é lugar de executar código.
+
+**Cite todo identificador em YAML.** `"NO"`, `"01310"`, `"1.20"` — sem aspas, o analisador decide por você e decide errado.
+
+**Converta os tipos na fronteira.** Variável de ambiente é sempre string.
+
+**Padrões no código que funcionem sozinhos,** para que o programa rode sem arquivo nenhum.
+
+**Segredo fora do arquivo versionado,** sempre.
+
+**Valide a configuração no início do programa,** não na hora de usar cada chave. Um erro de digitação em `intervalo` tem de falhar na partida, não três horas depois.
+
+**Um só ponto de leitura da configuração,** devolvendo um objeto imutável (uma `dataclass` congelada, do @sec-cap046) em vez de um dicionário que qualquer módulo altera.
+
+Sobre versões:
+
+- **Python 3.11** — `tomllib` na biblioteca padrão (PEP 680), somente leitura.
+- **Python 3.13** — mensagens de erro do `tomllib` com linha e coluna, como no exemplo de tabela duplicada.
+- **PyYAML 6.0** — `yaml.load` passou a exigir o argumento `Loader`, encerrando o padrão inseguro.
+
+Do ecossistema: `tomli-w` escreve TOML e `tomlkit` edita preservando comentários; `python-dotenv` carrega `.env`; e `pydantic-settings` faz o trabalho inteiro deste capítulo — camadas, conversão de tipos e validação — com uma classe declarativa. Em aplicação de porte, ele é o caminho mais curto entre uma configuração e uma configuração **correta**, e volta no Volume 14.
+
+## 🧪 Laboratório
+
+Objetivo: montar uma configuração em camadas e provocar, de propósito, cada armadilha de tipo.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab63 && cd ~/lab63
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install pyyaml
+```
+
+**2. TOML básico.** Escreva o `config.toml` da abertura e leia com `tomllib`. Imprima `cfg["banco"]["pool"]["maximo"]` e a lista de nomes dos equipamentos.
+
+**3. O modo binário.** Abra o mesmo arquivo com `"r"` e confirme:
+
+```text
+TypeError: File must be opened in binary mode, e.g. use `open('foo.toml', 'rb')`
+```
+
+Escreva num comentário por que a especificação justifica essa exigência.
+
+**4. Tipos.** Imprima o `type()` de cada chave do topo. Acrescente as três linhas de data e confirme que voltam como `date`, `datetime` e `time` — com o fuso correto no segundo.
+
+**5. TOML quebrado.** Provoque os quatro erros, incluindo chave duplicada e tabela declarada duas vezes:
+
+```text
+  'a = "x"\na = "y"'       -> Cannot overwrite a value (at end of document)
+  '[a]\nb = 1\n[a]\nc = 2' -> Cannot declare ('a',) twice (at line 3, column 3)
+```
+
+Compare com o que o `json.loads` fez com `'{"a": 1, "a": 2}'` no capítulo anterior.
+
+**6. Só leitura.** Confirme que `tomllib` não tem `dumps`. Instale `tomli-w`, grave a configuração de volta e observe o que aconteceu com os **comentários**.
+
+**7. YAML equivalente.** Escreva o mesmo conteúdo em YAML e confirme com `==` que as duas leituras produzem estruturas iguais nas chaves do topo.
+
+**8. O problema da Noruega.** Carregue o bloco de armadilhas e reproduza a tabela:
+
+```text
+  noruega    False                  bool
+  cep        712                    int
+  versao     1.2                    float
+```
+
+Explique o `712` em uma linha. Depois cite os três valores e confirme que voltam como `str`.
+
+**9. Segurança.** Rode `yaml.load("a: 1")` sem `Loader` e confirme o `TypeError`. Leia a documentação do `SafeLoader` e escreva por que o padrão antigo era perigoso.
+
+**10. Indentação.** Ponha uma tabulação num arquivo YAML e observe o `ScannerError`. Depois, sem tabulação, mova um bloco dois espaços para a direita e confirme que o arquivo continua **válido** e significa outra coisa.
+
+**11. Âncoras.** Reproduza o bloco com `&padrao`, `*padrao` e `<<:`, e confirme que `teste` sobrescreveu só `tentativas`. Tente o equivalente em TOML e escreva quantas linhas custou.
+
+**12. Camadas.** Implemente `carregar()` com as quatro camadas. Defina `COLETOR_INTERVALO=60` e confirme:
+
+```text
+intervalo: '60'
+```
+
+Corrija a conversão de tipo e confirme que passa a ser `int`. Depois acrescente um argumento de linha de comando que sobrescreve o ambiente.
+
+**13. Validação na partida.** Faça a configuração ser lida para uma `dataclass` congelada com tipos anotados, e confirme que uma chave com nome errado falha **na partida**, com mensagem que diga qual chave.
+
+**14. Segredo.** Ponha uma senha no `config.toml`, commite, remova e commite de novo. Recupere-a com `git log -p`. Refaça com variável de ambiente e `.env` no `.gitignore`.
+
+## Resumo
+
+- Configuração no código obriga a editar o fonte para mudar comportamento, e o que roda deixa de ser o que está no Git.
+- JSON é ruim para configuração: sem comentários, sem vírgula sobrando, aspas em toda chave.
+- `tomllib` está na biblioteca padrão desde a 3.11, só lê, e exige o arquivo aberto em `"rb"` porque TOML é sempre UTF-8.
+- TOML tem tipos na sintaxe — inteiro, ponto flutuante, booleano, data, hora e data-hora com fuso — e entrega objetos `datetime` prontos.
+- `[tabela]` aninha por nome e `[[vetor]]` repete blocos como itens de lista, sem depender de indentação.
+- Chave ou tabela duplicada em TOML é **erro**; em JSON, a última vencia em silêncio.
+- `tomllib` não escreve por decisão de projeto; `tomli-w` gera e `tomlkit` edita preservando comentários — mas programa que reescreve a própria configuração provavelmente está guardando estado no lugar errado.
+- YAML é mais enxuto, tem blocos de texto com `|` e âncoras com `&`/`*`/`<<:` que eliminam repetição — por isso domina Kubernetes, Ansible e GitHub Actions.
+- YAML infere tipos de valores não citados e erra: `NO` vira `False`, `yes` vira `True`, `1.20` vira `1.2` e `01310` vira `712` por leitura octal — tudo em silêncio.
+- A defesa é citar todo identificador e validar por esquema; TOML resolve o mesmo caso recusando `01` como erro de sintaxe.
+- `yaml.safe_load` sempre; o antigo `yaml.load` construía objetos arbitrários, e desde o PyYAML 6 exige `Loader` explícito.
+- Tabulação é proibida em YAML, e indentação errada produz arquivo válido com outro significado.
+- A configuração de produção tem quatro camadas — padrões, arquivo, ambiente, linha de comando — em ordem crescente de precedência.
+- Variável de ambiente é sempre string; sem conversão na fronteira, a mesma chave chega com tipos diferentes conforme o ambiente.
+- Segredo nunca vai para o arquivo versionado: o histórico do Git o preserva depois de removido, em todos os clones.
+
+O próximo capítulo desce um nível. Até aqui os formatos foram de texto, legíveis e editáveis à mão. Serialização binária troca isso por velocidade e fidelidade de tipos — e cobra em segurança, com um módulo que executa código ao ser lido.
