@@ -1,3 +1,500 @@
 # Iteradores e o protocolo de iteração {#sec-cap049}
 
-*(em elaboracao)*
+O coletor de telemetria guardava as leituras numa lista. Quando o volume passou de alguns milhares para alguns milhões, alguém trocou a lista por uma classe que lê do arquivo sob demanda — mesma interface, `for` funcionando, memória sob controle. O relatório noturno continuou rodando e passou a mentir:
+
+```python
+c = ColetaRuim([1, 2, 3, 4])
+
+total = sum(c)
+quantos = sum(1 for _ in c)
+print("  total   :", total)
+print("  quantos :", quantos)
+print("  media   :", total / quantos if quantos else "divisao por zero")
+```
+
+```text
+  total   : 10
+  quantos : 0
+  media   : divisao por zero
+```
+
+A soma está certa. A contagem deu zero. E o mesmo objeto, no mesmo processo, sem ninguém ter mexido nele entre as duas linhas.
+
+O @sec-cap048 mostrou que `for` é sintaxe apoiada em método especial, e que `__getitem__` sozinho já faz um laço rodar. Este capítulo abre a caixa: o que exatamente o `for` chama, por que existem **dois** objetos envolvidos e não um, e por que confundi-los produz erros como esse — que não levantam exceção, não aparecem em teste com lista, e só se manifestam quando os dados ficam grandes o bastante para justificar a mudança que os causou.
+
+## O que o `for` faz de verdade
+
+Um laço é açúcar sintático para uma sequência bem definida de chamadas:
+
+```python
+leituras = [-29.8, -31.7, -21.4]
+
+it = iter(leituras)
+while True:
+    try:
+        v = next(it)
+    except StopIteration:
+        break
+    print("   ", v)
+```
+
+```text
+--- o for de sempre
+    -29.8
+    -31.7
+    -21.4
+--- o mesmo laco, na mao
+    iter() devolveu um list_iterator
+    -29.8
+    -31.7
+    -21.4
+    StopIteration: o laco termina aqui
+```
+
+Três passos. `iter(obj)` chama `type(obj).__iter__()` e recebe um **iterador**. `next(it)` chama `type(it).__next__()` e recebe o próximo valor. Quando não há próximo valor, `__next__` levanta `StopIteration`, e o `for` trata essa exceção como fim normal — não é erro, é o sinal combinado de término.
+
+::: {#fig-desmonte-do-for}
+```{.tikz}
+%%| filename: desmonte-do-for
+%%| alt: O laco for desmontado em chamadas - iter no objeto devolve um iterador, next no iterador devolve valores ate levantar StopIteration
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.4cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  stg/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=3.4cm, align=center, minimum height=0.9cm,
+              font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.8cm, align=center, minimum height=0.9cm,
+             font=\scriptsize},
+  cb/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=3.8cm, align=center, minimum height=0.9cm,
+             font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fv/.style={->,>=stealth, thick, manualgreen!65!black},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-7.0);
+
+  \node[stg] (src) at (7.0, 2.7) {for v in obj:};
+  \node[bx]  (itf) at (7.0, 1.1) {iter(obj)\\type(obj).\_\_iter\_\_()};
+  \node[bx]  (nx)  at (7.0,-1.1) {next(it)\\type(it).\_\_next\_\_()};
+  \node[cx]  (val) at (7.0,-3.3) {executa o corpo do laço};
+  \node[cb]  (fim) at (12.4,-1.1) {levanta StopIteration:\\o laço termina};
+
+  \draw[fl] (src) -- (itf);
+  \draw[fl] (itf) -- (nx);
+  \draw[fl] (nx) -- (val);
+  \draw[fl] (nx) -- (fim);
+  \draw[fv] (val.west) to[out=180,in=180] (nx.west);
+
+  \node[lb, anchor=east, text width=3.2cm] at (3.9,-2.2) {e pede\\o próximo};
+  \node[lb, anchor=west, text width=3.4cm] at (7.3, 0.0) {devolve o iterador};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.5)
+    {São \textbf{dois} objetos: o iterável, que sabe produzir iteradores, e o
+     iterador, que guarda a posição da leitura. O \texttt{StopIteration} não é
+     erro --- é o sinal combinado de fim, e o \texttt{for} o captura em
+     silêncio. Fora de um laço, quem chama \texttt{next} precisa tratá-lo, ou
+     passar um valor padrão: \texttt{next(it, "acabou")}.};
+\end{tikzpicture}
+```
+O laço `for` desmontado nas chamadas que ele faz.
+:::
+
+Fora do laço, a exceção é sua para tratar — ou você pede um padrão:
+
+```text
+--- e depois de esgotado
+    next com padrao: acabou
+    next com padrao: acabou
+    next sem padrao: StopIteration de novo
+```
+
+Repare no detalhe fundamental: **um iterador esgotado permanece esgotado**. Não há como rebobinar, não há `reset`. Chamar `next` de novo levanta `StopIteration` de novo, para sempre. Essa é a regra que explica o bug da abertura.
+
+## Iterável não é iterador
+
+A distinção que resolve tudo:
+
+```text
+dois iter() da mesma lista sao o mesmo objeto? False
+  avanca so o primeiro: -29.8
+  o segundo nao mexeu : -29.8
+iter() de um iterador devolve ele mesmo?      True
+
+a lista tem __iter__ ? True
+a lista tem __next__ ? False
+o iterador tem __iter__ ? True
+o iterador tem __next__ ? True
+
+lista    : Iterable True | Iterator False
+iterador : Iterable True | Iterator True
+
+next(lista): TypeError: 'list' object is not an iterator
+```
+
+Um **iterável** tem `__iter__` e sabe fabricar iteradores. Um **iterador** tem `__iter__` **e** `__next__`, e guarda a posição da leitura. A lista é iterável e não é iterador: `next(lista)` é um erro de tipo, com a mensagem dizendo exatamente isso.
+
+Cada `iter(lista)` devolve um objeto novo, com contador próprio. É por isso que dois laços sobre a mesma lista são independentes, e por isso um laço aninhado sobre a mesma lista percorre tudo em cada nível.
+
+E há a regra que costura o sistema: **`__iter__` de um iterador devolve `self`**. Ela existe para que todo iterador também seja iterável, e assim funcione em `for`, em compreensão, em `zip` — em qualquer lugar que chame `iter()` sobre o que recebeu. Sem ela, `for x in map(...)` não funcionaria.
+
+## Escrevendo o par à mão
+
+A coleção fabrica; o iterador conta:
+
+```python
+class IteradorDeColeta:
+    def __init__(self, itens):
+        self._itens = itens
+        self._i = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._i >= len(self._itens):
+            raise StopIteration
+        valor = self._itens[self._i]
+        self._i += 1
+        return valor
+
+
+class Coleta:
+    def __init__(self, leituras):
+        self._itens = list(leituras)
+
+    def __iter__(self):
+        return IteradorDeColeta(self._itens)
+```
+
+```text
+primeira passada : [-29.8, -31.7, -21.4]
+segunda passada  : [-29.8, -31.7, -21.4]
+list()           : [-29.8, -31.7, -21.4]
+max()            : -21.4
+in               : True
+laco aninhado    : 9 pares
+  primeiros      : [(-29.8, -29.8), (-29.8, -31.7), (-29.8, -21.4)]
+```
+
+Toda passada recomeça, porque toda passada ganha um iterador novo. O laço aninhado dá os nove pares esperados. `max`, `in` e `list` funcionam porque todos passam por `iter()`.
+
+Note a divisão de estado: `Coleta` guarda os dados, `IteradorDeColeta` guarda **a posição**. É a razão de ser dos dois objetos. Um único objeto não pode ser percorrido por dois laços simultâneos, porque só tem um contador.
+
+## O erro de fundir os dois
+
+Agora o código da abertura, inteiro:
+
+```python
+class ColetaRuim:
+    def __init__(self, leituras):
+        self._itens = list(leituras)
+        self._i = 0
+
+    def __iter__(self):
+        return self                      # <- o erro
+
+    def __next__(self):
+        if self._i >= len(self._itens):
+            raise StopIteration
+        valor = self._itens[self._i]
+        self._i += 1
+        return valor
+```
+
+```text
+primeira passada : [-29.8, -31.7, -21.4]
+segunda passada  : []
+max() depois     : sem dados
+laco aninhado    : 2 pares -> [(-29.8, -31.7), (-29.8, -21.4)]
+```
+
+A primeira passada funciona perfeitamente. É por isso que o erro passa em revisão de código e em teste apressado. A segunda vem vazia, e o laço aninhado produz dois pares em vez de nove — o laço interno consumiu o resto do iterador na primeira volta do externo e não sobrou nada para as seguintes.
+
+Nada disso levanta exceção. Coleção vazia é um estado legítimo, e o `for` sobre um iterador esgotado simplesmente não entra. O resultado é o relatório da abertura, com a divisão por zero — quando dá sorte. Quando não dá, é uma média silenciosamente calculada sobre um subconjunto.
+
+::: {#fig-iteravel-iterador}
+```{.tikz}
+%%| filename: iteravel-iterador
+%%| alt: A esquerda, uma colecao que fabrica um iterador novo a cada for, com posicoes independentes; a direita, a classe que devolve self e por isso so pode ser percorrida uma vez
+\begin{tikzpicture}[
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.6cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  bg/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=2.1cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  bv/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=2.1cm, align=center, minimum height=0.8cm,
+             font=\ttfamily\scriptsize},
+  br/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=3.6cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.2) rectangle (15.0,-6.8);
+
+  \node[ttl] at (3.6, 2.7) {\_\_iter\_\_ fabrica --- certo};
+  \node[ttl] at (10.8, 2.7) {\_\_iter\_\_ devolve self --- errado};
+
+  \node[bx] (col) at (3.6, 1.5) {Coleta\\(guarda os dados)};
+  \node[bg] (i1) at (1.1,-0.6) {iterador\\pos = 0};
+  \node[bg] (i2) at (3.6,-0.6) {iterador\\pos = 0};
+  \node[bg] (i3) at (6.1,-0.6) {iterador\\pos = 0};
+  \draw[fl] (col) -- (i1);
+  \draw[fl] (col) -- (i2);
+  \draw[fl] (col) -- (i3);
+  \node[lb, text width=6.4cm] at (3.6,-2.0)
+    {um por \texttt{for}, cada um com a própria posição};
+
+  \node[br] (ruim) at (10.8, 1.5) {ColetaRuim\\(dados \emph{e} posição)};
+  \draw[fl] (12.0, 2.0) to[out=30,in=-30] (12.0, 1.0);
+  \node[lb, text width=1.9cm, anchor=west] at (12.9, 1.5) {devolve\\ela mesma};
+  \node[bg] (p1) at (9.4,-0.6) {1ª passada\\3 itens};
+  \node[bv] (p2) at (12.2,-0.6) {2ª passada\\vazia};
+  \draw[fl] (ruim) -- (p1);
+  \draw[fl] (ruim) -- (p2);
+  \node[lb, text width=6.4cm] at (10.8,-2.0)
+    {o segundo \texttt{for} encontra a posição no fim e não entra};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.1)
+    {O iterável guarda \emph{o quê}; o iterador guarda \emph{onde}. Separá-los
+     é o que permite dois laços simultâneos sobre a mesma coleção e é o que
+     torna cada passada independente. Fundi-los produz um objeto de um tiro só
+     --- e o sintoma não é exceção, é coleção vazia na segunda leitura.};
+\end{tikzpicture}
+```
+Fabricar um iterador novo a cada passada, ou devolver a si mesmo: a diferença entre percorrer sempre e percorrer uma vez.
+:::
+
+Isso não quer dizer que iterador de um tiro seja errado — `zip`, `map` e o arquivo aberto são todos assim, e é o que permite processar sem carregar tudo. O erro é uma classe **parecer** uma coleção e se comportar como iterador. A regra prática: se o nome sugere um conjunto de coisas (`Coleta`, `Registro`, `Inventario`), `__iter__` fabrica; se o nome sugere um fluxo (`LeitorDeLog`, `FluxoDeEventos`), devolver `self` é honesto — e vale documentar.
+
+## O protocolo antigo, por índice
+
+O @sec-cap048 mostrou um laço funcionando com `__getitem__` e sem `__iter__`. Vale ver o mecanismo em ação:
+
+```python
+class Ramal:
+    def __getitem__(self, i):
+        print(f"    [__getitem__({i})]")
+        return self._itens[i]
+```
+
+```text
+for sobre a classe sem __iter__:
+    [__getitem__(0)]
+    -29.8
+    [__getitem__(1)]
+    -31.7
+    [__getitem__(2)]
+
+iter() devolveu um iterator
+isinstance(r, Iterable): False
+hasattr(r, '__iter__') : False
+mas iter(r) funciona   : -29.8
+```
+
+O `iter()` percebeu que não há `__iter__`, viu `__getitem__` e devolveu um iterador de sequência genérico, que chama `obj[0]`, `obj[1]`, `obj[2]`... até um `IndexError` — visível na saída como a chamada `__getitem__(2)` sem valor impresso depois.
+
+A linha desconfortável é a do meio: `isinstance(r, Iterable)` dá `False` para um objeto sobre o qual `for` funciona. A ABC verifica a presença de `__iter__`, e esse caminho de compatibilidade não tem `__iter__`. Se você precisa saber se algo é percorrível, a resposta confiável não é `isinstance(x, Iterable)` — é tentar `iter(x)` e tratar `TypeError`.
+
+O protocolo por índice existe por compatibilidade com código anterior ao Python 2.2 e só serve para sequências indexadas por inteiros a partir de zero. Em código novo, escreva `__iter__`.
+
+## Preguiça: o que a biblioteca padrão devolve
+
+Praticamente tudo que percorre em Python devolve iterador, não lista:
+
+```text
+zip       -> zip
+map       -> map
+enumerate -> enumerate
+reversed  -> list_reverseiterator
+
+primeira leitura do zip: [(-29.8, 'a'), (-31.7, 'b'), (-21.4, 'c')]
+segunda leitura do zip : []
+```
+
+`zip` não é uma lista de pares: é um iterador que produz pares sob demanda, e que se esgota. Consumi-lo duas vezes tem o mesmo resultado da `ColetaRuim` — e pela mesma razão.
+
+A preguiça é o ponto:
+
+```text
+map nao roda nada ate ser consumido:
+    map criado, nada aconteceu
+    [calculando 1]
+    primeiro item: 2
+    [calculando 2]
+    [calculando 3]
+    resto        : [4, 6]
+```
+
+Criar o `map` não executou a função nenhuma vez. Cada elemento só é calculado quando pedido. Isso é o que permite encadear transformações sobre um arquivo de dez gigabytes: nada é materializado, e a memória fica no tamanho de um registro. É também o que faz `map(print, itens)` não imprimir nada quando o resultado é descartado — armadilha clássica de quem trata `map` como um laço.
+
+Um efeito colateral vira idioma quando entendido:
+
+```text
+zip(it, it) agrupa aos pares: [(1, 2), (3, 4), (5, 6)]
+zip strict: zip() argument 2 is shorter than argument 1
+```
+
+`zip(it, it)` recebe **o mesmo** iterador duas vezes. Para cada par, ele pede um item ao primeiro argumento e um ao segundo — que é a mesma fila. O resultado é agrupar em pares consecutivos. É o idioma `zip(*[iter(x)] * n)` para fatiar em blocos de `n`, e só funciona por causa do compartilhamento de estado.
+
+O `strict=True` (Python **3.10**) resolve um silêncio antigo: `zip` normal para no mais curto e descarta o resto sem avisar. Se as sequências deveriam ter o mesmo tamanho, `strict=True` transforma a divergência em `ValueError`.
+
+## `iter()` com dois argumentos
+
+A forma menos conhecida de `iter` recebe um chamável e um sentinela, e produz um iterador que chama a função até ela devolver o valor de parada:
+
+```python
+with amostra.open("rb") as f:
+    blocos = list(iter(lambda: f.read(8), b""))
+```
+
+```text
+blocos de 8 octetos: 3
+    00 01 02 03 04 05 06 07
+    08 09 0a 0b 0c 0d 0e 0f
+    10 11 12 13
+
+ate o sentinela None: [-29.8, -31.7]
+chamadas feitas     : 3
+```
+
+É a maneira idiomática de ler um arquivo binário em blocos de tamanho fixo, sem `while True` e sem `break`. O último bloco sai menor, o vazio encerra. A segunda parte mostra o caso geral com um sentinela `None`, e as três chamadas confirmam a semântica: a chamada que devolve o sentinela acontece, mas o valor **não** é entregue.
+
+O contraponto está no próprio arquivo de texto, que já é iterável linha a linha:
+
+```python
+with caminho.open() as f:
+    for linha in f:          # não carrega o arquivo inteiro
+        ...
+```
+
+Um arquivo aberto é um iterador de um tiro só, exatamente como a `ColetaRuim` — com a diferença de que isso é o comportamento certo e documentado para um fluxo. Percorrê-lo duas vezes exige `f.seek(0)`.
+
+## 🐍 Jeito Pythônico
+
+**`__iter__` na coleção fabrica um iterador novo; `__iter__` no iterador devolve `self`.** Confundir os dois é o erro mais caro deste capítulo.
+
+```python
+# antipadrão: coleção que se esgota
+class Coleta:
+    def __iter__(self):
+        return self
+```
+
+```python
+# pythônico: cada passada ganha estado próprio
+class Coleta:
+    def __iter__(self):
+        return IteradorDeColeta(self._itens)
+```
+
+**Na prática, quase nunca se escreve a classe iteradora.** Um `__iter__` implementado como gerador faz o mesmo em três linhas — é o assunto do @sec-cap050, e é o que se usa em código real. Vale escrever o par à mão uma vez, para saber o que o gerador está gerando.
+
+**`next(it, padrao)` em vez de `try`/`except StopIteration`** quando o fim é esperado e você está fora de um laço.
+
+**Nunca deixe `StopIteration` vazar de dentro de uma função consumida por um laço.** Ela é o sinal de fim; solta no meio de outro código, encerra o laço de quem chamou como se os dados tivessem acabado.
+
+**Para saber se algo é percorrível, tente `iter(x)`.** `isinstance(x, Iterable)` diz `False` para objetos que só têm `__getitem__`.
+
+**Trate `zip`, `map`, `filter` e `enumerate` como fluxos de um tiro.** Se precisar de duas passadas, materialize com `list()` — conscientemente.
+
+**`zip(..., strict=True)` quando os comprimentos deveriam bater.** O padrão trunca em silêncio.
+
+**`iter(chamavel, sentinela)`** para ler em blocos, em vez de `while True` com `break`.
+
+Sobre versões:
+
+- **Python 2.2** — o protocolo `__iter__`/`__next__` (então `next()`) e a palavra `iter` (PEP 234); antes disso só existia o caminho por `__getitem__`.
+- **Python 3.0** — o método passa a se chamar `__next__` e a função embutida `next()` aparece.
+- **Python 3.3** — `StopIteration` vazando de um gerador começa a ser tratada como erro (PEP 479), comportamento obrigatório no **3.7**.
+- **Python 3.10** — `zip(..., strict=True)` (PEP 618).
+- **Python 3.12** — `itertools.batched` cobre o caso do `zip(*[iter(x)] * n)` com nome legível.
+
+## 🧪 Laboratório
+
+Objetivo: desmontar o `for` em chamadas, separar iterável de iterador na prática, reproduzir o bug de duas passagens e usar as formas menos óbvias de `iter`.
+
+**1. Desmontando o laço.**
+
+```bash
+mkdir -p ~/lab49 && cd ~/lab49
+```
+
+Em `desmonta_for.py`, escreva o `while True` com `iter`, `next` e `except StopIteration` e confirme que a saída é idêntica à do `for`. Depois esgote o iterador e confirme:
+
+```text
+    next com padrao: acabou
+    next sem padrao: StopIteration de novo
+```
+
+**2. A distinção.** Em `iteravel_iterador.py`, confirme os quatro fatos:
+
+```text
+dois iter() da mesma lista sao o mesmo objeto? False
+iter() de um iterador devolve ele mesmo?      True
+a lista tem __next__ ? False
+next(lista): TypeError: 'list' object is not an iterator
+```
+
+**3. O par à mão.** Em `iterador_manual.py`, escreva `Coleta` e `IteradorDeColeta` separados. Confirme que duas passadas dão o mesmo resultado e que o laço aninhado produz **nove** pares.
+
+**4. O bug.** Em `um_tiro.py`, mude apenas o `__iter__` para `return self` e confirme a degradação:
+
+```text
+segunda passada  : []
+laco aninhado    : 2 pares
+```
+
+Depois rode o relatório de duas passagens e confirme a divisão por zero. Pergunte-se por que nenhum teste com lista pegaria isso.
+
+**5. Remendo errado.** Tente "consertar" a `ColetaRuim` zerando `self._i = 0` dentro do `__iter__`. Confirme que as duas passadas voltam a funcionar — e que o laço aninhado continua quebrado. Entenda por que: o problema não é o contador, é haver **um** contador.
+
+**6. O protocolo antigo.** Em `getitem_legado.py`, ponha um `print` dentro do `__getitem__` e confirme que o laço chama índices crescentes até o `IndexError`. Confirme também o resultado contraintuitivo:
+
+```text
+isinstance(r, Iterable): False
+mas iter(r) funciona   : -29.8
+```
+
+**7. Preguiça.** Em `preguicosos.py`, confirme que `map` não executa nada até ser consumido e que `zip` se esgota. Depois escreva `map(print, [1, 2, 3])` numa linha sozinha e confirme que **nada** é impresso.
+
+**8. O idioma dos pares.** Confirme `zip(it, it)` agrupando de dois em dois e explique por quê. Compare com `itertools.batched([1,2,3,4,5,6], 2)` e confirme que o resultado é equivalente e o código, mais legível.
+
+**9. `strict`.** Confirme a mensagem:
+
+```text
+zip strict: zip() argument 2 is shorter than argument 1
+```
+
+Depois remova o `strict=True` e confirme que a versão silenciosa devolve dois pares sem reclamar de nada.
+
+**10. Sentinela.** Em `iter_sentinela.py`, grave 20 octetos e leia em blocos de 8 com `iter(lambda: f.read(8), b"")`. Confirme os três blocos e que o último tem 4 octetos. Depois use a forma geral com um sentinela `None` e confirme que a chamada que devolve o sentinela **acontece** mas não entrega valor.
+
+**11. O arquivo como iterador.** Abra um arquivo de texto, percorra-o com `for` e, sem fechar, percorra de novo. Confirme que a segunda passada é vazia e que `f.seek(0)` a restaura. Relacione com o item 4.
+
+## Resumo
+
+- `for v in obj` é açúcar para `it = iter(obj)` seguido de `next(it)` até `StopIteration`, que é sinal de fim e não erro.
+- São dois objetos: o **iterável** tem `__iter__` e fabrica; o **iterador** tem `__iter__` e `__next__` e guarda a posição. `next()` numa lista é `TypeError`.
+- `__iter__` de um iterador devolve `self`, para que todo iterador também seja iterável e funcione onde quer que `iter()` seja chamado.
+- Um iterador esgotado permanece esgotado: não há rebobinar. `next(it, padrao)` evita o `try`/`except` quando o fim é esperado.
+- Uma coleção cujo `__iter__` devolve `self` funciona na primeira passada e falha em silêncio em todas as outras — segunda passada vazia, laço aninhado truncado, relatório com contagem zero.
+- Zerar o contador no `__iter__` não conserta: o defeito é existir um único contador, que impede duas leituras simultâneas.
+- `__getitem__` sem `__iter__` ainda habilita `for` por um caminho de compatibilidade que chama índices até `IndexError` — mas `isinstance(x, Iterable)` devolve `False` nesse caso. Para saber se algo é percorrível, tente `iter(x)`.
+- `zip`, `map`, `filter`, `enumerate` e `reversed` devolvem iteradores preguiçosos e de um tiro só; nada é calculado antes de ser pedido, e nada sobra para a segunda leitura.
+- `zip(it, it)` agrupa em pares consecutivos porque os dois argumentos são a mesma fila; `strict=True` (3.10) transforma comprimentos divergentes em erro em vez de truncar.
+- `iter(chamavel, sentinela)` lê em blocos até o valor de parada, e é a forma idiomática de consumir um arquivo binário em pedaços fixos.
+
+Escrever a classe iteradora à mão deixou claro o mecanismo e também o incômodo: quinze linhas, um contador manual e uma exceção para dizer que acabou — tudo isso para descrever "devolva um item de cada vez". O @sec-cap050 mostra a construção que reduz isso a uma função com `yield`, e que faz o interpretador guardar a posição por você.
