@@ -1,3 +1,594 @@
 # Métodos especiais: o protocolo por trás da sintaxe {#sec-cap048}
 
-*(em elaboracao)*
+O Volume 7 terminou com um *pipeline* de telemetria que valida contratos na montagem. As peças estão certas, os tipos estão garantidos — e mesmo assim a classe mais simples do projeto se comporta como uma estranha dentro da linguagem:
+
+```python
+class Leitura:
+    def __init__(self, onu, potencia):
+        self.onu = onu
+        self.potencia = potencia
+
+
+a = Leitura("onu-00043", -29.8)
+b = Leitura("onu-00043", -29.8)
+
+print("print :", a)
+print("igual :", a == b)
+print("no set:", len({a, b}), "elementos")
+```
+
+```text
+print : <__main__.Leitura object at 0x762043cff230>
+igual : False
+no set: 2 elementos
+len   : TypeError: object of type 'Leitura' has no len()
+sort  : TypeError: '<' not supported between instances of 'Leitura' and 'Leitura'
+soma  : TypeError: unsupported operand type(s) for +: 'Leitura' and 'Leitura'
+```
+
+(O número hexadecimal é o endereço do objeto na memória; ele muda a cada execução.)
+
+Duas leituras da mesma ONU com a mesma potência não são iguais. O `set` guarda as duas. O `print` mostra um endereço de memória em vez do dado. Nada disso é falta de recurso da linguagem — é falta de **participação**. Uma `list` sabe responder a `len()`, `in`, `[0]`, `+` e `sorted()` porque implementa os métodos que essas sintaxes procuram. A `Leitura` não implementa nenhum.
+
+Esses métodos de nome cercado por dois sublinhados são os **métodos especiais**, ou *dunder* (*double underscore*). Eles são o modelo de dados de Python: o conjunto de ganchos que a sintaxe da linguagem consulta. `len(x)` é uma forma de escrever `type(x).__len__(x)`. `a + b` é uma forma de escrever `type(a).__add__(a, b)`. `for`, `with`, `in`, `[]`, `()`, `==` — todos são chamadas a métodos com nome combinado.
+
+Isso muda a natureza do trabalho. Não se "sobrecarrega operador" em Python: implementa-se o protocolo que a sintaxe já procurava. Este capítulo abre o Volume 8 percorrendo os protocolos de uso diário — representação, igualdade, ordem, aritmética, contêiner e chamada — e termina com a regra de busca que explica por que essa mecânica é diferente de qualquer outro atributo.
+
+## `__repr__` e `__str__`: os dois textos de um objeto
+
+O primeiro gancho a implementar é sempre o de representação, porque é o que aparece no *log*, no depurador e no traceback:
+
+```python
+class Leitura:
+    def __init__(self, onu, potencia):
+        self.onu = onu
+        self.potencia = potencia
+
+    def __repr__(self):
+        return f"Leitura(onu={self.onu!r}, potencia={self.potencia!r})"
+
+    def __str__(self):
+        return f"{self.onu} a {self.potencia} dBm"
+```
+
+```text
+print    : onu-00043 a -29.8 dBm
+str()    : onu-00043 a -29.8 dBm
+repr()   : Leitura(onu='onu-00043', potencia=-29.8)
+f-string : onu-00043 a -29.8 dBm
+f com !r : Leitura(onu='onu-00043', potencia=-29.8)
+na lista : [Leitura(onu='onu-00043', potencia=-29.8)]
+no dict  : {'pior': Leitura(onu='onu-00043', potencia=-29.8)}
+```
+
+A divisão de trabalho é clara. `__str__` é para quem lê a saída do programa; `__repr__` é para quem lê o programa. `print`, `str()` e a f-string sem conversão usam `__str__`. `repr()` e `!r` usam `__repr__` — e, a linha mais importante da saída, **contêineres sempre usam `__repr__` dos elementos**. Uma lista de leituras impressa mostra o `repr` de cada uma, mesmo dentro de um `print`. É por isso que o `repr` de má qualidade dói tanto: ele é o que se vê quando algo dá errado com uma coleção.
+
+A convenção do `__repr__` é ser inequívoco e, quando possível, parecer com o código que reconstrói o objeto. Daí o `!r` nos campos: sem ele, `onu=onu-00043` esconderia que aquilo é uma string. Com ele, `onu='onu-00043'` diz o tipo junto com o valor.
+
+Só um dos dois é obrigatório:
+
+```text
+so __repr__, str() cai no repr: SoRepr()
+so __repr__, print tambem     : SoRepr()
+```
+
+Sem `__str__`, o Python usa `__repr__` no lugar. O contrário não vale: definir só `__str__` deixa o `repr` no padrão feio, e a lista continua imprimindo endereços. **Escreva `__repr__` primeiro, sempre; `__str__` só quando a saída para o usuário final for realmente diferente.**
+
+## Igualdade e o contrato com o `hash`
+
+Igualdade é o segundo gancho, e o único que vem com uma cláusula obrigatória. Comparar por conteúdo é direto:
+
+```python
+    def __eq__(self, outro):
+        if not isinstance(outro, LeituraEq):
+            return NotImplemented
+        return (self.onu, self.potencia) == (outro.onu, outro.potencia)
+```
+
+```text
+a == b        : True
+a != c        : True
+a == 'texto'  : False
+__hash__ virou: None
+set           : TypeError: unhashable type: 'LeituraEq'
+```
+
+Três coisas nessa saída. A primeira é o `!=` funcionando de graça: definido `__eq__`, o Python deriva `__ne__` negando o resultado. Não escreva `__ne__`.
+
+A segunda é o `NotImplemented` quando o outro operando é de tipo estranho. Comparar com `"texto"` não deu erro, deu `False` — porque devolver `NotImplemented` faz o Python tentar o lado direito (`str.__eq__`), que também recusa, e a resposta final para `==` recusado dos dois lados é `False`, não exceção. É o comportamento certo: dois objetos incomparáveis simplesmente não são iguais.
+
+A terceira é a armadilha: **definir `__eq__` zera o `__hash__`**. O atributo virou literalmente `None`, e o objeto deixou de poder entrar em `set` ou ser chave de `dict`. Isso é deliberado. O contrato de hash exige que objetos iguais tenham o mesmo hash; o `__hash__` padrão usa a identidade do objeto, que acabou de deixar de ser o critério de igualdade. Em vez de deixar uma incoerência silenciosa quebrar dicionários, o Python remove a capacidade.
+
+A correção é declarar os dois juntos, com o mesmo conjunto de campos:
+
+```python
+    def __hash__(self):
+        return hash((self.onu, self.potencia))
+```
+
+```text
+hash iguais   : True
+set deduplica : 2 de 3 -> ['onu-00043', 'onu-00045']
+chave de dict : critica
+```
+
+O truque do `hash` de uma tupla dos campos é o idiomático: delega para implementações já corretas e garante automaticamente a coerência com um `__eq__` escrito sobre a mesma tupla.
+
+Isso traz junto a exigência que o `hash` sempre teve — **o objeto precisa ser imutável naquilo que define sua igualdade**:
+
+```text
+antes de mutar:  x in guardadas -> True
+depois de mutar: x in guardadas -> False
+  mas ele continua la dentro    -> True
+```
+
+Depois de mudar `potencia`, o objeto não é mais encontrado no `set` em que ele está. O `set` guardou-o no balde do hash antigo e agora procura no balde do hash novo. O objeto virou lixo inacessível dentro da própria coleção — e nenhum erro foi levantado. É o motivo pelo qual `list` não tem hash e `tuple` tem, e o motivo pelo qual `@dataclass(frozen=True)` do @sec-cap046 gera `__hash__` e `@dataclass` comum não gera.
+
+## Ordem: um método basta, quatro são melhores
+
+Ordenar exige apenas `__lt__`:
+
+```python
+    def __lt__(self, outro):
+        if not isinstance(outro, Leitura):
+            return NotImplemented
+        return self.potencia < outro.potencia
+```
+
+```text
+sorted : [onu-00045(-31.7), onu-00043(-29.8), onu-00051(-21.4)]
+min    : onu-00045(-31.7)
+max    : onu-00051(-21.4)
+a < b  : False
+a > b  : True
+a >= b : TypeError: '>=' not supported between instances of 'Leitura' and 'Leitura'
+```
+
+`sorted`, `min` e `max` usam só o "menor que", então um método já entrega a funcionalidade que importa. E `a > b` também funcionou sem `__gt__`: o Python tenta a **operação refletida**, ou seja, `b.__lt__(a)`. Comparações têm pares reflexivos automáticos — `<` com `>`, `<=` com `>=`.
+
+Mas `>=` falhou, porque o par dele é `<=`, que também não existe. Preencher os quatro à mão é repetitivo, e `functools` resolve:
+
+```python
+@total_ordering
+class LeituraTotal(Leitura):
+    def __eq__(self, outro):
+        ...
+```
+
+```text
+com total_ordering:
+  >=  : True
+  <=  : False
+  ==  : False
+```
+
+`@total_ordering` deriva os operadores que faltam a partir de `__eq__` mais um dos quatro de ordem. O custo é desempenho: cada `>=` derivado faz mais de uma chamada. Para código quente, escreva os quatro; para o resto, o decorador é a escolha certa. (A alternativa mais econômica, quando a ordem é sobre uma tupla de campos, é `@dataclass(order=True)`, que gera os quatro comparadores diretamente.)
+
+## Aritmética e o despacho refletido
+
+Operadores aritméticos seguem a mesma mecânica, e é aqui que o `NotImplemented` mostra para que serve de verdade:
+
+```python
+class Trafego:
+    def __init__(self, octetos):
+        self.octetos = octetos
+
+    def __add__(self, outro):
+        if isinstance(outro, Trafego):
+            return Trafego(self.octetos + outro.octetos)
+        return NotImplemented
+
+    def __mul__(self, k):
+        if isinstance(k, (int, float)):
+            return Trafego(int(self.octetos * k))
+        return NotImplemented
+```
+
+Com um `print` de rastreamento dentro do `__add__`, dá para ver o despacho acontecendo:
+
+```text
+  [__add__ de Trafego(1500) com Trafego(9000)]
+a + b : Trafego(10500)
+  [__add__ de Trafego(1500) com 5]
+a + 5 : TypeError: unsupported operand type(s) for +: 'Trafego' and 'int'
+sum   : TypeError: unsupported operand type(s) for +: 'int' and 'Trafego'
+a * 3 : Trafego(4500)
+3 * a : TypeError: unsupported operand type(s) for *: 'int' and 'Trafego'
+```
+
+O `a + 5` **chamou** o `__add__`, recebeu `NotImplemented` de volta, tentou `int.__radd__`, também recusado, e só então levantou `TypeError` — com uma mensagem que nomeia os dois tipos e o operador. Essa mensagem é escrita pelo interpretador, não por você. É exatamente o que se perde ao levantar `TypeError` na mão dentro do `__add__`: a chance de o outro operando resolver.
+
+::: {#fig-despacho-operador}
+```{.tikz}
+%%| filename: despacho-operador
+%%| alt: Fluxo do despacho de um operador binario em Python - primeiro o metodo do operando da esquerda, depois o metodo refletido do operando da direita, e TypeError se os dois devolverem NotImplemented
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=5.0cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.6cm, align=center, minimum height=0.9cm,
+             font=\scriptsize},
+  cb/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=5.0cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=left},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.3) rectangle (15.0,-6.6);
+
+  \node[bx, draw=manualgray, fill=manualgray!8] (expr) at (4.4, 2.7) {a + b};
+  \node[bx] (esq) at (4.4, 0.9) {type(a).\_\_add\_\_(a, b)};
+  \node[bx] (dir) at (4.4,-1.4) {type(b).\_\_radd\_\_(b, a)};
+  \node[cb] (erro) at (4.4,-3.7) {TypeError: unsupported\\operand type(s) for +};
+
+  \node[cx] (r1) at (11.2, 0.9) {devolveu um valor:\\acabou aqui};
+  \node[cx] (r2) at (11.2,-1.4) {devolveu um valor:\\acabou aqui};
+
+  \draw[fl] (expr) -- (esq);
+  \draw[fl] (esq) -- (r1);
+  \draw[fl] (dir) -- (r2);
+  \draw[fl] (esq) -- (dir);
+  \draw[fl] (dir) -- (erro);
+
+  \node[lb, anchor=west, text width=3.4cm] at (4.7,-0.25)
+    {devolveu\\\texttt{NotImplemented}};
+  \node[lb, anchor=west, text width=3.4cm] at (4.7,-2.55)
+    {devolveu\\\texttt{NotImplemented}};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.6)
+    {Devolver \texttt{NotImplemented} é dizer ``não sei lidar com este
+     operando''. O interpretador então tenta o método refletido do outro lado e,
+     se ele também recusar, produz sozinho um \texttt{TypeError} que nomeia os
+     dois tipos. Levantar \texttt{TypeError} à mão dentro do
+     \texttt{\_\_add\_\_} pula essa segunda chance e piora a mensagem.};
+\end{tikzpicture}
+```
+O despacho de um operador binário: lado esquerdo, lado direito refletido, e só então o erro.
+:::
+
+O caso do `sum` é o mais instrutivo. `sum` começa do inteiro `0` e vai somando, então a primeira operação é `0 + Trafego(1500)` — um `int` à esquerda. O `int` não sabe somar `Trafego`, e o `Trafego` não tinha `__radd__`. Repare na mensagem: `'int' and 'Trafego'`, nessa ordem. Ela denuncia quem estava do lado esquerdo.
+
+A correção é implementar o método refletido:
+
+```python
+    def __radd__(self, outro):
+        if outro == 0:
+            return self
+        return self.__add__(outro)
+
+    __rmul__ = Trafego.__mul__
+```
+
+```text
+  [__radd__ de Trafego(1500) com 0]
+  [__add__ de Trafego(1500) com Trafego(9000)]
+sum   : Trafego(10500)
+3 * x : Trafego(4500)
+```
+
+O `if outro == 0: return self` é o idioma consagrado para fazer `sum` funcionar. E o `__rmul__ = __mul__` mostra o atalho válido quando a operação é comutativa: multiplicação por escalar dá o mesmo resultado dos dois lados, então o mesmo método serve.
+
+Uma advertência de nomes que confundem gente experiente: `NotImplemented` é um **valor** que se devolve; `NotImplementedError` é uma **exceção** que se levanta. O primeiro pertence a operadores; o segundo, a métodos abstratos que a subclasse deveria ter escrito. Trocar um pelo outro num `__add__` produz erro de tipo errado, na hora errada, com mensagem que não ajuda.
+
+## Tamanho, verdade e o protocolo de contêiner
+
+Um objeto que agrupa coisas ganha muito com dois métodos:
+
+```python
+class Ramal:
+    def __init__(self, nome, leituras):
+        self.nome = nome
+        self._leituras = list(leituras)
+
+    def __len__(self):
+        return len(self._leituras)
+
+    def __getitem__(self, i):
+        return self._leituras[i]
+```
+
+```text
+len       : 4
+indice    : -29.8
+fatia     : [-31.7, -21.4]
+negativo  : -27.0
+for       : [-30, -32, -21, -27]
+in        : True
+reversed  : [-27.0, -21.4, -31.7, -29.8]
+enumerate : [(0, -29.8), (1, -31.7)]
+```
+
+Sete comportamentos por dois métodos. E boa parte disso é herança de projeto da linguagem: `__getitem__` sozinho já habilita `for`, `in` e `enumerate`, porque existe um protocolo de iteração antigo que chama `obj[0]`, `obj[1]`, `obj[2]`... até dar `IndexError`. Fatia e índice negativo funcionaram porque a delegação para a lista interna repassa o objeto `slice` inteiro. `reversed` funcionou porque `__len__` e `__getitem__` juntos bastam.
+
+Esse protocolo por índice é a porta de entrada do @sec-cap049, que mostra o mecanismo moderno — `__iter__` — e por que ele venceu.
+
+O `__len__` traz junto um efeito que pega desprevenido:
+
+```text
+verdade de ramal cheio: True
+verdade de ramal vazio: False
+
+sessao aberta sem pendencias e falsa: False
+com __bool__ explicito              : True
+e len continua                      : 0
+```
+
+Sem `__bool__`, o Python pergunta `__len__`, e comprimento zero significa falso. Para um contêiner isso é o certo. Para um objeto que **tem** um tamanho mas não **é** um contêiner, é um bug esperando. Uma `Sessao` aberta e sem pendências é uma sessão válida, e caiu num `if sessao:` como se não existisse. A regra prática: se a classe tem `__len__` e nem toda instância vazia deve ser falsa, escreva `__bool__` explicitamente.
+
+## Objetos que se chamam e objetos que se formatam
+
+`__call__` transforma a instância em algo invocável, o que dá funções com estado e configuração:
+
+```python
+class AbaixoDe:
+    def __init__(self, limite):
+        self.limite = limite
+
+    def __call__(self, leitura):
+        return leitura < self.limite
+```
+
+```text
+chamavel?     : True
+como funcao   : True
+com filter    : [-29.8, -31.7]
+mantem estado : AbaixoDe(-28.0)
+```
+
+`AbaixoDe(-28.0)` é aceito por `filter`, por `sorted(key=...)`, por qualquer coisa que espere uma função — e, ao contrário de uma *closure* do @sec-cap020, tem `repr` legível, atributos inspecionáveis e pode ganhar outros métodos. É a escolha certa quando o objeto chamável precisa ser configurado, comparado ou serializado. Esse mesmo gancho é o que sustenta os decoradores com parâmetro do @sec-cap051.
+
+`__format__` recebe o que vem depois dos dois-pontos numa f-string:
+
+```python
+    def __format__(self, spec):
+        if spec == "curto":
+            return f"{self.potencia:.1f}"
+        if spec == "csv":
+            return f"{self.onu},{self.potencia}"
+        if spec == "":
+            return str(self)
+        return format(self.potencia, spec)
+```
+
+```text
+sem spec : onu-00043 a -29.8 dBm
+curto    : -29.8
+csv      : onu-00043,-29.8
+numerico : -029.800
+format() : -29.8
+```
+
+A especificação é uma string livre: o mini-formato numérico (`+08.3f`) é só a convenção que os tipos embutidos adotaram, e nada impede definir palavras próprias. O contrato mínimo é tratar `spec` vazia como `str(self)` — é o que a f-string sem dois-pontos espera. Delegar o resto para `format` de um campo, como na última linha, dá o mini-formato completo de graça.
+
+## A busca acontece no tipo, não na instância
+
+Falta a regra que separa método especial de método comum, e que explica comportamentos que parecem bug:
+
+```python
+class Simples:
+    pass
+
+
+s = Simples()
+s.__len__ = lambda: 7
+```
+
+```text
+s.__len__()  : 7
+len(s)       : TypeError: object of type 'Simples' has no len()
+depois de por na CLASSE, len(s): 7
+```
+
+O atributo existe na instância. Chamá-lo pelo nome funciona. E `len(s)` não o enxerga — porque **o método especial é procurado no tipo, nunca no dicionário da instância**. Só depois de pôr o `__len__` em `Simples` é que `len` passou a funcionar.
+
+O mesmo vale para o gancho de atributo dinâmico:
+
+```text
+  [__getattr__ pediu 'qualquer_coisa']
+atributo comum: 42
+len(p)        : TypeError: object of type 'Proxy' has no len()
+```
+
+Um `Proxy` com `__getattr__` responde a qualquer nome de atributo — menos aos que a sintaxe procura. `len(p)` não consultou o `__getattr__`. Quem escreve *proxy* ou *mock* descobre isso do jeito difícil: encaminhar atributos não encaminha `len()`, `[]`, `with` nem `+`, e cada protocolo que o objeto embrulhado suportar precisa ser declarado explicitamente na classe do *proxy*.
+
+::: {#fig-busca-no-tipo}
+```{.tikz}
+%%| filename: busca-no-tipo
+%%| alt: Comparacao entre a busca de um atributo comum, que passa pelo dicionario da instancia e pode cair no getattr, e a busca de um metodo especial, que vai direto ao tipo
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.4cm, align=center, minimum height=0.95cm,
+             font=\ttfamily\scriptsize},
+  stg/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=4.0cm, align=center, minimum height=0.85cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fd/.style={->,>=stealth, very thick, manualgreen!65!black},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-7.2);
+
+  \node[stg, draw=manualblue, fill=manualblue!9] (a) at (4.2, 2.6) {obj.\_\_len\_\_};
+  \node[stg, draw=manualgreen, fill=manualgreen!12] (b) at (12.2, 2.6) {len(obj)};
+
+  \node[bx] (inst) at (4.2, 0.9) {obj.\_\_dict\_\_\\(a instância)};
+  \node[bx] (tipo) at (4.2,-1.4) {type(obj) e o MRO\\(a classe)};
+  \node[bx] (ga)   at (4.2,-3.7) {\_\_getattr\_\_\\(último recurso)};
+
+  \draw[fl] (a) -- (inst);
+  \draw[fl] (inst) -- (tipo);
+  \draw[fl] (tipo) -- (ga);
+
+  \draw[fd] (b) to[out=270,in=0] (tipo.east);
+
+  \node[lb, text width=2.5cm, text=manualred, anchor=west] at (6.9, 0.9)
+    {nunca consultado};
+  \node[lb, text width=2.5cm, text=manualred, anchor=west] at (6.9,-3.7)
+    {nunca consultado};
+  \node[lb, text width=3.4cm, text=manualgreen!55!black, anchor=north] at (10.0,-2.0)
+    {vai direto ao tipo};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.9)
+    {À esquerda, o acesso comum por nome: instância, depois classe e MRO,
+     depois o gancho \texttt{\_\_getattr\_\_}. À direita, a sintaxe: o
+     interpretador procura o método \emph{apenas} no tipo do objeto. Por isso
+     atribuir \texttt{\_\_len\_\_} a uma instância não faz \texttt{len()}
+     funcionar, e por isso um \emph{proxy} genérico precisa declarar na classe
+     cada protocolo que quiser encaminhar.};
+\end{tikzpicture}
+```
+Atributo comum e método especial percorrem caminhos diferentes até serem encontrados.
+:::
+
+A razão é desempenho. Cada protocolo tem um espaço reservado na estrutura C do tipo, preenchido quando a classe é criada; `len(x)` consulta esse campo diretamente, sem passar pela busca genérica de atributos. É o mesmo motivo pelo qual métodos especiais definidos depois da criação da classe funcionam (o campo é atualizado) mas na instância não (a instância não tem campo nenhum).
+
+## 🐍 Jeito Pythônico
+
+**`__repr__` em toda classe que você escreve.** É o que aparece no *log* e no depurador, e é o que uma lista de objetos imprime. Faça-o parecer com a chamada que reconstrói o objeto, e use `!r` nos campos.
+
+**`__eq__` e `__hash__` andam juntos, sobre os mesmos campos.** Definir só o primeiro torna o objeto inutilizável em `set` e `dict`.
+
+```python
+# antipadrão: hash incoerente com a igualdade
+def __eq__(self, o): return self.onu == o.onu
+def __hash__(self): return hash((self.onu, self.potencia))
+```
+
+```python
+# pythônico: a mesma tupla nos dois
+def __eq__(self, o):
+    if not isinstance(o, Leitura):
+        return NotImplemented
+    return (self.onu, self.potencia) == (o.onu, o.potencia)
+
+def __hash__(self):
+    return hash((self.onu, self.potencia))
+```
+
+**Antes de escrever os dois à mão, considere `@dataclass`.** Ele gera `__init__`, `__repr__` e `__eq__`; com `frozen=True`, o `__hash__`; com `order=True`, os quatro comparadores. Escrever na mão é para quando a regra foge do padrão.
+
+**Nunca escreva `__ne__`.** Ele vem da negação de `__eq__`.
+
+**Devolva `NotImplemented`, não levante `TypeError`,** quando o outro operando é de tipo desconhecido. Você preserva a chance do método refletido e ganha a mensagem de erro do interpretador.
+
+**`__radd__` que trata `0` é o que faz `sum()` funcionar.**
+
+**`__bool__` explícito quando a classe tem `__len__` e não é um contêiner.** Senão, toda instância vazia é falsa.
+
+**`__call__` em vez de *closure*** quando o chamável precisa de estado inspecionável, `repr` legível ou comparação.
+
+**Não invente nomes com dois sublinhados dos dois lados.** Esse espaço é reservado à linguagem; nomes futuros podem colidir. Para atributo interno, um sublinhado à frente basta.
+
+Sobre versões:
+
+- **Python 2.1** — `functools` ainda não existia; `total_ordering` chega no **3.2**.
+- **Python 3.0** — definir `__eq__` passa a zerar `__hash__` automaticamente (em Python 2, o `__hash__` padrão continuava valendo e produzia coleções incoerentes).
+- **Python 3.0** — `__cmp__` desaparece; sobram os seis comparadores ricos.
+- **Python 3.7** — `dataclasses` (PEP 557) gera boa parte destes métodos.
+- **Python 3.12** — usar `NotImplemented` em contexto booleano emite `DeprecationWarning`; a intenção declarada é virar `TypeError`.
+
+## 🧪 Laboratório
+
+Objetivo: partir de uma classe que a linguagem ignora e implementar, um protocolo por vez, os ganchos que fazem a sintaxe funcionar — terminando com a regra de busca que explica o comportamento estranho dos *proxies*.
+
+**1. O ponto de partida.**
+
+```bash
+mkdir -p ~/lab48 && cd ~/lab48
+```
+
+Escreva `sem_dunder.py` com a `Leitura` de dois atributos e nenhum método especial. Confirme os cinco fracassos:
+
+```text
+igual : False
+no set: 2 elementos
+len   : TypeError: object of type 'Leitura' has no len()
+```
+
+**2. Representação.** Em `repr_str.py`, escreva `__repr__` e `__str__` diferentes. Confirme quem chama qual e, principalmente, que `[a]` usa o `__repr__` mesmo dentro de um `print`. Depois **remova** o `__str__` e confirme que `print` cai no `repr`; em seguida remova só o `__repr__` e veja a lista voltar a mostrar endereços.
+
+**3. Igualdade.** Em `eq_hash.py`, escreva `__eq__` sem `__hash__`. Confirme:
+
+```text
+__hash__ virou: None
+set           : TypeError: unhashable type: 'LeituraEq'
+```
+
+Confirme também que `a != c` funciona sem `__ne__` e que `a == "texto"` devolve `False` em vez de levantar exceção. Troque o `return NotImplemented` por `return False` e explique por que a diferença aparece quando o outro operando é de uma classe que sabe se comparar com a sua.
+
+**4. O hash coerente.** Adicione `__hash__` sobre a mesma tupla e confirme a deduplicação:
+
+```text
+set deduplica : 2 de 3 -> ['onu-00043', 'onu-00045']
+```
+
+**5. A mutação que esconde o objeto.** Monte um `set` com o objeto, mute o campo usado no hash e confirme o resultado desconfortável:
+
+```text
+antes de mutar:  x in guardadas -> True
+depois de mutar: x in guardadas -> False
+  mas ele continua la dentro    -> True
+```
+
+Repita usando `@dataclass(frozen=True)` e confirme que a atribuição agora falha com `FrozenInstanceError`.
+
+**6. Ordem.** Em `ordem.py`, escreva só `__lt__`. Confirme que `sorted`, `min`, `max` e `>` funcionam, e que `>=` falha:
+
+```text
+a >= b : TypeError: '>=' not supported between instances of 'Leitura' and 'Leitura'
+```
+
+Aplique `@total_ordering` e confirme que os quatro passam a existir.
+
+**7. Aritmética e despacho.** Em `aritmetica.py`, ponha um `print` de rastreamento dentro do `__add__`. Confirme que `a + 5` **chama** o método antes de falhar, e leia com atenção a ordem dos tipos na mensagem de `sum`:
+
+```text
+sum   : TypeError: unsupported operand type(s) for +: 'int' and 'Trafego'
+```
+
+Adicione `__radd__` tratando `0` e confirme que `sum([x, y])` passa a devolver `Trafego(10500)`.
+
+**8. Contêiner.** Em `container.py`, implemente apenas `__len__` e `__getitem__`. Confirme que `for`, `in`, `reversed`, `enumerate` e o fatiamento funcionam — sem nenhum `__iter__`. Depois remova o `__len__` e descubra qual dos comportamentos deixa de funcionar.
+
+**9. A verdade de um objeto vazio.** Confirme o caso da `Sessao`:
+
+```text
+sessao aberta sem pendencias e falsa: False
+com __bool__ explicito              : True
+```
+
+**10. Chamável e formato.** Em `chamavel_formato.py`, escreva `__call__` e use a instância com `filter`. Depois escreva `__format__` com duas palavras próprias e confirme que a f-string as reconhece — inclusive delegando `+08.3f` para o campo numérico.
+
+**11. A busca no tipo.** Em `busca_no_tipo.py`, atribua `__len__` a uma **instância** e confirme os dois resultados contraditórios:
+
+```text
+s.__len__()  : 7
+len(s)       : TypeError: object of type 'Simples' has no len()
+```
+
+Depois atribua o mesmo `lambda` à **classe**, com `self` no primeiro parâmetro, e confirme que `len(s)` passa a funcionar sem recriar o objeto.
+
+**12. O *proxy* incompleto.** Escreva uma classe com `__getattr__` que responde a qualquer nome. Confirme que `p.qualquer_coisa()` funciona e `len(p)` não. Depois adicione `__len__` à classe do *proxy*, delegando para o objeto embrulhado, e confirme que só o protocolo declarado explicitamente é encaminhado.
+
+## Resumo
+
+- Métodos especiais são os ganchos que a sintaxe da linguagem procura: `len(x)` é `type(x).__len__(x)`, `a + b` é `type(a).__add__(a, b)`. Não se sobrecarrega operador — implementa-se o protocolo.
+- `__repr__` é para quem lê o programa e `__str__` para quem lê a saída; contêineres sempre usam `__repr__` dos elementos, e `__str__` cai no `__repr__` quando não existe.
+- Definir `__eq__` zera o `__hash__` automaticamente. Os dois se escrevem juntos, sobre a mesma tupla de campos, e `__ne__` nunca se escreve.
+- Objeto com hash precisa ser imutável naquilo que define sua igualdade: mutar o campo depois de guardá-lo num `set` torna-o inacessível sem erro nenhum.
+- `__lt__` sozinho habilita `sorted`, `min`, `max` e — por reflexão — `>`. `@total_ordering` completa os quatro a partir de `__eq__` e um deles.
+- Devolver `NotImplemented` deixa o interpretador tentar o método refletido do outro operando e, se ele recusar, produzir sozinho o `TypeError` com os dois tipos nomeados. `NotImplemented` é valor; `NotImplementedError` é exceção.
+- `__radd__` que devolve `self` quando o outro operando é `0` é o que faz `sum()` funcionar sobre objetos próprios.
+- `__len__` e `__getitem__` entregam `for`, `in`, `reversed`, `enumerate` e fatiamento — o protocolo de iteração por índice, anterior ao `__iter__`.
+- Sem `__bool__`, a verdade de um objeto vem de `__len__`. Numa classe que tem tamanho mas não é contêiner, escreva `__bool__` explicitamente.
+- `__call__` dá funções com estado inspecionável; `__format__` recebe a especificação da f-string e pode definir palavras próprias.
+- Métodos especiais são procurados **no tipo**, nunca no dicionário da instância nem via `__getattr__` — o que explica por que atribuí-los a um objeto não funciona e por que *proxies* precisam declarar cada protocolo.
+
+O protocolo de contêiner deste capítulo funcionou por um caminho antigo: `__getitem__` chamado com 0, 1, 2 até estourar. É um mecanismo de compatibilidade, não o desenho atual. O @sec-cap049 mostra o protocolo de iteração de verdade — `__iter__`, `__next__` e o objeto iterador separado da coleção — e por que essa separação é o que permite percorrer um arquivo de dez gigabytes sem carregá-lo na memória.

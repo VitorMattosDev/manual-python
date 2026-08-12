@@ -81,7 +81,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ### Volume 8 — O Modelo de Dados de Python
 
-- [ ] **cap 048** - Métodos especiais: o protocolo por trás da sintaxe - `vol08/cap048-metodos-especiais-o-protocolo-por-tras-da.qmd`
+- [x] **cap 048** - Métodos especiais: o protocolo por trás da sintaxe - `vol08/cap048-metodos-especiais-o-protocolo-por-tras-da.qmd`
 - [ ] **cap 049** - Iteradores e o protocolo de iteração - `vol08/cap049-iteradores-e-o-protocolo-de-iteracao.qmd`
 - [ ] **cap 050** - Geradores, yield e a avaliação preguiçosa - `vol08/cap050-geradores-yield-e-a-avaliacao-preguicosa.qmd`
 - [ ] **cap 051** - Decoradores de função - `vol08/cap051-decoradores-de-funcao.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (47 concluidos).
+**Total:** 104 capitulos em 16 volumes (48 concluidos).
 
