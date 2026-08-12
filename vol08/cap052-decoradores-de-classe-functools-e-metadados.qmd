@@ -1,3 +1,497 @@
-# Decoradores de classe, functools e metadados preservados {#sec-cap052}
+# Decoradores de classe, `functools` e metadados preservados {#sec-cap052}
 
-*(em elaboracao)*
+O @sec-cap051 terminou com três decoradores empilhados sobre a mesma função — auditoria, cache, retentativa — e `@wraps` em todos, como manda a regra. Aí a função quebrou em produção:
+
+```python
+@camada("auditoria")
+@camada("cache")
+@camada("retentativa")
+def calcular(valores):
+    return sum(valores) / len(valores)
+
+
+calcular([])
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/vitor/lab52/traceback_camadas.py", line 22, in <module>
+    calcular([])
+    ~~~~~~~~^^^^
+  File "/home/vitor/lab52/traceback_camadas.py", line 8, in envelope
+    return func(*args, **kwargs)
+  File "/home/vitor/lab52/traceback_camadas.py", line 8, in envelope
+    return func(*args, **kwargs)
+  File "/home/vitor/lab52/traceback_camadas.py", line 8, in envelope
+    return func(*args, **kwargs)
+  File "/home/vitor/lab52/traceback_camadas.py", line 19, in calcular
+    return sum(valores) / len(valores)
+           ~~~~~~~~~~~~~^~~~~~~~~~~~~~
+ZeroDivisionError: division by zero
+```
+
+Três quadros idênticos, todos na linha 8, todos chamados `envelope`, nenhum dizendo qual camada é qual. O `@wraps` consertou o `__name__` da função decorada — e não consertou nada disso, porque não é dele o trabalho.
+
+Este capítulo fecha a conta dos decoradores em três frentes: o que exatamente `@wraps` copia e o que fica para trás, o arsenal de decoradores prontos do `functools`, e a aplicação da mesma sintaxe a classes — que é o degrau imediatamente anterior às metaclasses do @sec-cap054.
+
+## O que `@wraps` copia
+
+A lista é pública e curta:
+
+```text
+WRAPPER_ASSIGNMENTS:
+    __module__
+    __name__
+    __qualname__
+    __doc__
+    __annotations__
+    __type_params__
+WRAPPER_UPDATES    : ('__dict__',)
+```
+
+Seis atributos copiados por atribuição e um atualizado por mesclagem. `__dict__` é atualizado, não substituído: atributos que o decorador tenha posto no envelope sobrevivem, e os da função original são acrescentados. É por isso que o `funcao.chamadas` do @sec-cap051 continua funcionando.
+
+O resultado, num envelope bem decorado:
+
+```text
+__name__     : media
+__qualname__ : media
+__module__   : __main__
+__doc__      : Media das leituras.
+__annotations__: {'valores': list[float], 'casas': <class 'int'>, 'return': <class 'float'>}
+signature    : (valores: list[float], casas: int = 1) -> float
+__wrapped__  : media
+```
+
+E o que **não** é copiado:
+
+```text
+o que NAO e copiado:
+  __code__ e o do envelope : envelope
+  variaveis locais reais   : ('args', 'kwargs')
+  assinatura sem seguir    : (*args, **kwargs) -> float
+  unwrap devolve o original: media
+  getsource comeca com     : @dec
+```
+
+O objeto de código continua sendo o do envelope — e não poderia ser diferente, porque é ele que vai rodar. Daí decorrem todas as consequências práticas: o quadro que aparece no traceback se chama `envelope`, o depurador entra no envelope, `co_varnames` são `args` e `kwargs`.
+
+A assinatura correta é uma **ilusão útil**: `inspect.signature` não lê o código, ele segue `__wrapped__` até o original. Com `follow_wrapped=False` a verdade aparece — `(*args, **kwargs)`. Esse elo é o que `@wraps` acrescenta de mais valioso, e é a porta de saída para qualquer ferramenta que precise do original: `inspect.unwrap(f)` percorre a corrente inteira de `__wrapped__` e devolve a função de baixo.
+
+::: {#fig-o-que-wraps-copia}
+```{.tikz}
+%%| filename: o-que-wraps-copia
+%%| alt: O que functools.wraps copia do original para o envelope e o que continua sendo do envelope, com o atributo wrapped como elo de volta ate a funcao original
+\begin{tikzpicture}[
+  stg/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=6.4cm, align=center, minimum height=0.85cm,
+              font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=5.8cm, align=left, minimum height=2.9cm,
+             font=\ttfamily\scriptsize},
+  cb/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=5.8cm, align=left, minimum height=2.9cm,
+             font=\ttfamily\scriptsize},
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=7.6cm, align=center, minimum height=1.0cm,
+             font=\scriptsize},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgray},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.2) rectangle (15.0,-8.2);
+
+  \node[stg] at (7.2, 3.6) {@wraps(media) sobre o envelope};
+
+  \node[ttl, text=manualgreen!55!black] at (3.9, 2.6) {copiado do original};
+  \node[ttl, text=manualred] at (11.1, 2.6) {continua sendo do envelope};
+
+  \node[cx] at (3.9, 0.7)
+    {\_\_module\_\_\\\_\_name\_\_\\\_\_qualname\_\_\\\_\_doc\_\_\\%
+     \_\_annotations\_\_\\\_\_type\_params\_\_\\\_\_dict\_\_ (mesclado)};
+  \node[cb] at (11.1, 0.7)
+    {\_\_code\_\_\\co\_varnames = args, kwargs\\%
+     o quadro no traceback\\o passo do depurador\\%
+     a assinatura de verdade\\o que getsource mostra};
+
+  \node[bx] at (7.2,-2.0)
+    {\texttt{\_\_wrapped\_\_} aponta para a função original\\%
+     \texttt{inspect.signature} e \texttt{inspect.unwrap} seguem esse elo};
+
+  \draw[fl] (3.9,-0.75) -- (5.4,-1.5);
+  \draw[fl] (11.1,-0.75) -- (9.6,-1.5);
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.0)
+    {A assinatura correta é uma ilusão útil: nada foi reescrito, o
+     \texttt{inspect} apenas segue \texttt{\_\_wrapped\_\_} até o original. Com
+     \texttt{follow\_wrapped=False} reaparece o \texttt{(*args, **kwargs)} que o
+     envelope de fato declara. Nenhum decorador conserta o traceback --- para
+     isso, o envelope precisa ter nome próprio.};
+\end{tikzpicture}
+```
+`@wraps` copia identidade e documentação, não o código que roda.
+:::
+
+Voltando ao traceback da abertura: a solução não é um decorador melhor, é dar nome ao envelope. Um `envelope.__qualname__ = f"{nome}<{func.__qualname__}>"` depois do `@wraps`, ou simplesmente nomear a função interna conforme a camada, faz os três quadros passarem a se identificar. Vale o esforço em decoradores de infraestrutura que embrulham código de produção.
+
+## O arsenal do `functools`
+
+### `lru_cache` e `cache`
+
+Memoização em uma linha, para funções puras e caras:
+
+```python
+@lru_cache(maxsize=128)
+def consultar(onu):
+    time.sleep(0.1)
+    return f"{onu}: -29.8 dBm"
+```
+
+```text
+primeira chamada: 0.1s
+segunda chamada : 0.0000s
+cache_info      : CacheInfo(hits=1, misses=1, maxsize=128, currsize=1)
+depois do clear : CacheInfo(hits=0, misses=0, maxsize=128, currsize=0)
+
+fib(90) instantaneo: 2880067194370816120
+```
+
+O `cache_info()` é o que torna o `lru_cache` utilizável em produção: dá para medir a taxa de acerto e ajustar o `maxsize` com dado, não com palpite. `@cache` (Python **3.9**) é `lru_cache(maxsize=None)` — sem limite e mais rápido, porque dispensa a contabilidade de idade. A recursão de Fibonacci até 90 é instantânea com ele e levaria tempo geológico sem.
+
+Duas restrições valem lembrar. Os argumentos precisam ter *hash*:
+
+```text
+argumento sem hash: unhashable type: 'list'
+```
+
+E há um vazamento clássico:
+
+```text
+lru_cache num metodo:
+  a instancia foi coletada? False
+  (o cache guarda o self como parte da chave)
+```
+
+`@lru_cache` num **método** guarda `self` como parte da chave do cache, e o cache vive na classe. Toda instância já consultada fica presa em memória para sempre. Num servidor de longa duração, isso é um vazamento que cresce com o tráfego e não aparece em teste. Para cache por instância, use `cached_property` ou um dicionário no próprio objeto.
+
+### `cached_property`
+
+```python
+    @cached_property
+    def media_cache(self):
+        return sum(self.leituras) / len(self.leituras)
+```
+
+```text
+    [calculando media_prop]
+property     : -27.63
+    [calculando media_prop]
+property     : -27.63
+    [calculando media_cache]
+cached       : -27.63
+cached       : -27.63
+
+esta no __dict__ da instancia: True
+valor guardado               : -27.63
+    [calculando media_cache]
+depois do del, recalcula     : -27.63
+
+cached_property nao vaza: instancia coletada? True
+```
+
+A `property` recalculou nas duas leituras; a `cached_property` calculou uma vez só.
+
+O truque é elegante: no primeiro acesso, o valor é gravado no `__dict__` da **instância** com o mesmo nome do atributo. A partir daí, a busca comum de atributos encontra o valor antes de chegar ao descritor da classe — mecanismo que o @sec-cap053 explica. Como o valor mora na instância, ele é coletado junto com ela: nada vaza, ao contrário do `lru_cache`. E invalidar é `del obj.atributo`.
+
+O preço aparece quando não há `__dict__`:
+
+```text
+cached_property com __slots__: No '__dict__' attribute on 'ComSlots' instance to cache 'media' property.
+```
+
+Também assunto do @sec-cap053, e uma incompatibilidade que surpreende quem otimizou memória com `__slots__` e depois quis cachear.
+
+### `partial` e `partialmethod`
+
+Fixar argumentos e obter um novo chamável:
+
+```text
+partial      : -29.8 dBm
+func original: formatar
+keywords     : {'casas': 1, 'unidade': 'dBm'}
+```
+
+A vantagem sobre `lambda v: formatar(v, 1, "dBm")` está nas duas últimas linhas: um `partial` é um objeto inspecionável, com `func`, `args` e `keywords` acessíveis, e serializável por `pickle` — coisas que uma `lambda` não oferece. É o que se passa a `map`, a `sorted(key=...)` e a *callbacks* que precisam ser comparadas ou registradas.
+
+`partialmethod` faz o mesmo dentro de uma classe, criando o método vinculado corretamente:
+
+```text
+partialmethod       : [grave] via sms
+```
+
+### `singledispatch`
+
+Despacho por tipo do primeiro argumento, sem cadeia de `isinstance`:
+
+```python
+@singledispatch
+def renderizar(valor):
+    return f"<{type(valor).__name__}> {valor}"
+
+
+@renderizar.register
+def _(valor: float):
+    return f"{valor:.1f} dBm"
+
+
+@renderizar.register
+def _(valor: list):
+    return " | ".join(renderizar(v) for v in valor)
+```
+
+```text
+float : -29.8 dBm
+lista : -29.8 dBm | -31.7 dBm
+dict  : a=-29.8 dBm
+outro : <str> onu-00043
+registry: ['dict', 'float', 'list', 'object']
+```
+
+A implementação escolhida vem da anotação de tipo do parâmetro — daí as funções se chamarem todas `_`, por convenção, já que o nome não é usado. `object` é a implementação de base, para o que não casar com nada.
+
+Isso resolve um problema de desenho real: acrescentar comportamento a tipos que você não controla, sem herança e sem editar as classes. Uma biblioteca pode registrar como renderizar `Decimal` ou `datetime` sem tocar nelas. É a alternativa funcional ao `Protocol` do @sec-cap047, e a escolha entre os dois é sobre onde o comportamento deve morar: no objeto (protocolo) ou na função (despacho).
+
+`singledispatchmethod` faz o mesmo para métodos, despachando pelo segundo parâmetro, já que o primeiro é `self`.
+
+## Decoradores de classe
+
+A sintaxe `@` funciona sobre `class` desde o Python 3.0, e a mecânica é idêntica: `Classe = decorador(Classe)`.
+
+O uso mais comum é registrar sem alterar:
+
+```python
+COLETORES = {}
+
+
+def coletor(protocolo):
+    def decorador(cls):
+        COLETORES[protocolo] = cls
+        cls.protocolo = protocolo
+        return cls                     # a MESMA classe
+
+    return decorador
+```
+
+```text
+registrados : ['snmp', 'telnet']
+atributo    : snmp
+continua ela: True
+tipo        : type
+```
+
+O segundo uso é injetar comportamento. Um `__repr__` genérico, derivado dos atributos de instância, é o exemplo canônico:
+
+```python
+def com_repr(cls):
+    def __repr__(self):
+        campos = ", ".join(f"{k}={v!r}" for k, v in vars(self).items())
+        return f"{cls.__name__}({campos})"
+
+    cls.__repr__ = __repr__
+    return cls
+```
+
+```text
+repr injetado: Leitura(onu='onu-00043', potencia=-29.8)
+```
+
+É exatamente o que `@dataclass` faz, em escala industrial: lê as anotações da classe, gera o código de `__init__`, `__repr__` e `__eq__`, e os instala. Um decorador de classe é a ferramenta certa quando o comportamento é **transversal** — vale para classes que não têm parentesco entre si — e quando forçar uma base comum seria acoplamento inútil, pelo argumento do @sec-cap044.
+
+O antipadrão é devolver uma classe **diferente**:
+
+```python
+def troca_a_classe(cls):
+    return type(cls.__name__, (cls,), {"trocada": True})
+```
+
+```text
+Filha().quem(): filha de Filha
+Base e a original? True
+MRO de Filha: ['Filha', 'Base', 'Base', 'object']
+```
+
+O MRO tem `Base` duas vezes — dois objetos de classe distintos com o mesmo nome. Um é o original, capturado pela subclasse `Filha` no momento em que ela foi definida; o outro é o substituto que o decorador criou. Depurar isso é penoso: o `repr` de ambos é idêntico, `isinstance` dá respostas que parecem erradas, e o `pickle` falha ao não encontrar a classe certa pelo nome. Um decorador de classe deve **alterar e devolver** a mesma classe.
+
+::: {#fig-momentos-da-classe}
+```{.tikz}
+%%| filename: momentos-da-classe
+%%| alt: Linha do tempo da criacao de uma classe mostrando onde a metaclasse intervem, durante a criacao, e onde o decorador de classe intervem, depois da classe pronta
+\begin{tikzpicture}[
+  bx/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=3.6cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  cw/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!18, text width=3.6cm, align=center,
+             minimum height=1.0cm, font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=3.6cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  wide/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+               text width=13.0cm, align=center, minimum height=0.9cm,
+               font=\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-7.4);
+
+  \node[bx] (b1) at (2.6, 2.4) {corpo da classe é executado};
+  \node[cw] (b2) at (7.2, 2.4) {o objeto classe é criado};
+  \node[cx] (b3) at (11.8, 2.4) {a classe pronta é entregue};
+
+  \draw[fl] (b1) -- (b2);
+  \draw[fl] (b2) -- (b3);
+
+  \node[lb, text width=3.8cm] at (2.6, 0.7)
+    {nada existe ainda além de um dicionário de nomes};
+  \node[lb, text width=3.8cm, text=manualyellow!45!black] at (7.2, 0.7)
+    {\textbf{a metaclasse} decide \emph{como} a classe nasce};
+  \node[lb, text width=3.8cm, text=manualgreen!55!black] at (11.8, 0.7)
+    {\textbf{o decorador de classe} recebe a classe já pronta};
+
+  \node[wide] at (7.2,-1.6)
+    {a herança age noutro eixo: não altera a base, cria um tipo novo que a
+     estende};
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.5)
+    {Decorador de classe e metaclasse resolvem problemas parecidos em momentos
+     diferentes. O decorador é mais simples, é local à classe que o usa e
+     \emph{não é herdado}; a metaclasse controla a criação e vale para toda a
+     descendência. Na dúvida, decorador --- e o capítulo final do volume mostra
+     o que só a metaclasse resolve.};
+\end{tikzpicture}
+```
+Os momentos em que uma classe pode ser interceptada.
+:::
+
+A última linha da figura é a regra prática. Um decorador de classe não é herdado: se `Base` foi decorada, `Filha` **não** é. Quando o comportamento precisa valer para toda a descendência automaticamente, a ferramenta é `__init_subclass__` ou uma metaclasse — assunto do @sec-cap054.
+
+## 🐍 Jeito Pythônico
+
+**Dê nome ao envelope quando o decorador é de infraestrutura.** `@wraps` conserta a identidade da função decorada, não o traceback; três `envelope` na linha 8 não dizem nada.
+
+**`inspect.unwrap(f)` para chegar ao original**, em vez de acessar `__wrapped__` na mão — ele percorre a corrente inteira.
+
+**`@cache` em vez de `@lru_cache(maxsize=None)`** (3.9+): mesma coisa, mais rápido e mais legível.
+
+**Nunca `@lru_cache` num método.** O `self` entra na chave e a instância nunca é coletada.
+
+```python
+# antipadrão: vazamento silencioso em servidor de longa duração
+class Consulta:
+    @lru_cache(maxsize=None)
+    def buscar(self, chave): ...
+```
+
+```python
+# pythônico: o valor mora na instância e morre com ela
+class Consulta:
+    @cached_property
+    def indice(self): ...
+```
+
+**`partial` em vez de `lambda`** quando o chamável precisa ser inspecionado, comparado ou serializado.
+
+**`singledispatch` em vez de cadeia de `isinstance`,** especialmente para estender tipos que você não controla.
+
+**Decorador de classe deve devolver a mesma classe.** Devolver uma classe diferente duplica nomes no MRO e quebra `pickle`.
+
+**Decorador de classe para o transversal, herança para o "é um".** E lembre que o decorador não é herdado.
+
+**Antes de escrever um decorador de classe que injeta `__init__`, `__repr__` e `__eq__`, use `@dataclass`.** Ele já faz isso, testado.
+
+Sobre versões:
+
+- **Python 2.5** — `functools.wraps`, `partial`.
+- **Python 3.0** — decoradores de classe (PEP 3129).
+- **Python 3.2** — `lru_cache`; `wraps` passa a gravar `__wrapped__`.
+- **Python 3.4** — `singledispatch` (PEP 443), `partialmethod`.
+- **Python 3.7** — `singledispatch` passa a ler a anotação de tipo, dispensando `register(tipo)`.
+- **Python 3.8** — `cached_property`, `singledispatchmethod`.
+- **Python 3.9** — `cache` como atalho de `lru_cache(maxsize=None)`.
+- **Python 3.12** — `__type_params__` entra em `WRAPPER_ASSIGNMENTS`; `cached_property` perde o bloqueio por classe que serializava o acesso entre *threads*.
+
+## 🧪 Laboratório
+
+Objetivo: medir o que `@wraps` faz e o que não faz, exercitar cada ferramenta do `functools` até ver seu limite, e escrever decoradores de classe — inclusive o errado.
+
+**1. A lista exata.**
+
+```bash
+mkdir -p ~/lab52 && cd ~/lab52
+```
+
+Em `o_que_wraps_copia.py`, imprima `WRAPPER_ASSIGNMENTS` e `WRAPPER_UPDATES`. Depois compare `inspect.signature(f)` com `inspect.signature(f, follow_wrapped=False)`:
+
+```text
+signature    : (valores: list[float], casas: int = 1) -> float
+assinatura sem seguir    : (*args, **kwargs) -> float
+```
+
+Explique por que a primeira é uma ilusão.
+
+**2. O traceback em escada.** Em `traceback_camadas.py`, empilhe três decoradores e provoque uma exceção. Confirme os três quadros idênticos. Depois dê `__qualname__` próprio a cada envelope e confirme que o traceback passa a nomear as camadas.
+
+**3. `lru_cache`.** Meça a primeira e a segunda chamada, e leia o `cache_info()`. Reduza `maxsize` para 1, alterne entre dois argumentos e confirme que a taxa de acerto despenca.
+
+**4. O vazamento.** Ponha `@lru_cache` num método, guarde uma `weakref` para a instância, apague a referência forte e rode `gc.collect()`:
+
+```text
+  a instancia foi coletada? False
+```
+
+Depois troque por `@cached_property` e confirme que passa a ser `True`.
+
+**5. `cached_property`.** Confirme que o valor vai para o `__dict__` da instância e que `del obj.atributo` invalida. Depois adicione `__slots__` à classe e leia o erro:
+
+```text
+cached_property com __slots__: No '__dict__' attribute on 'ComSlots' instance to cache 'media' property.
+```
+
+**6. `partial`.** Crie um `partial` e inspecione `func`, `args` e `keywords`. Depois tente `pickle.dumps` num `partial` e numa `lambda` equivalente e compare o resultado.
+
+**7. `singledispatch`.** Registre implementações para `float`, `list` e `dict`, e confirme o `registry`. Depois registre uma para `int` e descubra se `bool` cai nela — e por quê.
+
+**8. Registro de classes.** Em `dec_de_classe.py`, escreva o decorador com parâmetro que cadastra a classe e devolve-a intacta. Confirme `COLETORES["snmp"] is Snmp`.
+
+**9. Injeção de `__repr__`.** Escreva `@com_repr` e aplique a uma classe qualquer. Compare com `@dataclass` e liste o que o `dataclass` faz a mais.
+
+**10. O antipadrão.** Escreva o decorador que devolve `type(cls.__name__, (cls,), {...})` e confirme o MRO duplicado:
+
+```text
+MRO de Filha: ['Filha', 'Base', 'Base', 'object']
+```
+
+Confirme que as duas `Base` são objetos diferentes (`is`), e tente `pickle` numa instância.
+
+**11. O decorador não é herdado.** Decore uma classe base com `@coletor("x")` e crie uma subclasse. Confirme que a subclasse **não** aparece no registro. Guarde a pergunta para o próximo capítulo.
+
+## Resumo
+
+- `@wraps` copia seis atributos de identidade e documentação e mescla o `__dict__`; não copia — nem poderia — o objeto de código que efetivamente roda.
+- A assinatura correta que `inspect.signature` mostra vem de seguir `__wrapped__` até o original; `follow_wrapped=False` revela o `(*args, **kwargs)` real, e `inspect.unwrap` percorre a corrente inteira.
+- Nenhum decorador conserta o traceback: quadros empilhados aparecem todos como `envelope`. A correção é dar `__qualname__` próprio a cada camada.
+- `@lru_cache` memoiza funções puras com argumentos que tenham *hash*, e `cache_info()` permite ajustar o `maxsize` com medida. `@cache` é o atalho sem limite.
+- `@lru_cache` num método guarda `self` na chave e impede a coleta da instância — vazamento que cresce com o tráfego e não aparece em teste.
+- `cached_property` grava o valor no `__dict__` da instância, morre junto com ela e é invalidada por `del`; em troca, não funciona com `__slots__`.
+- `partial` é um objeto inspecionável e serializável, ao contrário de uma `lambda` equivalente.
+- `singledispatch` substitui cadeias de `isinstance` e permite estender comportamento a tipos de terceiros sem herança e sem editar as classes.
+- Decorador de classe é `Classe = decorador(Classe)`: serve para registrar, para injetar comportamento transversal e é o mecanismo por trás de `@dataclass`.
+- Devolver uma classe diferente de dentro de um decorador de classe duplica nomes no MRO e quebra `pickle`; altere e devolva a mesma classe.
+- Decorador de classe não é herdado. Quando o comportamento precisa valer para toda a descendência, a ferramenta é outra.
+
+Três capítulos deste volume dependeram de um mecanismo que ainda não foi explicado. O `cached_property` grava no `__dict__` da instância e por isso não é consultado de novo; `@staticmethod` devolve um objeto que se comporta de forma diferente quando acessado pela classe e pela instância; `property` intercepta leitura e escrita de um atributo. Os três são **descritores** — o protocolo que governa o acesso a atributos e que o @sec-cap053 abre, junto com o `__slots__` que acabou de estragar o cache.
