@@ -385,7 +385,7 @@ telemetria2 v0.1.0
               text width=2.4cm, align=center, minimum height=0.5cm,
               font=\scriptsize},
   lb/.style={font=\scriptsize, text=manualgray, align=center},
-  cm/.style={font=\ttfamily\scriptsize, text=manualblue!70!black},
+  cmd/.style={font=\ttfamily\scriptsize, text=manualblue!70!black},
   fl/.style={->,>=stealth, thick, manualgray}]
 
   \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
@@ -404,8 +404,8 @@ telemetria2 v0.1.0
   \node[lb, text width=3.4cm] at (11.4, 0.1) {o que \textbf{existe} nesta
     máquina, agora};
 
-  \draw[fl] (3.6, 1.2) -- (4.9, 1.2) node[cm, midway, above] {uv lock};
-  \draw[fl] (8.3, 1.2) -- (9.7, 1.2) node[cm, midway, above] {uv sync};
+  \draw[fl] (3.6, 1.2) -- (4.9, 1.2) node[cmd, midway, above] {uv lock};
+  \draw[fl] (8.3, 1.2) -- (9.7, 1.2) node[cmd, midway, above] {uv sync};
 
   \node[git] at (1.9,-1.4) {vai para o Git};
   \node[git] at (6.6,-1.4) {vai para o Git};

@@ -186,7 +186,7 @@ Há três formas de encadear, e o Python distingue as três.
   vz/.style={draw=manualgray!35, thick, rounded corners, fill=manualgray!5,
              text width=4.1cm, align=center, minimum height=1.15cm,
              font=\scriptsize\itshape, text=manualgray!70},
-  at/.style={font=\ttfamily\scriptsize, text=manualgray, align=center},
+  atr/.style={font=\ttfamily\scriptsize, text=manualgray, align=center},
   lb/.style={font=\scriptsize, text=manualgray, align=center},
   fl/.style={->,>=stealth, thick, manualgray},
   nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
@@ -225,13 +225,13 @@ Há três formas de encadear, e o Python distingue as três.
   \node[bx, draw=manualred, fill=manualred!10] at (12.4,-2.5)
        {ConfiguracaoInvalida};
 
-  \node[at] at (2.4,-3.5) {\_\_cause\_\_ = a original};
-  \node[at] at (2.4,-3.95) {\_\_context\_\_ = a original};
-  \node[at] at (7.4,-3.5) {\_\_cause\_\_ = None};
-  \node[at] at (7.4,-3.95) {\_\_context\_\_ = a original};
-  \node[at] at (12.4,-3.5) {\_\_cause\_\_ = None};
-  \node[at] at (12.4,-3.95) {\_\_context\_\_ = a original};
-  \node[at] at (12.4,-4.4) {\_\_suppress\_context\_\_ = True};
+  \node[atr] at (2.4,-3.5) {\_\_cause\_\_ = a original};
+  \node[atr] at (2.4,-3.95) {\_\_context\_\_ = a original};
+  \node[atr] at (7.4,-3.5) {\_\_cause\_\_ = None};
+  \node[atr] at (7.4,-3.95) {\_\_context\_\_ = a original};
+  \node[atr] at (12.4,-3.5) {\_\_cause\_\_ = None};
+  \node[atr] at (12.4,-3.95) {\_\_context\_\_ = a original};
+  \node[atr] at (12.4,-4.4) {\_\_suppress\_context\_\_ = True};
 
   \node[nt, text width=15.0cm] at (-0.4,-5.0)
     {A original nunca se perde: mesmo com \texttt{from None} ela continua em

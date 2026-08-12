@@ -293,7 +293,7 @@ Repare no terceiro passo do log: *"Building wheel from sdist"*. O `build` constr
               text width=3.0cm, align=center, minimum height=0.95cm,
               font=\ttfamily\scriptsize},
   lb/.style={font=\scriptsize, text=manualgray, align=center},
-  cm/.style={font=\ttfamily\scriptsize, text=manualblue!70!black},
+  cmd/.style={font=\ttfamily\scriptsize, text=manualblue!70!black},
   fl/.style={->,>=stealth, thick, manualgray}]
 
   \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
@@ -315,13 +315,13 @@ Repare no terceiro passo do log: *"Building wheel from sdist"*. O `build` constr
   \node[ind] at (11.0, 1.4) {PyPI};
   \node[des] at (11.0,-0.5) {site-packages\\do usuário};
 
-  \draw[fl] (2.9, 1.4) -- (4.6, 1.9) node[cm, midway, above, sloped]
+  \draw[fl] (2.9, 1.4) -- (4.6, 1.9) node[cmd, midway, above, sloped]
        {python -m build};
   \draw[fl] (2.9, 1.4) -- (4.6,-0.4);
-  \draw[fl] (8.1, 2.0) -- (9.7, 1.6) node[cm, midway, above, sloped]
+  \draw[fl] (8.1, 2.0) -- (9.7, 1.6) node[cmd, midway, above, sloped]
        {twine upload};
-  \draw[fl] (8.1,-0.5) -- (9.7,-0.5) node[cm, midway, above] {pip install};
-  \draw[fl] (11.0, 0.9) -- (11.0, 0.0) node[cm, midway, right=2pt]
+  \draw[fl] (8.1,-0.5) -- (9.7,-0.5) node[cmd, midway, above] {pip install};
+  \draw[fl] (11.0, 0.9) -- (11.0, 0.0) node[cmd, midway, right=2pt]
        {pip install telemetria};
 
   \node[lb, text width=13.6cm, align=left] at (7.0,-3.2)
