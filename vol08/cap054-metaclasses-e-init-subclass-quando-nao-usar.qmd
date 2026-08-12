@@ -1,3 +1,463 @@
 # Metaclasses e `__init_subclass__`: quando (não) usar {#sec-cap054}
 
-*(em elaboracao)*
+O @sec-cap052 deixou uma pergunta em aberto, e ela custa caro em produção. O registro de coletores funciona:
+
+```python
+@coletor("snmp")
+class Snmp:
+    pass
+
+
+class SnmpV3(Snmp):
+    pass
+```
+
+```text
+com decorador de classe:
+  registrados      : ['snmp']
+  SnmpV3 registrado? False
+```
+
+Alguém subclassificou `Snmp` para tratar a versão 3 do protocolo, e a classe nova simplesmente não existe para o resto do sistema. Nenhum erro: o registro tem uma entrada, o código que procura por protocolo não encontra o novo e cai no caminho padrão. O defeito aparece semanas depois, como "a coleta v3 não está rodando".
+
+A causa é a do capítulo anterior: **decorador de classe não é herdado**. Ele age uma vez, sobre a classe que o usa, e a subclasse nasce sem ele. Para que um comportamento valha automaticamente para toda a descendência, é preciso agir num momento diferente — durante a criação de cada classe filha.
+
+Este capítulo fecha o Volume 8 com os dois mecanismos que fazem isso, na ordem em que devem ser considerados: `__init_subclass__`, que resolve a maioria dos casos, e as metaclasses, que resolvem o resto e cobram por isso.
+
+## `__init_subclass__`: o gancho que basta
+
+```python
+REGISTRO = {}
+
+
+class Coletor:
+    def __init_subclass__(cls, /, protocolo=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if protocolo is None:
+            protocolo = cls.__name__.lower()
+        cls.protocolo = protocolo
+        REGISTRO[protocolo] = cls
+
+
+class Telnet(Coletor, protocolo="telnet"):
+    pass
+
+
+class Ssh(Coletor):
+    pass
+
+
+class SshSeguro(Ssh, protocolo="ssh-fips"):
+    pass
+```
+
+```text
+com __init_subclass__:
+  registrados : ['ssh', 'ssh-fips', 'telnet']
+  neto entrou? True
+  atributo    : ssh-fips
+  a base entra no registro? False
+  tipo do gancho: classmethod
+```
+
+Três classes registradas, incluindo o **neto** — `SshSeguro` herda de `Ssh`, que herda de `Coletor`, e o gancho foi chamado do mesmo jeito. É exatamente o que faltava.
+
+Quatro pontos do código merecem nota.
+
+O gancho é chamado na **classe-mãe**, recebendo a filha como `cls`. Por isso a própria `Coletor` não entra no registro: ninguém foi criado como subclasse dela ainda quando ela nasceu. Se a base também devesse ser registrada, isso é feito à mão, fora da classe.
+
+`__init_subclass__` é implicitamente um `classmethod` — a última linha da saída confirma. Escrever `@classmethod` em cima dele é redundante, e não escrever não é erro.
+
+A palavra-chave no `class` é o recurso mais elegante: `class Telnet(Coletor, protocolo="telnet")` passa `protocolo="telnet"` direto para o gancho. É como `Enum` recebe configuração e como bibliotecas de ORM declaram nome de tabela sem um atributo mágico no corpo. Argumentos não consumidos devem ser repassados com `super().__init_subclass__(**kwargs)`, senão hierarquias com múltiplas bases quebram.
+
+E a barra na assinatura (`cls, /, protocolo=None`) marca `cls` como só-posicional, para que uma subclasse possa ter uma palavra-chave chamada `cls` sem colidir. É detalhe, mas é o que a documentação recomenda.
+
+`__init_subclass__` chegou no Python **3.6** pela PEP 487 — a mesma PEP do `__set_name__` do @sec-cap053. As duas foram criadas com o mesmo propósito declarado: **eliminar a maior parte dos usos legítimos de metaclasse**. Antes delas, registrar subclasses ou dar nome a descritores exigia uma metaclasse. Hoje não exige, e é por isso que a ordem de consideração começa aqui.
+
+## Classes são objetos
+
+Para entender o que sobra, é preciso aceitar uma ideia que o resto do manual vinha adiando:
+
+```text
+type de uma instancia : Leitura
+type da classe        : type
+type de type          : type
+a classe e um objeto? : True
+e type e subclasse de object? True
+```
+
+Uma instância é do tipo da sua classe; a classe é do tipo `type`. Uma classe é um **objeto**, criado em tempo de execução, que pode ser guardado numa variável, passado como argumento e — foi isso que os decoradores de classe fizeram — modificado depois de pronto.
+
+E se `type` é o que cria classes, chamá-lo com três argumentos cria uma:
+
+```python
+Dinamica = type(
+    "Dinamica",
+    (Leitura,),
+    {"unidade": "mW", "extra": lambda self: "veio do type()"},
+)
+```
+
+```text
+classe criada por type(): Dinamica
+  herdou o metodo       : leitura em mW
+  atributo proprio      : veio do type()
+  MRO                   : ['Dinamica', 'Leitura', 'object']
+  e uma Leitura?        : True
+
+as duas formas sao equivalentes:
+  class X: ... -> <class 'type'>
+  type(nome, bases, ns) -> <class 'type'>
+```
+
+Nome, tupla de bases, dicionário do corpo. A instrução `class` é açúcar para essa chamada — é literalmente isso que o interpretador faz. Uma classe criada assim é indistinguível de uma escrita com `class`: mesmo MRO, mesma herança, mesmo `isinstance`.
+
+Uma **metaclasse** é uma subclasse de `type`. Se `type` é a fábrica padrão de classes, uma metaclasse é uma fábrica sua, com o comportamento que você quiser.
+
+## A ordem completa da criação
+
+Instrumentando todos os ganchos de uma vez, a sequência aparece inteira:
+
+```text
+criando a subclasse:
+   Meta.__prepare__
+   corpo da classe executado
+   Meta.__new__  (antes de type.__new__)
+   __set_name__ de campo
+   Base.__init_subclass__
+   Meta.__new__  (depois de type.__new__)
+   Meta.__init__
+   decorador de classe
+
+a metaclasse foi herdada: Meta
+```
+
+Sete momentos, e cada capítulo deste volume ocupa um deles. Repare que `__set_name__` e `__init_subclass__` acontecem **dentro** de `type.__new__` — são chamados pelo próprio construtor de tipos, o que explica por que funcionam sem nenhuma metaclasse. E o decorador de classe é o último de todos, recebendo a classe já completamente formada.
+
+A linha final é a diferença que decide entre as duas ferramentas: **a metaclasse é herdada**. `Filha` não declarou `metaclass=Meta`; ela herdou de `Base`, e com isso herdou a metaclasse. Todo o galho da hierarquia passa pelo mesmo processo, para sempre, sem que ninguém precise lembrar de nada. É o poder e é o problema.
+
+::: {#fig-ordem-criacao-classe}
+```{.tikz}
+%%| filename: ordem-criacao-classe
+%%| alt: Os sete momentos da criacao de uma classe em ordem, indicando quais exigem metaclasse e quais nao
+\begin{tikzpicture}[
+  cw/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!18, text width=5.4cm, align=center,
+             minimum height=0.7cm, font=\ttfamily\scriptsize},
+  cx/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=5.4cm, align=center, minimum height=0.7cm,
+             font=\ttfamily\scriptsize},
+  stg/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!8,
+              text width=5.4cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  fl/.style={->,>=stealth, thick, manualgray},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-8.4);
+
+  \node[cw]  (s1) at (3.4, 2.9) {Meta.\_\_prepare\_\_};
+  \node[stg] (s2) at (3.4, 1.9) {corpo da classe executado};
+  \node[cw]  (s3) at (3.4, 0.9) {Meta.\_\_new\_\_};
+  \node[cx]  (s4) at (3.4,-0.1) {\_\_set\_name\_\_ dos descritores};
+  \node[cx]  (s5) at (3.4,-1.1) {\_\_init\_subclass\_\_ da base};
+  \node[cw]  (s6) at (3.4,-2.1) {Meta.\_\_init\_\_};
+  \node[cx]  (s7) at (3.4,-3.1) {decoradores de classe};
+
+  \draw[fl] (s1) -- (s2);
+  \draw[fl] (s2) -- (s3);
+  \draw[fl] (s3) -- (s4);
+  \draw[fl] (s4) -- (s5);
+  \draw[fl] (s5) -- (s6);
+  \draw[fl] (s6) -- (s7);
+
+  \node[lb, text width=8.0cm] at (6.5, 2.9) {escolhe o dicionário onde o corpo
+    será executado};
+  \node[lb, text width=8.0cm] at (6.5, 1.9) {nomes e defs viram entradas nesse
+    dicionário};
+  \node[lb, text width=8.0cm] at (6.5, 0.9) {pode inspecionar, alterar ou
+    \emph{recusar} a classe};
+  \node[lb, text width=8.0cm] at (6.5,-0.1) {chamados por
+    \texttt{type.\_\_new\_\_}, sem metaclasse nenhuma};
+  \node[lb, text width=8.0cm] at (6.5,-1.1) {idem --- e vale para toda a
+    descendência};
+  \node[lb, text width=8.0cm] at (6.5,-2.1) {a classe já existe; ajustes
+    finais};
+  \node[lb, text width=8.0cm] at (6.5,-3.1) {de baixo para cima, sobre a classe
+    pronta};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.1)
+    {Em laranja, o que exige metaclasse; em verde, o que não exige. A PEP 487
+     criou os dois passos verdes do meio justamente para esvaziar os laranja ---
+     e a metaclasse, ao contrário do decorador, é \textbf{herdada} por toda a
+     descendência.};
+\end{tikzpicture}
+```
+Os sete momentos da criação de uma classe, e quais deles exigem metaclasse.
+:::
+
+## O que só a metaclasse resolve
+
+Sobram três situações, todas envolvendo **recusar ou reescrever** a classe antes de ela existir.
+
+A primeira é validar o corpo e impedir a criação:
+
+```python
+class ExigeDocstring(type):
+    def __new__(mcls, nome, bases, ns, **kwargs):
+        if bases:
+            faltando = [
+                k for k, v in ns.items()
+                if callable(v) and not k.startswith("_") and not v.__doc__
+            ]
+            if faltando:
+                raise TypeError(
+                    f"{nome}: metodos sem docstring: {', '.join(faltando)}"
+                )
+        return super().__new__(mcls, nome, bases, ns)
+```
+
+```text
+classe boa criada: Boa
+classe ruim recusada: Ruim: metodos sem docstring: ler, gravar
+```
+
+O erro acontece na **importação do módulo**, não na primeira chamada. É o mesmo argumento do @sec-cap047 levado ao extremo: quanto mais cedo o erro, mais barato. `__init_subclass__` também consegue recusar — mas só depois de a classe existir, o que deixa um objeto meio-construído acessível em casos de captura de exceção.
+
+A segunda é `__prepare__`, o único gancho que age **antes** de o corpo da classe rodar. Ele devolve o dicionário onde as definições serão gravadas, e um dicionário próprio vê cada nome sendo definido:
+
+```python
+class Duplicado(dict):
+    def __setitem__(self, chave, valor):
+        if chave in self and not chave.startswith("__"):
+            raise TypeError(f"nome '{chave}' definido duas vezes")
+        super().__setitem__(chave, valor)
+```
+
+```text
+__prepare__ pegou: nome 'processar' definido duas vezes
+```
+
+Dois métodos com o mesmo nome numa classe é um erro real e silencioso — o segundo sobrescreve o primeiro, e Python não reclama. Nenhuma outra ferramenta pega isso, porque quando a classe fica pronta o primeiro `processar` já não existe. Esse é o tipo de coisa para a qual `__prepare__` existe. (É também como `enum.Enum` proíbe valores repetidos e como classes com ordem de definição significativa a preservam.)
+
+A terceira é alterar o comportamento da **própria classe** como objeto: `__instancecheck__` e `__subclasshook__` para mudar `isinstance`, `__call__` na metaclasse para interceptar a instanciação, `__repr__` na metaclasse para mudar como a classe se imprime. É assim que `ABCMeta` funciona — a `ABC` do @sec-cap047 é uma classe cuja metaclasse redefine `isinstance`.
+
+## O custo: conflito de metaclasses
+
+E aqui está a fatura:
+
+```text
+metaclasse de ABC     : ABCMeta
+metaclasse da minha   : MinhaMeta
+
+juntando as duas:
+  TypeError: metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases
+```
+
+Uma classe só pode ter **uma** metaclasse, e ela precisa ser compatível com as de todas as bases. Herdar de uma classe sua com metaclasse própria e de uma `ABC` ao mesmo tempo é um erro de tipo — não porque as duas façam coisas incompatíveis, mas porque o mecanismo não sabe combiná-las.
+
+A saída existe, e é manual:
+
+```python
+class MetaCombinada(MinhaMeta, ABCMeta):
+    pass
+```
+
+```text
+com metaclasse combinada: MetaCombinada
+  MRO da metaclasse     : ['MetaCombinada', 'MinhaMeta', 'ABCMeta', 'type', 'object']
+```
+
+Funciona — e observe o que aconteceu: agora existe uma hierarquia de metaclasses, com MRO próprio, que precisa ser mantida. Cada nova biblioteca que trouxer a própria metaclasse exige mais um cruzamento. É por isso que metaclasse é uma decisão de **arquitetura de biblioteca**, não uma técnica de código de aplicação: ela impõe uma restrição a todo mundo que herdar das suas classes, inclusive gente que você não conhece.
+
+Some-se a isso que a metaclasse não aparece no corpo da classe que a sofre — `Filha` do exemplo não menciona `Meta` em lugar nenhum, e mesmo assim é validada por ela. Depurar comportamento que vem de uma metaclasse herdada três níveis acima é penoso, e é o motivo do conselho de Tim Peters que virou folclore: *"metaclasses são magia mais profunda do que 99% dos usuários deveriam se preocupar. Se você está pensando se precisa de uma, não precisa."*
+
+::: {#fig-escada-de-decisao}
+```{.tikz}
+%%| filename: escada-de-decisao
+%%| alt: Escada de decisao das quatro ferramentas para alterar classes, da mais simples a mais poderosa, com o alcance e o custo de cada uma
+\begin{tikzpicture}[
+  d1/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.6cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  d2/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+             text width=4.6cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  d3/.style={draw=manualyellow!80!black, very thick, rounded corners,
+             fill=manualyellow!18, text width=4.6cm, align=center,
+             minimum height=1.0cm, font=\ttfamily\scriptsize},
+  d4/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=4.6cm, align=center, minimum height=1.0cm,
+             font=\ttfamily\scriptsize},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  fl/.style={->,>=stealth, very thick, manualgray},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.6) rectangle (15.0,-7.6);
+
+  \node[d1] (a) at (4.0, 2.6) {herança};
+  \node[d2] (b) at (4.0, 1.0) {decorador de classe};
+  \node[d3] (c) at (4.0,-0.6) {\_\_init\_subclass\_\_};
+  \node[d4] (d) at (4.0,-2.2) {metaclasse};
+
+  \draw[fl] (1.2, 2.9) -- (1.2,-2.5);
+  \node[lb, anchor=south, rotate=90, text=manualgray] at (0.9, 0.2)
+    {mais poder, mais custo};
+
+  \node[lb, text width=8.4cm] at (6.6, 2.6)
+    {comportamento compartilhado numa relação ``é um''};
+  \node[lb, text width=8.4cm] at (6.6, 1.0)
+    {transversal, local à classe que o usa --- \textbf{não é herdado}};
+  \node[lb, text width=8.4cm] at (6.6,-0.6)
+    {vale para \textbf{toda a descendência}, automaticamente; aceita
+     palavra-chave no \texttt{class}};
+  \node[lb, text width=8.4cm] at (6.6,-2.2)
+    {pode \emph{recusar} a classe, trocar o dicionário do corpo e mudar
+     \texttt{isinstance} --- ao custo de conflitos};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.4)
+    {Desça um degrau só quando o de cima comprovadamente não resolve. Os três
+     primeiros não impõem nada a quem herda das suas classes; o quarto impõe uma
+     metaclasse a toda a descendência e pode tornar impossível combinar suas
+     classes com as de outra biblioteca.};
+\end{tikzpicture}
+```
+A escada de decisão: cada degrau só se justifica quando o anterior não resolve.
+:::
+
+## 🐍 Jeito Pythônico
+
+**Suba a escada de baixo para cima.** Herança, decorador de classe, `__init_subclass__`, metaclasse — nessa ordem de preferência, e desça só com motivo demonstrado.
+
+**Registro de subclasses é `__init_subclass__`,** não decorador e não metaclasse.
+
+```python
+# antipadrão: só a classe decorada entra no registro
+@coletor("snmp")
+class Snmp: ...
+```
+
+```python
+# pythônico: toda a descendência entra, para sempre
+class Coletor:
+    def __init_subclass__(cls, /, protocolo=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        REGISTRO[protocolo or cls.__name__.lower()] = cls
+```
+
+**Sempre chame `super().__init_subclass__(**kwargs)`,** repassando o que não consumiu. Sem isso, hierarquias com várias bases quebram.
+
+**Não escreva `@classmethod` em `__init_subclass__`.** Ele já é um, implicitamente.
+
+**Palavra-chave no `class` em vez de atributo mágico no corpo.** `class Telnet(Coletor, protocolo="telnet")` é mais claro que um `_protocolo = "telnet"` que alguém precisa saber que existe.
+
+**Metaclasse é decisão de biblioteca, não de aplicação.** Ela é herdada e pode tornar suas classes incombináveis com as de terceiros.
+
+**Se precisar mesmo, herde a metaclasse existente** em vez de criar do zero — `class MinhaMeta(ABCMeta)` evita metade dos conflitos futuros.
+
+**`__prepare__` só quando a ordem ou a duplicidade de nomes no corpo importa.** É o único gancho que enxerga o corpo sendo construído.
+
+Sobre versões:
+
+- **Python 2.2** — metaclasses como as conhecemos, junto com as classes de novo estilo e `type` como fábrica.
+- **Python 3.0** — a sintaxe passa a ser `class C(metaclass=M)`, em vez do atributo `__metaclass__`.
+- **Python 3.0** — `__prepare__` (PEP 3115), e o namespace da classe passa a poder ser um mapeamento qualquer.
+- **Python 3.6** — `__init_subclass__` e `__set_name__` (PEP 487), com o objetivo declarado de tornar a metaclasse desnecessária na maioria dos casos.
+- **Python 3.6** — o dicionário do corpo passa a preservar a ordem de definição por padrão, o que dispensou `__prepare__` para esse fim específico.
+- **Python 3.12** — a sintaxe de genéricos (PEP 695) usa `__type_params__`, e classes genéricas deixam de exigir a metaclasse que `Generic` usava em versões antigas.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir o defeito do registro não herdado, corrigi-lo com `__init_subclass__`, criar classes com `type()` na mão, mapear a ordem completa dos ganchos e sentir o custo do conflito de metaclasses.
+
+**1. O defeito.**
+
+```bash
+mkdir -p ~/lab54 && cd ~/lab54
+```
+
+Em `init_subclass.py`, monte o registro por decorador de classe, crie uma subclasse e confirme:
+
+```text
+  registrados      : ['snmp']
+  SnmpV3 registrado? False
+```
+
+**2. A correção.** Reescreva com `__init_subclass__` e confirme que filha e neta entram:
+
+```text
+  registrados : ['ssh', 'ssh-fips', 'telnet']
+  neto entrou? True
+```
+
+Confirme também que a **base** não entra, e explique por quê.
+
+**3. Palavra-chave no `class`.** Use `class Telnet(Coletor, protocolo="telnet")`. Depois remova o `**kwargs` da assinatura do gancho e descubra qual erro aparece.
+
+**4. O `super()` esquecido.** Crie duas bases, cada uma com `__init_subclass__`, e uma classe que herde das duas. Remova o `super().__init_subclass__(**kwargs)` de uma delas e confirme que a outra deixa de ser chamada.
+
+**5. Classes são objetos.** Em `classes_sao_objetos.py`, confirme `type(type) is type` e crie uma classe com `type(nome, bases, ns)`. Confirme que ela herda, tem MRO e passa em `isinstance` como qualquer outra.
+
+**6. A ordem completa.** Em `ordem_criacao.py`, ponha um `print` em cada gancho e confirme a sequência:
+
+```text
+   Meta.__prepare__
+   corpo da classe executado
+   Meta.__new__  (antes de type.__new__)
+   __set_name__ de campo
+   Base.__init_subclass__
+   Meta.__new__  (depois de type.__new__)
+   Meta.__init__
+   decorador de classe
+```
+
+Explique por que `__set_name__` e `__init_subclass__` aparecem **entre** as duas linhas do `Meta.__new__`.
+
+**7. A metaclasse herdada.** Confirme que `Filha` tem `Meta` como metaclasse sem jamais tê-la declarado. Crie uma neta e confirme que ela também passa por todos os ganchos.
+
+**8. Recusar a classe.** Em `metaclasse_util.py`, escreva a metaclasse que exige *docstring* em métodos públicos:
+
+```text
+classe ruim recusada: Ruim: metodos sem docstring: ler, gravar
+```
+
+Depois tente escrever a mesma verificação com `__init_subclass__` e compare: o que muda é **quando** o erro acontece e se a classe chegou a existir.
+
+**9. `__prepare__`.** Escreva o dicionário que recusa nomes repetidos e confirme:
+
+```text
+__prepare__ pegou: nome 'processar' definido duas vezes
+```
+
+Confirme que, sem ele, definir `processar` duas vezes não gera erro nenhum — e que a primeira versão desaparece.
+
+**10. O conflito.** Em `conflito.py`, junte uma classe com metaclasse própria e uma `ABC`:
+
+```text
+  TypeError: metaclass conflict: the metaclass of a derived class must be a (non-strict) subclass of the metaclasses of all its bases
+```
+
+Resolva com `class MetaCombinada(MinhaMeta, ABCMeta)` e inspecione o MRO da metaclasse.
+
+**11. A escolha.** Pegue os três casos abaixo e decida qual degrau da escada resolve cada um, implementando o escolhido: (a) todas as subclasses precisam de um `__repr__` derivado dos campos; (b) toda subclasse deve ser registrada num catálogo; (c) nenhuma subclasse pode definir um método chamado `run`. Justifique cada escolha.
+
+## Resumo
+
+- Decorador de classe não é herdado: a subclasse nasce sem ele, e o sintoma é ausência silenciosa no registro, não erro.
+- `__init_subclass__` é chamado na classe-mãe a cada subclasse criada, em toda a descendência, e resolve registro, validação e configuração sem metaclasse.
+- Ele é implicitamente um `classmethod`, recebe palavras-chave passadas na própria instrução `class`, e deve repassar o que não consumir com `super().__init_subclass__(**kwargs)`.
+- A classe-base não é registrada pelo próprio gancho — ele só roda para subclasses.
+- Classes são objetos criados em tempo de execução: `type(nome, bases, ns)` produz uma classe indistinguível de uma escrita com `class`, e `type(type) is type`.
+- Uma metaclasse é uma subclasse de `type`: uma fábrica de classes própria.
+- A ordem de criação é `__prepare__`, corpo, `Meta.__new__`, `__set_name__`, `__init_subclass__`, `Meta.__init__`, decoradores — com os dois ganchos da PEP 487 rodando dentro de `type.__new__`, sem metaclasse nenhuma.
+- Só a metaclasse consegue recusar a criação da classe, trocar o dicionário onde o corpo é executado (`__prepare__`) e alterar `isinstance` — que é como `ABCMeta` funciona.
+- A metaclasse é herdada por toda a descendência e só pode haver uma: combinar duas hierarquias com metaclasses diferentes é `TypeError`, e exige criar à mão uma metaclasse que herde de ambas.
+- A escada de decisão é herança, decorador de classe, `__init_subclass__`, metaclasse — nessa ordem, descendo só quando o degrau acima comprovadamente não resolve.
+
+Com isto fecha o Volume 8. A sintaxe da linguagem deixou de ser um conjunto de regras a decorar e passou a ser um conjunto de protocolos com nome: `len()` é `__len__`, `for` é `__iter__` e `__next__`, `@` é uma reatribuição, `obj.x` é uma ordem de precedência entre descritores, e `class` é uma chamada a `type`. O que parecia mágica virou mecanismo — e mecanismo se depura.
+
+A Fase 2 termina aqui. O que vem a seguir muda de natureza: em vez de construir a linguagem por dentro, passa a usá-la com o que já vem pronto. A Fase 3 abre com a biblioteca padrão — `os`, `datetime`, `collections`, `itertools`, `logging` — e boa parte dela vai parecer familiar, porque `Counter` é um `dict` com `__missing__`, `deque` implementa o protocolo de contêiner, e `itertools` é um catálogo de geradores. O Volume 8 foi o que torna possível ler o código dessas bibliotecas em vez de apenas usá-las.
