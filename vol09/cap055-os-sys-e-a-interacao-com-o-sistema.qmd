@@ -1,3 +1,694 @@
 # os, sys e a interação com o sistema {#sec-cap055}
 
-*(em elaboracao)*
+O script funcionava na máquina de quem escreveu. No servidor, quebrou de quatro maneiras ao mesmo tempo: o caminho da pasta de dados estava fixo no código e não existia lá; a senha do banco vinha de uma variável de ambiente que ninguém tinha definido, e o `KeyError` saiu misturado no meio do relatório; o `cron` que chamava o script achou que tudo tinha dado certo, porque o processo terminou com código `0` mesmo depois da falha; e quem tentou depurar redirecionando a saída para um arquivo descobriu que as mensagens de progresso estavam gravadas junto com os dados, inutilizando o CSV.
+
+Nenhum desses quatro defeitos é sobre a lógica do programa. Todos são sobre a **borda** entre o processo e o sistema operacional: como argumentos entram, como configuração entra, para onde vai o diagnóstico e o que o programa responde a quem o chamou. `sys` e `os` são os dois módulos que descrevem essa borda — `sys` olha para dentro, para o interpretador que está rodando; `os` olha para fora, para o sistema que o hospeda.
+
+Este capítulo percorre essa fronteira em ordem: primeiro o que entra, depois o que o interpretador sabe sobre si, depois o que sai — e termina em duas tarefas que caem sobre todo mundo, percorrer o sistema de arquivos e escrever código que roda em mais de uma plataforma.
+
+A saída colada aqui vem de um Kali Linux com Python 3.13; onde o Windows difere, o texto avisa.
+
+## As bordas de um processo
+
+Um processo Python nasce com quatro canais de entrada e três de saída, e todos aparecem em `sys` ou em `os`:
+
+::: {#fig-bordas-processo}
+```{.tikz}
+%%| filename: bordas-processo
+%%| alt: Um processo Python ao centro, com quatro entradas do sistema operacional a esquerda (argumentos, variaveis de ambiente, diretorio de trabalho e entrada padrao) e tres saidas a direita (saida padrao, saida de erro e codigo de saida)
+\begin{tikzpicture}[
+  prc/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.4cm, align=center, minimum height=3.6cm,
+              font=\small\bfseries},
+  ent/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!12, text width=3.9cm, align=center,
+              minimum height=0.86cm, font=\ttfamily\scriptsize},
+  sai/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+              text width=3.9cm, align=center, minimum height=0.86cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-6.6);
+
+  \node[ttl] at (2.3, 2.9) {o que entra};
+  \node[ttl] at (7.5, 2.9) {o processo};
+  \node[ttl] at (12.7, 2.9) {o que sai};
+
+  \node[ent] (e1) at (2.3, 1.9) {sys.argv};
+  \node[ent] (e2) at (2.3, 0.8) {os.environ};
+  \node[ent] (e3) at (2.3,-0.3) {os.getcwd()};
+  \node[ent] (e4) at (2.3,-1.4) {sys.stdin};
+
+  \node[prc] (p) at (7.5, 0.25) {python3 coleta.py};
+
+  \node[sai] (s1) at (12.7, 1.4) {sys.stdout};
+  \node[sai] (s2) at (12.7, 0.3) {sys.stderr};
+  \node[sai] (s3) at (12.7,-0.8) {sys.exit(codigo)};
+
+  \draw[fl] (e1) -- (p.west);
+  \draw[fl] (e2) -- (p.west);
+  \draw[fl] (e3) -- (p.west);
+  \draw[fl] (e4) -- (p.west);
+  \draw[fl] (p.east) -- (s1);
+  \draw[fl] (p.east) -- (s2);
+  \draw[fl] (p.east) -- (s3);
+
+  \node[nt, text width=15.0cm] at (-0.4,-2.6)
+    {Quem chamou o programa --- um terminal, um \texttt{cron}, um contêiner, outro
+     processo Python --- só enxerga a coluna da direita. Dado vai para a saída
+     padrão, diagnóstico vai para a saída de erro, e o código de saída é a única
+     resposta que um script de shell consegue testar. Trocar essas três coisas de
+     lugar é o defeito mais comum em programa de linha de comando: mensagem de
+     progresso impressa no \texttt{stdout} corrompe o arquivo de quem redirecionou
+     a saída, e código de saída sempre zero faz o orquestrador acreditar em
+     sucesso que não houve.};
+\end{tikzpicture}
+```
+As entradas e as saídas que todo processo tem, e onde cada uma aparece na biblioteca padrão.
+:::
+
+Percorrer a figura da esquerda para a direita é o roteiro do capítulo.
+
+## O interpretador se descrevendo
+
+`sys` responde às perguntas sobre quem está executando o código:
+
+```python
+import os
+import sys
+
+print("executavel :", sys.executable)
+print("versao     :", sys.version_info)
+print("plataforma :", sys.platform)
+print("os.name    :", os.name)
+print("pid        :", os.getpid())
+print("ppid       :", os.getppid())
+print("cpus       :", os.cpu_count())
+print("argv       :", sys.argv)
+```
+
+```text
+executavel : /usr/bin/python3
+versao     : sys.version_info(major=3, minor=13, micro=12, releaselevel='final', serial=0)
+plataforma : linux
+os.name    : posix
+pid        : 395
+ppid       : 327
+cpus       : 12
+argv       : ['identidade.py', '--limite', '30', 'arquivo.csv']
+```
+
+Três dessas linhas resolvem problemas reais no dia a dia.
+
+`sys.executable` é o caminho do interpretador **desta** execução. É o valor certo para chamar um subprocesso Python: `subprocess.run([sys.executable, "-m", "pip", ...])` roda no mesmo ambiente virtual, enquanto `subprocess.run(["python", ...])` roda no que estiver no `PATH` — que pode ser outro. Foi a lição do @sec-cap031, agora com o nome próprio.
+
+`sys.version_info` é uma tupla nomeada, e por isso comparações funcionam do jeito esperado: `if sys.version_info >= (3, 12):` é a forma correta de proteger um recurso novo. Comparar a *string* `sys.version` com `>=` dá resultado errado assim que a versão passar do 3.9 para a 3.10, porque a comparação é lexicográfica.
+
+`sys.argv` já vem separado pelo sistema — o elemento zero é o nome do script, e o resto são os argumentos. Ler `sys.argv` na mão é aceitável para um script de três linhas; a partir daí, `argparse` (Volume 12) faz o trabalho melhor.
+
+Sobre `os.cpu_count()`: ele informa quantos processadores lógicos a máquina tem, não quantos o processo pode usar. Dentro de um contêiner com limite de CPU, o número vem alto e enganoso; desde o Python 3.13 existe `os.process_cpu_count()`, que respeita a afinidade e é o valor certo para dimensionar um *pool* de trabalhadores.
+
+### Os limites que o interpretador impõe
+
+```python
+import sys
+
+print("maxsize        :", sys.maxsize)
+print("recursao       :", sys.getrecursionlimit())
+print("int_max_str    :", sys.get_int_max_str_digits())
+print("float epsilon  :", sys.float_info.epsilon)
+print("modulos vivos  :", len(sys.modules))
+print("builtin embutidos:", len(sys.builtin_module_names))
+```
+
+```text
+maxsize        : 9223372036854775807
+recursao       : 1000
+int_max_str    : 4300
+float epsilon  : 2.220446049250313e-16
+modulos vivos  : 45
+builtin embutidos: 62
+```
+
+`sys.maxsize` **não** é o maior inteiro possível — inteiro em Python não tem teto, como mostrou o @sec-cap009. É o maior valor que cabe num índice: o tamanho máximo de uma lista, e o marcador de arquitetura (`2**63 - 1` em 64 bits).
+
+`sys.get_int_max_str_digits()` é a proteção contra negação de serviço introduzida na 3.11: converter um inteiro gigantesco em texto tem custo quadrático, então converter algo acima de 4300 dígitos levanta `ValueError` em vez de travar o processo.
+
+O limite de recursão merece um exemplo, porque a reação instintiva a ele quase sempre é a errada:
+
+```python
+def fundo(n):
+    return 1 if n == 0 else 1 + fundo(n - 1)
+
+print("limite atual:", sys.getrecursionlimit())
+try:
+    fundo(5000)
+except RecursionError as e:
+    print("RecursionError:", e)
+```
+
+```text
+limite atual: 1000
+RecursionError: maximum recursion depth exceeded
+```
+
+Existe `sys.setrecursionlimit()`, e a tentação é subir o número até o erro sumir. O limite não é arbitrário: ele existe para o `RecursionError` acontecer **antes** de a pilha real do sistema operacional estourar, o que não produz exceção nenhuma — produz um *segfault* e um processo morto sem mensagem. Subir o limite sem aumentar a pilha da *thread* troca um erro tratável por uma queda seca. A saída certa quase sempre é converter a recursão em laço, ou usar uma pilha explícita.
+
+## Configuração que vem de fora: `os.environ`
+
+Variáveis de ambiente são o canal padrão para configurar um programa sem recompilá-lo nem editar seu código — é o que o *Twelve-Factor App* recomenda e o que todo orquestrador de contêiner assume:
+
+```python
+import os
+
+print("HOME  :", os.environ["HOME"])
+print("SHELL :", os.environ.get("SHELL"))
+print("PORTA :", os.environ.get("APP_PORTA", "8000"))
+print("total de variaveis:", len(os.environ))
+
+try:
+    os.environ["APP_SEGREDO"]
+except KeyError as e:
+    print("KeyError:", e)
+
+os.environ["APP_MODO"] = "producao"
+print("visivel para o filho:", os.environ["APP_MODO"])
+```
+
+```text
+HOME  : /home/vitor
+SHELL : /bin/bash
+PORTA : 8000
+total de variaveis: 22
+KeyError: 'APP_SEGREDO'
+visivel para o filho: producao
+```
+
+`os.environ` é um mapeamento como qualquer outro, com uma diferença importante: escrever nele chama `putenv()` por baixo, e a alteração **não** volta para o processo pai — ela só vale para este processo e para os filhos que ele criar depois. Isso é fácil de confirmar:
+
+```python
+import os
+import subprocess
+import sys
+
+os.environ["APP_MODO"] = "producao"
+subprocess.run([sys.executable, "-c",
+                "import os; print('  filho ve:', os.environ.get('APP_MODO'))"])
+
+limpo = {"PATH": os.environ["PATH"]}
+subprocess.run([sys.executable, "-c",
+                "import os; print('  filho limpo ve:', os.environ.get('APP_MODO'))"],
+               env=limpo)
+```
+
+```text
+  filho ve: producao
+  filho limpo ve: None
+```
+
+O filho herda o ambiente inteiro por padrão; passar `env=` explicitamente substitui o conjunto todo, e é assim que se evita vazar segredo para um subprocesso que não precisa dele.
+
+Três escolhas fazem diferença aqui:
+
+**`os.environ["X"]` quando é obrigatório, `os.environ.get("X", padrao)` quando há padrão.** A versão com colchetes falhando com `KeyError` na inicialização é *melhor* do que um `get` que devolve `None` e explode trezentas linhas adiante com `TypeError`. Configuração ausente deve matar o programa cedo e com o nome da variável na mensagem.
+
+**Tudo que vem do ambiente é `str`.** `os.environ.get("APP_PORTA", "8000")` devolve texto, não número; a conversão é sua, e é onde entra a validação. `int(os.environ["APP_PORTA"])` levantando `ValueError` na partida é o comportamento desejado.
+
+**Ambiente não é cofre.** Em Linux, `/proc/<pid>/environ` expõe o ambiente do processo, e qualquer biblioteca que despeje o estado num relatório de erro pode vazar a variável inteira. Para senha e chave de API, o ambiente é melhor do que o código-fonte versionado, e pior do que um gerenciador de segredos — o assunto volta no @sec-cap066.
+
+## Os dois canais de saída, e por que a distinção importa
+
+```python
+import sys
+
+print("isto vai para o stdout")
+print("isto vai para o stderr", file=sys.stderr)
+print("stdout e um tty?", sys.stdout.isatty())
+print("encoding do stdout:", sys.stdout.encoding)
+```
+
+No terminal, os dois canais aparecem juntos e a distinção parece decorativa. Ela só aparece quando alguém redireciona. Com `2>/dev/null`, sobra o `stdout`:
+
+```text
+isto vai para o stdout
+stdout e um tty? False
+encoding do stdout: utf-8
+```
+
+Com `2>&1 >/dev/null`, sobra só o diagnóstico:
+
+```text
+isto vai para o stderr
+```
+
+Essa é a razão de existirem dois canais: **o `stdout` carrega o resultado, o `stderr` carrega a narrativa sobre o resultado.** Um programa que imprime "processando arquivo 3 de 40..." no `stdout` funciona perfeitamente no terminal e corrompe o arquivo de quem escreveu `meu_script > dados.csv`. Progresso, aviso e erro vão para `sys.stderr`; só o dado que interessa vai para o `stdout`.
+
+O `isatty()` é o que permite um programa se comportar bem nos dois casos: cor e barra de progresso quando há terminal, saída limpa quando há redirecionamento. É exatamente o que o `git`, o `ls` e o `pytest` fazem.
+
+Note o `encoding: utf-8`. No Linux é o padrão desde sempre; no Windows, o `stdout` do console historicamente usa a página de código do sistema, e é de onde vem o `UnicodeEncodeError` ao imprimir emoji ou acento em ambiente antigo. A partir do Python 3.15 o UTF-8 passa a ser o padrão em todas as plataformas (PEP 686); até lá, `PYTHONUTF8=1` ou `python -X utf8` resolvem, e `sys.stdout.reconfigure(encoding="utf-8")` resolve de dentro do programa.
+
+A entrada padrão fecha o conjunto e é o que transforma um script em peça de tubo do shell:
+
+```python
+import sys
+
+linhas = [ln.rstrip("\n") for ln in sys.stdin]
+print(f"recebi {len(linhas)} linhas pela entrada padrao")
+for ln in linhas[:3]:
+    print("  ", ln)
+```
+
+```text
+recebi 4 linhas pela entrada padrao
+   onu-00043,-29.8
+   onu-00045,-31.7
+   onu-00051,-21.4
+```
+
+`sys.stdin` é um arquivo de texto iterável: o `for` sobre ele entrega uma linha por vez, sem carregar tudo na memória, exatamente como o @sec-cap050 mostrou. Um filtro que lê do `stdin` e escreve no `stdout` se encaixa em qualquer *pipeline* de shell sem precisar saber de onde os dados vêm.
+
+## O código de saída é a resposta ao chamador
+
+```python
+import sys
+
+destino = sys.argv[1] if len(sys.argv) > 1 else "ok"
+
+if destino == "ok":
+    print("tudo certo")
+    sys.exit(0)
+if destino == "uso":
+    print("uso: codigo_saida.py [ok|uso|falha]", file=sys.stderr)
+    sys.exit(2)
+if destino == "falha":
+    sys.exit("nao consegui abrir a origem")
+```
+
+Rodando os três casos e imprimindo o código de saída de cada um:
+
+```text
+tudo certo
+  -> $? = 0
+uso: codigo_saida.py [ok|uso|falha]
+  -> $? = 2
+nao consegui abrir a origem
+  -> $? = 1
+```
+
+Três comportamentos em uma função só. `sys.exit(0)` é sucesso. `sys.exit(2)` é um código escolhido por você — a convenção do Unix reserva `2` para erro de uso e deixa de `1` a `125` livres para o significado que o programa quiser documentar. E `sys.exit("mensagem")` com uma *string* faz duas coisas de uma vez: imprime o texto no `stderr` e termina com código `1`. É a forma mais curta de encerrar um script com diagnóstico honesto.
+
+O detalhe que quase ninguém sabe é que `sys.exit` **não** encerra o processo: ele levanta `SystemExit`.
+
+```python
+def com_sys_exit():
+    try:
+        sys.exit(3)
+    finally:
+        print("  finally rodou (sys.exit)")
+
+try:
+    com_sys_exit()
+except SystemExit as e:
+    print("  SystemExit capturado, codigo:", e.code)
+```
+
+```text
+  finally rodou (sys.exit)
+  SystemExit capturado, codigo: 3
+sys.exit e uma excecao; os._exit nao roda finally nenhum
+```
+
+Ser uma exceção é ótimo: os blocos `finally` rodam, os gerenciadores de contexto fecham arquivos e conexões, os `atexit` disparam. É por isso que `sys.exit` é a maneira correta de sair. E é também a explicação para um bug clássico: um `except Exception:` genérico **não** captura `SystemExit`, porque ela herda de `BaseException` — foi por isso que a hierarquia do @sec-cap038 foi desenhada assim.
+
+O contraste está em `os._exit(n)`, que encerra o processo imediatamente, sem desenrolar a pilha, sem `finally`, sem descarregar os *buffers* de saída. Isso significa perder texto já "impresso" mas ainda em *buffer*. Só existe um uso legítimo: no processo filho depois de um `os.fork()`, quando executar a limpeza do pai seria errado. Em qualquer outro lugar, é `sys.exit`.
+
+Quando o programa termina por uma exceção não tratada, o Python imprime o traceback e sai com `1`. Dá para trocar essa impressão por outra com `sys.excepthook`:
+
+```python
+import sys
+
+def meu_gancho(tipo, valor, tb):
+    print(f"[gancho] {tipo.__name__}: {valor}", file=sys.stderr)
+
+sys.excepthook = meu_gancho
+raise ValueError("porta invalida: 'oitenta'")
+```
+
+```text
+[gancho] ValueError: porta invalida: 'oitenta'
+  -> $? = 1
+```
+
+O traceback sumiu, a mensagem saiu no `stderr` e o código de saída continuou `1`. É assim que um relatório de erros (Sentry e afins) se instala. Cuidado com o outro lado: esconder o traceback numa ferramenta de desenvolvimento é apagar a informação de que quem depura mais precisa — o `--debug` que restaura o gancho padrão é obrigatório.
+
+## Percorrendo o sistema de arquivos
+
+O @sec-cap037 estabeleceu `pathlib` como o padrão para manipular caminhos. Para **percorrer** árvores grandes, `os.walk` continua sendo a ferramenta com um recurso que `pathlib` não tem:
+
+```python
+import os
+
+IGNORAR = {".git", "__pycache__"}
+
+for raiz, dirs, arquivos in os.walk("projeto"):
+    print(f"  {raiz:34} dirs={sorted(dirs)} arquivos={sorted(arquivos)}")
+```
+
+```text
+os.walk cru:
+  projeto                            dirs=['.git', '__pycache__', 'src', 'testes'] arquivos=['README.md']
+  projeto/testes                     dirs=[] arquivos=['test_app.py']
+  projeto/__pycache__                dirs=[] arquivos=['app.cpython-313.pyc']
+  projeto/src                        dirs=[] arquivos=['app.py', 'util.py']
+  projeto/.git                       dirs=['objects'] arquivos=[]
+  projeto/.git/objects               dirs=[] arquivos=['abc123']
+```
+
+Cada iteração entrega uma tripla: o diretório atual, a lista de subdiretórios e a lista de arquivos. A ordem em que os diretórios aparecem é a do sistema de arquivos, não alfabética — se a ordem importa, ordene explicitamente.
+
+O recurso decisivo é que a lista `dirs` é **modificável**, e `os.walk` relê essa lista para decidir onde descer:
+
+```python
+for raiz, dirs, arquivos in os.walk("projeto"):
+    dirs[:] = [d for d in dirs if d not in IGNORAR]
+    for nome in sorted(arquivos):
+        print("  ", os.path.join(raiz, nome))
+```
+
+```text
+os.walk com poda:
+   projeto/README.md
+   projeto/testes/test_app.py
+   projeto/src/app.py
+   projeto/src/util.py
+```
+
+O `.git` e o `__pycache__` sumiram, e mais importante: eles não foram **visitados**. Num repositório real, `.git` pode ter dezenas de milhares de arquivos, e podar é a diferença entre um segundo e um minuto.
+
+A atribuição fatiada `dirs[:] = [...]` é obrigatória e é o erro mais comum aqui. `dirs = [...]` religa o nome local a uma lista nova e deixa a lista original — a que `os.walk` vai consultar — intacta: a poda não acontece e nada avisa.
+
+::: {#fig-poda-walk}
+```{.tikz}
+%%| filename: poda-walk
+%%| alt: A mesma arvore de diretorios percorrida de duas formas, sem poda visitando os diretorios ignorados e com poda cortando os ramos antes de descer neles
+\begin{tikzpicture}[
+  dir/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              minimum height=0.62cm, inner xsep=5pt, font=\ttfamily\scriptsize},
+  crt/.style={draw=manualred, very thick, rounded corners, fill=manualred!8,
+              minimum height=0.62cm, inner xsep=5pt, font=\ttfamily\scriptsize,
+              text=manualred},
+  vst/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, minimum height=0.62cm, inner xsep=5pt,
+              font=\ttfamily\scriptsize},
+  seg/.style={manualgray, thick},
+  cut/.style={manualred, very thick, dashed},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-7.8);
+
+  \node[ttl] at (-0.4, 2.9) {sem poda --- desce em tudo};
+  \node[dir] (a0) at (1.1, 1.9) {projeto};
+  \node[crt] (a1) at (3.9, 1.9) {.git};
+  \node[crt] (a2) at (3.9, 1.0) {\_\_pycache\_\_};
+  \node[dir] (a3) at (3.9, 0.1) {src};
+  \node[dir] (a4) at (3.9,-0.8) {testes};
+  \draw[seg] (a0.east) -- (a1.west);
+  \draw[seg] (a0.east) -- (a2.west);
+  \draw[seg] (a0.east) -- (a3.west);
+  \draw[seg] (a0.east) -- (a4.west);
+  \node[lb, text=manualred] at (5.9, 1.9) {milhares de objetos lidos};
+  \node[lb, text=manualred] at (5.9, 1.0) {bytecode lido à toa};
+
+  \node[ttl] at (-0.4,-2.0) {com \texttt{dirs[:] = [...]} --- corta antes de descer};
+  \node[dir] (b0) at (1.1,-3.0) {projeto};
+  \node[crt] (b1) at (3.9,-3.0) {.git};
+  \node[crt] (b2) at (3.9,-3.9) {\_\_pycache\_\_};
+  \node[vst] (b3) at (3.9,-4.8) {src};
+  \node[vst] (b4) at (3.9,-5.7) {testes};
+  \draw[cut] (b0.east) -- (b1.west);
+  \draw[cut] (b0.east) -- (b2.west);
+  \draw[seg] (b0.east) -- (b3.west);
+  \draw[seg] (b0.east) -- (b4.west);
+  \node[lb, text=manualgreen!55!black] at (5.9,-3.45) {nem visitados};
+
+  \node[nt, text width=15.0cm] at (-0.4,-6.4)
+    {A poda tem de ser feita com atribuição fatiada. \texttt{dirs = [...]} religa
+     o nome local a uma lista nova e deixa intacta a lista que o \texttt{os.walk}
+     vai consultar --- a poda simplesmente não acontece, e nenhum erro aparece.};
+\end{tikzpicture}
+```
+A poda de `os.walk` acontece antes da descida, e só com atribuição fatiada.
+:::
+
+`Path.rglob` é mais legível quando não há o que podar:
+
+```python
+for p in sorted(Path("projeto").rglob("*.py")):
+    print("  ", p)
+```
+
+```text
+   projeto/src/app.py
+   projeto/src/util.py
+   projeto/testes/test_app.py
+```
+
+Repare que o `.pyc` do `__pycache__` não apareceu — mas só porque o padrão era `*.py`; o diretório **foi** percorrido. A regra prática: `Path.rglob` para filtrar por nome em árvores modestas, `os.walk` com poda quando há ramos inteiros a evitar.
+
+### `scandir`: o dado que vem junto
+
+`os.listdir` devolve só nomes. Descobrir se cada nome é arquivo ou diretório exige uma chamada `stat` por item — e `stat` é chamada de sistema, a operação cara. `os.scandir` devolve objetos que já trazem o tipo, obtido de graça durante a leitura do diretório. Com 20 mil arquivos:
+
+```python
+n = sum(1 for nome in os.listdir(alvo)
+        if os.path.isfile(os.path.join(alvo, nome)))
+
+with os.scandir(alvo) as it:
+    n2 = sum(1 for e in it if e.is_file())
+```
+
+```text
+listdir + isfile :  0.078 s  (20000 arquivos)
+scandir          :  0.011 s  (20000 arquivos)
+ganho            : 7.3x
+```
+
+Sete vezes, no mesmo diretório e com o mesmo resultado. É esse ganho que `os.walk` já usa por baixo desde a 3.5, e é o motivo de `os.scandir` ser a escolha certa para varredura sensível a desempenho. Use-o como gerenciador de contexto: ele mantém um descritor do diretório aberto.
+
+## `os.path` e `pathlib`: o antigo e o atual
+
+As duas APIs fazem a mesma coisa:
+
+```python
+import os.path
+from pathlib import Path
+
+bruto = "/var/log/app/2026-08-12.log"
+
+print("dirname  :", os.path.dirname(bruto))
+print("basename :", os.path.basename(bruto))
+print("splitext :", os.path.splitext(os.path.basename(bruto)))
+
+p = Path(bruto)
+print("parent   :", p.parent)
+print("name     :", p.name)
+print("stem/sufx:", p.stem, p.suffix)
+```
+
+```text
+--- os.path ---
+dirname  : /var/log/app
+basename : 2026-08-12.log
+splitext : ('2026-08-12', '.log')
+join     : /var/log/app/antigo/a.log
+existe   : False
+--- pathlib ---
+parent   : /var/log/app
+name     : 2026-08-12.log
+stem/sufx: 2026-08-12 .log
+join     : /var/log/app/antigo/a.log
+existe   : False
+```
+
+Mesmos resultados, e `pathlib` com metade do ruído: `p.parent / "antigo" / "a.log"` contra `os.path.join(os.path.dirname(bruto), "antigo", "a.log")`. Em código novo, `pathlib`. `os.path` continua no manual por dois motivos: é o que existe em código legado que você vai ler, e ele opera sobre `str` — o que ocasionalmente é o que se quer numa função que recebe caminhos como texto e não deve construir objetos.
+
+## Escrever para mais de uma plataforma
+
+```python
+import os
+import platform
+import shutil
+import sys
+
+print("sys.platform     :", sys.platform)
+print("platform.system  :", platform.system())
+print("os.sep           :", repr(os.sep))
+print("os.linesep       :", repr(os.linesep))
+print("os.pathsep       :", repr(os.pathsep))
+print("git no PATH      :", shutil.which("git"))
+print("inexistente      :", shutil.which("nao-existe-mesmo"))
+```
+
+```text
+sys.platform     : linux
+platform.system  : Linux
+platform.release : 6.6.114.1-microsoft-standard-WSL2
+platform.machine : x86_64
+python_version   : 3.13.12
+os.sep           : '/'
+os.linesep       : '\n'
+os.pathsep       : ':'
+git no PATH      : /usr/bin/git
+inexistente      : None
+```
+
+No Windows, as mesmas três últimas constantes valem `'\\'`, `'\r\n'` e `';'`, e `sys.platform` vale `'win32'` (mesmo em 64 bits — o nome ficou).
+
+Duas armadilhas moram aqui. A primeira: **`os.linesep` quase nunca é o que você quer.** Arquivo de texto aberto no modo padrão já traduz quebras de linha automaticamente, então escrever `os.linesep` num arquivo de texto no Windows produz `\r\r\n`. Use `"\n"` e deixe o Python cuidar do resto; `os.linesep` só serve para arquivo binário e para protocolo de rede.
+
+A segunda: **teste por capacidade, não por plataforma.** `shutil.which("git")` responde à pergunta que interessa — "esta ferramenta existe aqui?" — e funciona nas três plataformas, enquanto `if sys.platform == "linux"` erra no macOS, no BSD e no WSL. Quando o desvio for mesmo por sistema operacional, `sys.platform` (comparado com `startswith("linux")`) é mais confiável do que `os.name`, que só distingue `posix` de `nt`.
+
+## 🐍 Jeito Pythônico
+
+**`pathlib` para caminhos, `os` para o que sobra.** Em código novo, `os.path` só aparece quando a função precisa mesmo trabalhar com `str`. `os` continua indispensável para ambiente, identidade do processo e varredura com poda.
+
+**`sys.executable`, nunca `"python"`.** Chamar o interpretador atual é a única forma de garantir o mesmo ambiente virtual.
+
+```python
+# antipadrão: pode achar outro Python, ou nenhum
+subprocess.run(["python", "-m", "pip", "install", "requests"])
+```
+
+```python
+# pythônico
+subprocess.run([sys.executable, "-m", "pip", "install", "requests"])
+```
+
+**Dado no `stdout`, narrativa no `stderr`.** Progresso, aviso e erro nunca vão para a saída padrão. Para diagnóstico de programa que roda de verdade, `print` no `stderr` é o mínimo e `logging` é o certo — assunto do @sec-cap060.
+
+**Configuração obrigatória com colchetes, opcional com `get` e padrão.** Falhar na partida com o nome da variável na mensagem é melhor do que propagar `None`.
+
+**`sys.exit` sempre, `os._exit` nunca** — exceto em filho de `fork`. E código de saída significativo: `0` para sucesso, `2` para erro de uso, um valor documentado para cada falha que um chamador precise distinguir.
+
+**Pode a árvore com `dirs[:] = [...]`.** A atribuição sem fatia é silenciosamente ineficaz.
+
+**`os.scandir` quando o diretório é grande**, como gerenciador de contexto.
+
+**Teste por capacidade, não por plataforma:** `shutil.which(...)` em vez de `sys.platform == ...`.
+
+**`sys.path.append` para consertar `import` é remendo.** O problema é de empacotamento, e a solução foi o @sec-cap032: instalar o pacote em modo editável.
+
+Sobre versões:
+
+- **Python 3.5** — `os.scandir` (PEP 471), e `os.walk` reescrito sobre ele.
+- **Python 3.6** — `os.PathLike`: funções de `os` passam a aceitar objetos `Path` diretamente.
+- **Python 3.10** — `sys.orig_argv`, com a linha de comando original do interpretador.
+- **Python 3.11** — `sys.get_int_max_str_digits()` e o limite de conversão de inteiros gigantes.
+- **Python 3.12** — `Path.walk()`, a versão de `os.walk` em `pathlib`, com a mesma poda por atribuição fatiada.
+- **Python 3.13** — `os.process_cpu_count()`, que respeita afinidade e limite de contêiner.
+- **Python 3.15** — UTF-8 como padrão em todas as plataformas (PEP 686); até lá, `PYTHONUTF8=1`.
+
+## 🧪 Laboratório
+
+Objetivo: construir um filtro de linha de comando que se comporta bem — lê do `stdin` ou de arquivo, configura-se pelo ambiente, separa dado de diagnóstico e devolve código de saída honesto.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab55 && cd ~/lab55
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. Identidade.** Escreva `identidade.py` com os `print` da primeira seção. Rode com argumentos e confirme que `sys.argv[0]` é o nome do script. Compare `sys.executable` dentro e fora do `venv` — os caminhos têm de diferir.
+
+**3. Ambiente.** Em `ambiente.py`, leia `APP_PORTA` com padrão e `APP_SEGREDO` sem padrão. Rode três vezes:
+
+```bash
+python3 ambiente.py
+APP_PORTA=9000 python3 ambiente.py
+APP_SEGREDO=x APP_PORTA=abc python3 ambiente.py
+```
+
+Confirme o `KeyError` no primeiro caso e faça o terceiro falhar com `ValueError` ao converter `abc`. Decida — e escreva no comentário — qual das duas falhas é aceitável em produção.
+
+**4. Herança de ambiente.** Reproduza o exemplo com `subprocess.run` e confirme que o filho vê `APP_MODO` e que o filho com `env=` limpo vê `None`:
+
+```text
+  filho ve: producao
+  filho limpo ve: None
+```
+
+**5. Os dois canais.** Em `canais.py`, imprima nos dois. Rode as três variações e confirme a separação:
+
+```bash
+python3 canais.py 2>/dev/null
+python3 canais.py 2>&1 >/dev/null
+python3 canais.py > saida.txt
+```
+
+Confirme que `saida.txt` contém apenas o dado e que `isatty()` responde `False` quando há redirecionamento.
+
+**6. Códigos de saída.** Escreva `codigo_saida.py` com os três destinos e teste cada um com `echo $?`:
+
+```text
+tudo certo
+  -> $? = 0
+```
+
+Depois amarre num script de shell com `if ! python3 codigo_saida.py falha; then echo "o chamador percebeu"; fi` e confirme que o desvio acontece.
+
+**7. `sys.exit` é exceção.** Reproduza o exemplo do `finally` e confirme as duas linhas:
+
+```text
+  finally rodou (sys.exit)
+  SystemExit capturado, codigo: 3
+```
+
+Depois troque por `os._exit(3)` e confirme que o `finally` **não** roda. Acrescente um `print` sem `flush` antes do `os._exit` e veja o texto desaparecer.
+
+**8. Poda.** Monte a árvore `projeto/` com `.git` e `__pycache__`, e escreva a varredura com poda. Depois troque `dirs[:] = [...]` por `dirs = [...]` e confirme que os diretórios ignorados voltam — sem erro nenhum. Este é o ponto do laboratório que mais vale repetir.
+
+**9. Medida do `scandir`.** Crie 20 mil arquivos vazios e compare `os.listdir` + `os.path.isfile` com `os.scandir`:
+
+```text
+listdir + isfile :  0.078 s  (20000 arquivos)
+scandir          :  0.011 s  (20000 arquivos)
+```
+
+Os números variam por máquina e sistema de arquivos; a razão entre eles é o que importa.
+
+**10. O filtro completo.** Junte tudo em `filtro.py`: lê linhas `nome,valor` do `stdin` (ou do arquivo em `sys.argv[1]`), descarta as que tiverem valor acima do limite lido de `APP_LIMITE` (padrão `-28.0`), escreve as aprovadas no `stdout`, escreve o total processado no `stderr` e termina com `0` se processou alguma coisa e `1` se a entrada estava vazia. Teste:
+
+```bash
+printf 'a,-29.8\nb,-21.4\nc,-30.1\n' | python3 filtro.py > aprovadas.csv
+echo "codigo: $?"
+cat aprovadas.csv
+printf '' | python3 filtro.py > vazio.csv; echo "codigo: $?"
+```
+
+O `aprovadas.csv` tem de conter só as linhas, sem o total — e o segundo comando tem de sair com `1`.
+
+## Resumo
+
+- `sys` descreve o interpretador que está rodando; `os` descreve o sistema que o hospeda. Juntos, cobrem toda a borda entre o processo e o mundo.
+- `sys.executable` é o caminho do interpretador atual e a única forma segura de chamar outro processo Python no mesmo ambiente virtual.
+- `sys.version_info` é tupla e se compara com tupla; comparar a *string* da versão dá resultado errado a partir do 3.10.
+- `os.environ` é o canal padrão de configuração: colchetes para o que é obrigatório, `get` com padrão para o resto, e conversão explícita, porque tudo que vem de lá é `str`.
+- Escrever em `os.environ` afeta este processo e os filhos criados depois — nunca o processo pai.
+- `stdout` carrega o resultado, `stderr` carrega o diagnóstico. Confundir os dois corrompe o arquivo de quem redireciona a saída, e `isatty()` é o que permite adaptar-se aos dois casos.
+- `sys.exit` levanta `SystemExit`, então `finally`, gerenciadores de contexto e `atexit` rodam; `os._exit` não roda nada e ainda perde o que estiver em *buffer*.
+- `SystemExit` herda de `BaseException` justamente para não ser capturada por um `except Exception:` distraído.
+- Código de saída é a única resposta que um orquestrador consegue testar: `0` para sucesso, `2` para erro de uso por convenção, valores documentados para as demais falhas.
+- `os.walk` permite podar ramos inteiros antes de descer neles, mas só com a atribuição fatiada `dirs[:] = [...]`.
+- `os.scandir` traz o tipo de cada entrada junto com o nome e evita uma chamada `stat` por item — sete vezes mais rápido em 20 mil arquivos.
+- Portabilidade se resolve testando capacidade (`shutil.which`) e não plataforma; `os.linesep` quase nunca é o que se quer em arquivo de texto.
+
+Este capítulo tratou do espaço em que o programa roda. O @sec-cap056 trata do outro eixo, e do mais traiçoeiro: o tempo — fuso horário, horário de verão, aritmética de datas e a diferença entre o instante que o relógio marca e o instante que de fato passou.

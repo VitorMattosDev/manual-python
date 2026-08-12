@@ -94,7 +94,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ### Volume 9 — A Biblioteca Padrão Essencial
 
-- [ ] **cap 055** - os, sys e a interação com o sistema - `vol09/cap055-os-sys-e-a-interacao-com-o-sistema.qmd`
+- [x] **cap 055** - os, sys e a interação com o sistema - `vol09/cap055-os-sys-e-a-interacao-com-o-sistema.qmd`
 - [ ] **cap 056** - datetime, zoneinfo e o tratamento de tempo - `vol09/cap056-datetime-zoneinfo-e-o-tratamento-de-tempo.qmd`
 - [ ] **cap 057** - collections: deque, Counter, defaultdict e namedtuple - `vol09/cap057-collections-deque-counter-defaultdict-e.qmd`
 - [ ] **cap 058** - itertools e functools: a caixa de ferramentas funcional - `vol09/cap058-itertools-e-functools-a-caixa-de-ferramentas.qmd`
