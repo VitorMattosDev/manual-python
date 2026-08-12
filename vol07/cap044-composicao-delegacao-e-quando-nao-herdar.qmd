@@ -1,3 +1,491 @@
 # Composição, delegação e quando não herdar {#sec-cap044}
 
-*(em elaboracao)*
+O cache do coletor precisava contar gravações, e a solução parecia óbvia: um dicionário sabe guardar coisas, então herde de `dict` e acrescente o gancho.
+
+```python
+class CacheRuim(dict):
+    def __setitem__(self, chave, valor):
+        print(f"    [gravando {chave!r}]")
+        super().__setitem__(chave, valor)
+```
+
+```text
+    [gravando 'onu-00042']
+update:
+setdefault:
+conteudo: {'onu-00042': -21.4, 'onu-00043': -29.8, 'onu-00044': -18.2}
+```
+
+A atribuição direta passou pelo gancho. `update` e `setdefault` gravaram os dois valores **sem passar por lugar nenhum**. O contador nasceu errado e nada avisou: o dicionário está correto, as três chaves lá, e a contagem diz um.
+
+O motivo é que os métodos de `dict` são escritos em C e chamam a implementação interna diretamente, não `self.__setitem__`. Herdar de um embutido dá acesso a um monte de comportamento pronto e a **nenhuma** garantia de que sobrescrever uma peça afeta as outras.
+
+Esse é o exemplo mais didático de uma regra geral: herança acopla você à implementação da base, não só à interface dela. Este capítulo é sobre a alternativa — que é, na maioria dos casos de código de aplicação, a resposta certa.
+
+## A saída fácil: `UserDict`
+
+Se o objetivo é mesmo um dicionário com um comportamento a mais, a biblioteca padrão tem a versão feita para herdar:
+
+```python
+from collections import UserDict
+
+
+class CacheBom(UserDict):
+    def __setitem__(self, chave, valor):
+        print(f"    [gravando {chave!r}]")
+        super().__setitem__(chave, valor)
+```
+
+```text
+    [gravando 'onu-00042']
+update:
+    [gravando 'onu-00043']
+setdefault:
+    [gravando 'onu-00044']
+conteudo: {'onu-00042': -21.4, 'onu-00043': -29.8, 'onu-00044': -18.2}
+```
+
+Os três passaram pelo gancho. `UserDict` é escrito em Python e guarda os dados num `dict` comum no atributo `data`; todos os seus métodos passam por `self.__setitem__`, então sobrescrever uma peça funciona como você espera. Existem `UserList` e `UserString` pelo mesmo motivo.
+
+Vale como atalho quando o objeto **é** mesmo um mapeamento. Mas antes de aceitar isso, vale a pergunta que o capítulo inteiro faz: ele é?
+
+## Composição: ter em vez de ser
+
+```python
+class Cache:
+    def __init__(self, limite):
+        self._limite = limite
+        self._dados = {}
+        self.gravacoes = 0
+
+    def guardar(self, chave, valor):
+        if len(self._dados) >= self._limite:
+            self._dados.pop(next(iter(self._dados)))
+        self._dados[chave] = valor
+        self.gravacoes += 1
+
+    def buscar(self, chave, padrao=None):
+        return self._dados.get(chave, padrao)
+
+    def __len__(self):
+        return len(self._dados)
+```
+
+```text
+Cache(limite=2, itens=2)
+o primeiro saiu: None
+o ultimo ficou : -18.2
+gravacoes      : 3
+nao tem .keys(): False
+```
+
+O dicionário virou um detalhe interno. O contador é confiável porque **existe um único caminho** para gravar. O limite de tamanho é respeitado sempre, o que seria impossível herdando de `dict` — `d.update()` teria furado a política.
+
+E a última linha é a vantagem principal, não uma limitação: `Cache` **não** tem `keys`, nem `popitem`, nem `__or__`. A superfície pública é a que você escreveu. Herdando de `dict`, a classe teria herdado quarenta métodos que ninguém pensou em como devem se comportar com o limite de tamanho — e cada um deles é uma promessa que alguém vai cobrar.
+
+::: {#fig-heranca-vs-composicao}
+```{.tikz}
+%%| filename: heranca-vs-composicao
+%%| alt: Comparacao entre herdar de dict e compor com dict - na heranca toda a interface da base vaza para fora e os metodos internos nao passam pelo gancho, na composicao a superficie publica e so a escrita
+\begin{tikzpicture}[
+  bx/.style={draw=manualgray, very thick, rounded corners, fill=manualgray!7,
+             text width=6.0cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\scriptsize},
+  hd/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             text width=6.0cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\scriptsize},
+  cp/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=6.0cm, align=center, minimum height=0.75cm,
+             font=\ttfamily\scriptsize},
+  inn/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.2cm, align=center, minimum height=0.7cm,
+              font=\ttfamily\scriptsize},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  fl/.style={->,>=stealth, thick, manualgray},
+  fx/.style={->,>=stealth, thick, manualred, dashed},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.8) rectangle (15.0,-6.2);
+
+  \node[ttl] at (3.4, 2.25) {herança};
+  \node[ttl] at (11.2, 2.25) {composição};
+
+  \node[hd] at (3.4, 1.4) {class Cache(dict)};
+  \node[bx, text width=6.0cm] at (3.4, 0.35)
+    {\_\_setitem\_\_ \ update \ setdefault \ pop\\keys \ values \ items \ popitem \ldots};
+  \node[lb, text width=6.2cm] at (3.4,-0.85)
+    {\textbf{tudo} isso é interface pública da sua classe, e você não escreveu
+     nem pensou em nenhum};
+  \draw[fx] (1.4,-0.05) .. controls (0.4,-0.6) and (0.4, 0.9) .. (1.4, 0.7);
+  \node[lb, text width=2.0cm, text=manualred] at (3.4,-1.95)
+    {\texttt{update} não chama seu \texttt{\_\_setitem\_\_}};
+
+  \node[cp] at (11.2, 1.4) {class Cache};
+  \node[cp, text width=6.0cm] at (11.2, 0.35) {guardar \ buscar \ \_\_len\_\_};
+  \draw[fl] (11.2,-0.1) -- (11.2,-0.85);
+  \node[inn] at (11.2,-1.3) {self.\_dados = \{\}};
+  \node[lb, text width=6.2cm] at (11.2,-2.35)
+    {a interface é exatamente o que você escreveu; o \texttt{dict} é peça
+     interna e pode ser trocado por \texttt{OrderedDict}, arquivo ou Redis sem
+     ninguém notar};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.6)
+    {A pergunta que decide: \emph{o objeto \textbf{é} um dicionário, ou
+     \textbf{tem} um?} Se o código de fora deveria poder chamar
+     \texttt{popitem()}, é herança. Se chamar \texttt{popitem()} seria um bug,
+     é composição --- e herdar apenas publicou um bug como funcionalidade.};
+\end{tikzpicture}
+```
+Herdar publica a interface inteira da base; compor publica só o que você escreveu.
+:::
+
+## Delegação
+
+Composição costuma vir com repasse de chamadas. Há duas formas, e a escolha entre elas é uma decisão de projeto:
+
+```python
+class ClienteExplicito:
+    def __init__(self, transporte):
+        self._t = transporte
+
+    def enviar(self, payload):          # delegação à mão
+        return self._t.enviar(payload)
+
+    def fechar(self):
+        return self._t.fechar()
+
+
+class ClienteAutomatico:
+    def __init__(self, transporte):
+        self._t = transporte
+
+    def __getattr__(self, nome):        # delega tudo que não conhece
+        return getattr(self._t, nome)
+```
+
+```text
+[snmp] enviou 3 bytes
+[snmp] fechado
+[tr069] enviou 6 bytes
+[tr069] fechado
+nome herdado por delegacao: tr069
+AttributeError: 'Transporte' object has no attribute 'inexistente'
+```
+
+A versão explícita é verbosa e é quase sempre a certa: cada método repassado é uma decisão consciente, o editor autocompleta, o `mypy` verifica, e trocar a implementação interna não vaza. A automática, com o `__getattr__` do @sec-cap042, escreve-se em três linhas e repassa tudo — inclusive o que você não queria expor, e inclusive métodos futuros que a classe interna ganhar numa atualização.
+
+Repare também na última linha: o `AttributeError` fala de `'Transporte'`, não de `'ClienteAutomatico'`. A mensagem de erro denuncia a implementação interna e confunde quem está depurando. Use `__getattr__` para delegar quando o objeto interno for realmente o mesmo conceito — um *proxy*, um decorador transparente, um mock —, e escreva os métodos à mão no resto dos casos.
+
+## O ganho real: peças trocáveis
+
+Composição não é só evitar problema. Ela habilita coisas que a herança torna difíceis. A primeira é substituir uma dependência em teste:
+
+```python
+class Coletor:
+    def __init__(self, transporte):
+        self.transporte = transporte
+
+    def coletar(self, onus):
+        return [self.transporte.enviar(o.encode()) for o in onus]
+```
+
+```text
+producao: ['real: 9 bytes pela rede']
+teste   : ['fake: guardei 9 bytes', 'fake: guardei 9 bytes']
+gravou  : [b'onu-00042', b'onu-00043']
+```
+
+O mesmo `Coletor`, dois transportes. O teste roda sem tocar a rede e ainda pode inspecionar o que foi enviado. Isso se chama injeção de dependência, e a implementação em Python é literalmente "receba o objeto no `__init__` em vez de criá-lo lá dentro". Se `Coletor` herdasse de `TransporteReal`, trocar exigiria uma subclasse nova — ou um *patch* no módulo, que é o remendo que o @sec-cap071 mostra como evitar.
+
+A segunda é a explosão combinatória. Três características independentes — protocolo, repetição e cache — dão oito combinações:
+
+```text
+heranca: 7 classes
+composicao: Coletor(gpon, retry=Retry(3), cache=Cache())
+            Coletor(xgs, retry=None, cache=None)
+            Coletor(xgs, retry=Retry(5), cache=None)
+3 pecas cobrem as 8 combinacoes, com uma classe so
+```
+
+Por herança, cada combinação é uma classe, e uma quarta característica dobra a conta. Por composição, cada característica é uma peça e as combinações se montam em tempo de execução — inclusive as que ninguém previu.
+
+::: {#fig-explosao-combinatoria}
+```{.tikz}
+%%| filename: explosao-combinatoria
+%%| alt: A explosao combinatoria de classes na heranca comparada com o numero linear de pecas na composicao, para tres caracteristicas independentes
+\begin{tikzpicture}[
+  ttl/.style={font=\small\bfseries, text=manualgray, align=center},
+  sm/.style={draw=manualred, thick, rounded corners=1.5pt, fill=manualred!8,
+             text width=2.55cm, align=center, minimum height=0.5cm,
+             font=\ttfamily\tiny},
+  pc/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!14,
+             text width=2.3cm, align=center, minimum height=0.72cm,
+             font=\ttfamily\scriptsize},
+  hub/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=3.0cm, align=center, minimum height=0.8cm,
+              font=\ttfamily\scriptsize},
+  fl/.style={->,>=stealth, thick, manualgray},
+  lb/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 2.6) rectangle (15.0,-6.4);
+
+  \node[ttl] at (3.4, 2.05) {herança: uma classe por combinação};
+  \node[ttl] at (11.4, 2.05) {composição: uma peça por característica};
+
+  \node[sm] at (1.9, 1.2) {ColetorGpon};
+  \node[sm] at (4.9, 1.2) {ColetorXgs};
+  \node[sm] at (1.9, 0.5) {GponRetry};
+  \node[sm] at (4.9, 0.5) {XgsRetry};
+  \node[sm] at (1.9,-0.2) {GponCache};
+  \node[sm] at (4.9,-0.2) {XgsCache};
+  \node[sm] at (1.9,-0.9) {GponRetryCache};
+  \node[sm] at (4.9,-0.9) {XgsRetryCache};
+
+  \node[lb, text width=6.0cm, text=manualred] at (3.4,-1.75)
+    {\textbf{8} classes para 3 características. A quarta leva a 16.};
+
+  \node[pc] at (9.8, 1.2) {Protocolo};
+  \node[pc] at (12.6, 1.2) {Retry};
+  \node[pc] at (11.2, 0.35) {Cache};
+
+  \draw[fl] (9.8, 0.82) .. controls (9.8,-0.2) .. (10.4,-0.65);
+  \draw[fl] (12.6, 0.82) .. controls (12.6,-0.2) .. (12.0,-0.65);
+  \draw[fl] (11.2,-0.05) -- (11.2,-0.65);
+
+  \node[hub] at (11.2,-1.1) {Coletor(\ldots)};
+
+  \node[lb, text width=6.0cm, text=manualgreen!55!black] at (11.2,-1.95)
+    {\textbf{3} peças e \textbf{1} classe cobrem as 8. A quarta leva a 4.};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.0)
+    {A conta é a diferença entre $2^{n}$ e $n$. E o lado direito cobre também
+     as combinações que ninguém previu, porque elas se montam em tempo de
+     execução --- \texttt{Coletor("xgs", Retry(5))} não precisa existir como
+     classe para existir como objeto. É o mesmo motivo pelo qual trocar uma
+     peça em teste custa um argumento, e não uma subclasse.};
+\end{tikzpicture}
+```
+Três características independentes: oito classes por herança, três peças por composição.
+:::
+
+## Herdar de embutido morde de outro jeito
+
+Além do `update` que não chama o gancho, há um segundo problema:
+
+```python
+class Frota(list):
+    def criticas(self):
+        return [o for o in self if o < -28.0]
+```
+
+```text
+criticas : [-29.8]
+fatia    : [-21.4, -29.8] list
+soma     : list
+AttributeError: 'list' object has no attribute 'criticas'
+```
+
+Fatiar uma `Frota` devolve uma `list`. Somar devolve uma `list`. Os métodos herdados constroem o tipo base, não o seu, então o resultado de qualquer operação perde os métodos que você acrescentou — e o erro só aparece quando alguém encadeia duas chamadas.
+
+A alternativa é implementar os protocolos que interessam sobre um atributo interno:
+
+```python
+class Frota:
+    def __init__(self, onus):
+        self._onus = list(onus)
+
+    def __len__(self):
+        return len(self._onus)
+
+    def __iter__(self):
+        return iter(self._onus)
+
+    def __getitem__(self, chave):
+        resultado = self._onus[chave]
+        if isinstance(chave, slice):
+            return Frota(resultado)     # a fatia continua sendo uma Frota
+        return resultado
+```
+
+```text
+len      : 4
+iteracao : [-21.4, -29.8, -18.2, -31.7]
+indice   : -29.8
+fatia    : Frota([-21.4, -29.8]) Frota
+in       : True
+criticas : Frota([-29.8, -31.7])
+encadeia : Frota([-29.8])
+```
+
+Mais linhas, e todas fazendo o que você decidiu. `f[:3].criticas()` encadeia porque `__getitem__` detecta o `slice` e reconstrói o tipo certo. Os métodos especiais que fazem isso funcionar — `__len__`, `__iter__`, `__getitem__`, `__contains__` — são o assunto do Volume 8; aqui basta ver que dá para ter a conveniência da sintaxe embutida sem herdar de `list`.
+
+## Composição também acopla — se você deixar
+
+```python
+c1 = CarroExposto()
+c1.motor.acelerar(1000)                # dois pontos: cheiro de acoplamento
+```
+
+```text
+exposto : 1000
+fachada : 1000
+```
+
+Quem escreve `c1.motor.acelerar(...)` está acoplado a **duas** classes e à relação entre elas. Trocar o motor por um motor elétrico com outra interface quebra todos esses chamadores. A versão com fachada expõe `c2.acelerar(1000)` e mantém o motor interno; o dia da troca custa uma classe, não uma varredura no projeto.
+
+A regra empírica — a Lei de Demeter, ou "fale só com os amigos imediatos" — é olhar para as cadeias de pontos. `a.b.c()` merece uma segunda olhada; `a.b.c.d()` quase sempre é acoplamento demais. A exceção óbvia é a interface fluente feita para encadear, como o `Path` do @sec-cap037 ou um construtor de consultas.
+
+## Um desenho por composição, inteiro
+
+```python
+class Pipeline:
+    def __init__(self, leitor, etapas, formato):
+        self.leitor = leitor
+        self.etapas = etapas
+        self.formato = formato
+
+    def executar(self):
+        fluxo = self.leitor.ler()
+        for etapa in self.etapas:
+            fluxo = etapa.aplicar(fluxo)
+        return self.formato.render(fluxo)
+```
+
+```text
+  onu-00043 -29.8 dBm porta 1/1/2
+  onu-00045 -31.7 dBm porta 1/1/4
+trocando so o formato:
+  onu-00043,-29.8,1/1/2
+  onu-00045,-31.7,1/1/4
+trocando so o limite:
+  onu-00045,-31.7,1/1/4
+```
+
+Não existe uma classe base `Pipeline` para herdar, não existe `PipelineCsvComFiltro`. Existem peças que respondem a `ler`, `aplicar` e `render`, e um objeto que as encadeia. Trocar o formato de saída é trocar um atributo; acrescentar uma etapa é acrescentar um item na lista; a ordem das etapas é dado, não código.
+
+Repare que nenhuma das peças herda de coisa alguma nem declara qual interface implementa. É *duck typing*: basta ter o método com o nome certo. Isso é flexível e tem um custo — o erro por peça incompatível só aparece na execução. O @sec-cap047 mostra como recuperar a verificação, com `Protocol`, sem perder a flexibilidade.
+
+## 🐍 Jeito Pythônico
+
+**Prefira composição. Herde quando a substituição for verdadeira.** O teste do @sec-cap043 continua valendo: toda função escrita para a base aceita a subclasse sem ressalva?
+
+```python
+# antipadrão: herda para reaproveitar
+class Cache(dict):
+    def guardar(self, k, v): ...
+```
+
+```python
+# pythônico: o dict é peça interna
+class Cache:
+    def __init__(self):
+        self._dados = {}
+```
+
+**Nunca herde de `dict`, `list` ou `str` para estender.** Os métodos em C não chamam seus ganchos, e fatia e soma devolvem o tipo base. Se precisa mesmo, `UserDict`/`UserList`/`UserString`; melhor ainda, componha e implemente os protocolos.
+
+**Receba as dependências no `__init__`.** Objeto criado lá dentro é objeto impossível de trocar em teste.
+
+**Delegue explicitamente.** `__getattr__` só para *proxy* de verdade — ele repassa o que você não queria e produz mensagem de erro com o nome da classe errada.
+
+**Olhe as cadeias de pontos.** `a.b.c()` é sinal de que falta um método em `a`.
+
+**Peça pequena, com um método e um nome bom, vale mais que hierarquia.** Uma classe com um único método `aplicar` não é constrangedora — é um bloco de montar.
+
+Sobre versões:
+
+- **Python 3.3** — `collections.abc` ganha módulo próprio; `UserDict`, `UserList` e `UserString` já estavam em `collections` desde o 3.0.
+- **Python 3.4** — `functools.singledispatch` permite despachar por tipo sem hierarquia (@sec-cap058).
+- **Python 3.7** — `@dataclass` torna barato escrever as pecinhas de composição, que costumam ser só dados (@sec-cap046).
+- **Python 3.8** — `typing.Protocol` (PEP 544) dá tipagem estrutural: verificar a "peça encaixável" sem obrigar herança (@sec-cap047).
+- **Python 3.12** — a PEP 698 traz `@override`, que marca a sobrescrita intencional e faz o verificador reclamar quando ela deixa de existir na base.
+
+## 🧪 Laboratório
+
+Objetivo: reproduzir a falha silenciosa de herdar de `dict`, comparar com `UserDict` e com composição, medir o que cada abordagem expõe, e montar um *pipeline* de peças trocáveis.
+
+**1. O gancho que não dispara.**
+
+```bash
+mkdir -p ~/lab44 && cd ~/lab44
+```
+
+`herdadict.py`: herde de `dict`, sobrescreva `__setitem__` com um `print` e grave por três caminhos. Confirme:
+
+```text
+    [gravando 'onu-00042']
+update:
+setdefault:
+```
+
+Duas gravações não passaram pelo gancho e o dicionário final tem as três chaves.
+
+**2. `UserDict`.** Troque a base por `collections.UserDict` e rode de novo. As três devem imprimir. Explique a diferença olhando o atributo `data`.
+
+**3. Composição.** Escreva `composicao.py` com `Cache` guardando um `dict` interno e um limite de tamanho. Confirme que o limite é respeitado:
+
+```text
+Cache(limite=2, itens=2)
+o primeiro saiu: None
+gravacoes      : 3
+```
+
+Confirme com `hasattr(c, "keys")` que a classe **não** herdou a interface de dicionário — e argumente por que isso é bom.
+
+**4. As duas delegações.** Rode `delegacao.py`. Confirme que as duas funcionam e repare no nome que aparece no `AttributeError`:
+
+```text
+AttributeError: 'Transporte' object has no attribute 'inexistente'
+```
+
+Acrescente um método novo em `Transporte` e veja `ClienteAutomatico` passar a expô-lo sem você ter decidido nada.
+
+**5. Injeção de dependência.** Rode `injecao.py` e confirme que o mesmo `Coletor` roda com transporte real e falso, e que o falso guarda o que recebeu.
+
+**6. A explosão.** Rode `explosao.py` e conte as classes de cada abordagem. Acrescente uma quarta característica mentalmente e refaça a conta dos dois lados.
+
+**7. A fatia que perde o tipo.** Rode `herdalista.py`:
+
+```text
+fatia    : [-21.4, -29.8] list
+AttributeError: 'list' object has no attribute 'criticas'
+```
+
+**8. Os protocolos à mão.** Escreva `protocolo.py` com `Frota` compondo uma lista e implementando `__len__`, `__iter__`, `__getitem__` e `__contains__`. Confirme que a fatia continua sendo `Frota` e que `f[:3].criticas()` encadeia. Depois **remova** o tratamento de `slice` no `__getitem__` e veja o encadeamento quebrar.
+
+**9. A cadeia de pontos.** Rode `acoplamento.py` e reescreva um chamador de `c1.motor.acelerar(1000)` supondo que o motor mudou de interface. Compare com o custo de mudar a fachada.
+
+**10. O *pipeline*.** Escreva `pipeline.py` com leitor, etapas e formato como peças independentes. Reproduza as três execuções:
+
+```text
+  onu-00043 -29.8 dBm porta 1/1/2
+trocando so o formato:
+  onu-00043,-29.8,1/1/2
+trocando so o limite:
+  onu-00045,-31.7,1/1/4
+```
+
+Depois acrescente uma etapa nova (por exemplo, arredondar a potência) sem tocar em nenhuma classe existente — só na lista.
+
+**11. O duck typing quebrando.** Passe para `etapas` um objeto que **não** tem `aplicar` e leia o `AttributeError`. Repare que ele só aparece em tempo de execução, e guarde a pergunta para o @sec-cap047.
+
+## Resumo
+
+- Herdar de `dict` ou `list` acopla à implementação: `update` e `setdefault` não chamam seu `__setitem__`, e fatia e soma devolvem o tipo base.
+- `UserDict`, `UserList` e `UserString` são escritos em Python e roteiam tudo pelos ganchos — o atalho correto quando o objeto **é** mesmo uma coleção.
+- Composição guarda o objeto interno num atributo. A interface pública passa a ser exatamente o que você escreveu, e o dado interno pode ser trocado sem quebrar ninguém.
+- A pergunta que decide é "é um" contra "tem um". Se chamar `popitem()` no seu objeto seria um bug, herdar publicou um bug como funcionalidade.
+- Delegação explícita é verbosa e verificável; `__getattr__` repassa tudo, inclusive o que você não queria e o que a classe interna ganhar depois — e o `AttributeError` sai com o nome errado.
+- Receber a dependência no `__init__` permite trocar por um duplo em teste sem *patch* e sem subclasse.
+- Características independentes por herança viram uma classe por combinação; por composição, viram peças que se montam em tempo de execução.
+- Implementar `__len__`, `__iter__`, `__getitem__` e `__contains__` sobre um atributo interno dá a sintaxe de coleção sem herdar de coleção — e permite que a fatia devolva o seu tipo.
+- Composição mal feita também acopla: `a.b.c()` significa que falta um método em `a`.
+- Peças que só combinam por *duck typing* falham em tempo de execução; `Protocol` recupera a verificação sem exigir herança.
+
+Os dois capítulos anteriores trataram de como as classes se relacionam. O próximo volta para dentro de uma: além dos métodos de instância, existem métodos que pertencem à classe e funções que só moram nela — e a escolha entre os três é o que dá forma à API que os outros vão usar.

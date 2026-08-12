@@ -74,7 +74,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 041** - Classes, instâncias e o self - `vol07/cap041-classes-instancias-e-o-self.qmd`
 - [x] **cap 042** - Atributos, propriedades e encapsulamento - `vol07/cap042-atributos-propriedades-e-encapsulamento.qmd`
 - [x] **cap 043** - Herança, MRO e a função super - `vol07/cap043-heranca-mro-e-a-funcao-super.qmd`
-- [ ] **cap 044** - Composição, delegação e quando não herdar - `vol07/cap044-composicao-delegacao-e-quando-nao-herdar.qmd`
+- [x] **cap 044** - Composição, delegação e quando não herdar - `vol07/cap044-composicao-delegacao-e-quando-nao-herdar.qmd`
 - [ ] **cap 045** - Métodos estáticos, métodos de classe e o desenho da API - `vol07/cap045-metodos-estaticos-metodos-de-classe-e-o.qmd`
 - [ ] **cap 046** - Dataclasses, NamedTuple e enumerações - `vol07/cap046-dataclasses-namedtuple-e-enumeracoes.qmd`
 - [ ] **cap 047** - Classes abstratas, protocolos e duck typing - `vol07/cap047-classes-abstratas-protocolos-e-duck-typing.qmd`
