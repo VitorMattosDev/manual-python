@@ -1,3 +1,436 @@
 # collections: deque, Counter, defaultdict e namedtuple {#sec-cap057}
 
-*(em elaboracao)*
+O coletor lia potências ópticas de uma rede GPON e mantinha uma janela das últimas leituras para calcular média móvel. O código era este:
+
+```python
+janela.insert(0, nova)
+if len(janela) > 3:
+    janela.pop()
+```
+
+Correto, testado, aprovado. Em produção com uma lista de cem mil entradas — porque alguém decidiu guardar o histórico inteiro na mesma estrutura — o coletor passou a consumir mais de um segundo por lote e o *buffer* de entrada começou a estourar.
+
+O defeito não estava na lógica. Estava na escolha da estrutura: `list.insert(0, x)` precisa deslocar **todos** os elementos uma posição para a direita. Com cem mil elementos, cada inserção move cem mil ponteiros.
+
+```text
+list.insert(0, x) x 100,000 :    1.255 s
+deque.appendleft  x 100,000 :    0.005 s
+razao                     :      239x
+```
+
+Duzentas e trinta e nove vezes, trocando `list` por `deque` e `insert(0, x)` por `appendleft(x)`. O @sec-cap028 estabeleceu que a estrutura certa é uma decisão de custo; este capítulo apresenta as cinco estruturas do módulo `collections` que resolvem os casos que `list` e `dict` puros resolvem mal — e mostra que, em três das cinco, o ganho não é de desempenho, mas de linhas de código que deixam de existir.
+
+## `deque`: fila de duas pontas
+
+Uma `list` do CPython é um vetor contíguo de ponteiros. Isso torna o acesso por índice instantâneo e o `append` no fim barato — mas qualquer operação no **começo** é linear, porque tudo precisa se deslocar:
+
+::: {#fig-list-vs-deque}
+```{.tikz}
+%%| filename: list-vs-deque
+%%| alt: Uma lista como vetor contiguo em que inserir no inicio desloca todos os elementos, contra uma deque como blocos encadeados em que inserir no inicio so toca o bloco da ponta
+\begin{tikzpicture}[
+  cel/.style={draw=manualblue, thick, fill=manualblue!11, minimum height=0.7cm,
+              minimum width=0.85cm, font=\ttfamily\scriptsize},
+  nov/.style={draw=manualgreen, very thick, fill=manualgreen!16,
+              minimum height=0.7cm, minimum width=0.85cm,
+              font=\ttfamily\scriptsize},
+  blo/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!8,
+              minimum height=1.0cm, minimum width=2.5cm,
+              font=\ttfamily\scriptsize},
+  mov/.style={->,>=stealth, thick, manualred},
+  fl/.style={<->,>=stealth, thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.8) rectangle (15.0,-8.2);
+
+  \node[ttl] at (-0.4, 3.3) {\texttt{list} --- vetor contíguo};
+  \node[nov] at (1.4, 2.2) {novo};
+  \foreach \idx/\vlr in {0/a, 1/b, 2/c, 3/d, 4/e, 5/f}
+    {\node[cel] at (2.35+\idx*0.9, 2.2) {\vlr};}
+  \foreach \idx in {0,1,2,3,4,5}
+    {\draw[mov] (2.35+\idx*0.9, 1.72) -- ++(0.75,0);}
+  \node[lb, text=manualred] at (8.4, 1.5)
+    {\texttt{insert(0, x)} desloca os $n$ elementos --- $O(n)$};
+  \node[lb] at (8.4, 2.3) {\texttt{append} no fim é barato --- $O(1)$};
+  \node[lb, text=manualred] at (-0.4, 0.7)
+    {medido: 1,255 s para 100 000 inserções no início};
+
+  \node[ttl] at (-0.4,-1.3) {\texttt{deque} --- blocos duplamente encadeados};
+  \node[blo] (b1) at (2.0,-2.5) {\ldots a b c};
+  \node[blo] (b2) at (5.4,-2.5) {d e f \ldots};
+  \node[blo] (b3) at (8.8,-2.5) {\ldots g h i};
+  \draw[fl] (b1) -- (b2);
+  \draw[fl] (b2) -- (b3);
+  \node[nov] at (0.15,-2.5) {novo};
+  \node[lb, text=manualgreen!55!black] at (10.6,-2.5)
+    {\texttt{appendleft} toca\\um bloco só --- $O(1)$};
+  \node[lb, text=manualgreen!55!black] at (-0.4,-3.8)
+    {medido: 0,005 s para as mesmas 100 000 inserções};
+
+  \node[nt, text width=15.0cm] at (-0.4,-4.7)
+    {O preço da \texttt{deque} é o acesso por índice: chegar ao elemento do meio
+     exige percorrer os blocos, e é $O(n)$ --- na \texttt{list}, é imediato. A
+     escolha, portanto, não é ``\texttt{deque} é melhor'', e sim: fila e janela
+     deslizante pedem \texttt{deque}; acesso aleatório e fatiamento pedem
+     \texttt{list}.};
+\end{tikzpicture}
+```
+O custo de mexer no início vem do desenho de cada estrutura.
+:::
+
+O caso oposto, esvaziar pela frente, tem o mesmo perfil:
+
+```text
+list.pop(0)  esvaziando   :    0.587 s
+deque.popleft esvaziando  :    0.004 s
+```
+
+É por isso que **fila (FIFO) nunca se implementa com `list`**. `queue.Queue` e `collections.deque` existem para isso; `list` é pilha (LIFO), onde `append` e `pop` operam no fim e são baratos.
+
+### A janela deslizante em uma linha
+
+O `maxlen` é o recurso que mais economiza código:
+
+```python
+ultimas = deque(maxlen=3)
+for onu, pot in LEITURAS:
+    ultimas.append(pot)
+    print(f"  apos {onu} {pot:>6} -> janela {list(ultimas)}")
+```
+
+```text
+  apos onu-00043  -29.8 -> janela [-29.8]
+  apos onu-00045  -31.7 -> janela [-29.8, -31.7]
+  apos onu-00051  -21.4 -> janela [-29.8, -31.7, -21.4]
+  apos onu-00043  -30.1 -> janela [-31.7, -21.4, -30.1]
+  apos onu-00052  -27.0 -> janela [-21.4, -30.1, -27.0]
+  apos onu-00045  -32.2 -> janela [-30.1, -27.0, -32.2]
+  apos onu-00043  -28.9 -> janela [-27.0, -32.2, -28.9]
+  apos onu-00051  -22.0 -> janela [-32.2, -28.9, -22.0]
+  apos onu-00043  -31.0 -> janela [-28.9, -22.0, -31.0]
+```
+
+Ao encher, cada `append` descarta automaticamente o mais antigo do outro lado. Não há `if len(...) > n: pop()`, não há índice, não há como errar o descarte. As últimas *n* linhas de um arquivo, as últimas *n* medições, o histórico limitado de comandos — todos são `deque(maxlen=n)`.
+
+Os outros métodos próprios:
+
+```text
+deque      : deque(['a', 'b', 'c', 'd', 'e', 'f'])
+rotate(2)  : deque(['e', 'f', 'a', 'b', 'c', 'd'])
+rotate(-2) : deque(['a', 'b', 'c', 'd', 'e', 'f'])
+extendleft : deque([3, 2, 1, 'a', 'b', 'c', 'd', 'e', 'f'])
+```
+
+`rotate(n)` gira o conteúdo — útil em escalonamento circular e em algoritmos de janela. E repare no `extendleft`: os elementos entram **invertidos**, porque cada um é inserido à esquerda por vez. Não é defeito, é consequência; e é a fonte de surpresa mais comum da `deque`.
+
+## `Counter`: contar e comparar multiconjuntos
+
+Contar ocorrências é o exercício que todo mundo escreve à mão pelo menos uma vez. `Counter` é um `dict` especializado que já vem pronto:
+
+```python
+c = Counter(onu for onu, _ in LEITURAS)
+```
+
+```text
+Counter      : Counter({'onu-00043': 4, 'onu-00045': 2, 'onu-00051': 2, 'onu-00052': 1})
+most_common  : [('onu-00043', 4), ('onu-00045', 2)]
+acesso ausente: 0 (sem KeyError)
+total()      : 9
+palavras     : [('a', 2), ('rede', 2), ('caiu', 1)]
+```
+
+Três coisas de graça: contagem a partir de qualquer iterável, ordenação por frequência com `most_common(n)`, e chave ausente valendo `0` em vez de `KeyError` — o que elimina a checagem `if chave in contagem` de todo laço de contagem.
+
+O que quase ninguém usa, e é onde `Counter` fica realmente interessante, é a aritmética de multiconjuntos:
+
+```text
+soma         : Counter({'onu-00045': 7, 'onu-00043': 5, 'onu-00099': 3, 'onu-00051': 2})
+subtracao    : Counter({'onu-00043': 3, 'onu-00051': 2})
+interseccao  : Counter({'onu-00045': 2, 'onu-00043': 1})
+uniao        : Counter({'onu-00045': 5, 'onu-00043': 4, 'onu-00099': 3, 'onu-00051': 2})
+subtract()   : Counter({'onu-00043': 3, 'onu-00051': 2, 'onu-00045': -3, 'onu-00099': -3})
+```
+
+Comparar a contagem de alarmes de hoje com a de ontem é uma subtração. `&` dá o que há em comum (o mínimo de cada), `|` dá o máximo. Note a diferença crucial entre o operador `-` e o método `subtract()`: **o operador descarta contagens zero ou negativas**, o método as mantém. Se a pergunta é "o que aumentou", use o operador; se é "qual a variação de cada item", use `subtract()`, que é o único que mostra os `-3`.
+
+## `defaultdict`: a chave que nasce pronta
+
+Agrupar valores por chave é o segundo exercício que todo mundo escreve à mão:
+
+```python
+# a versão sem defaultdict
+por_onu = {}
+for onu, pot in LEITURAS:
+    if onu not in por_onu:
+        por_onu[onu] = []
+    por_onu[onu].append(pot)
+```
+
+```python
+# com defaultdict
+por_onu = defaultdict(list)
+for onu, pot in LEITURAS:
+    por_onu[onu].append(pot)
+```
+
+```text
+agrupado:
+  onu-00043: [-29.8, -30.1, -28.9, -31.0]
+  onu-00045: [-31.7, -32.2]
+  onu-00051: [-21.4, -22.0]
+  onu-00052: [-27.0]
+contagem: {'onu-00043': 4, 'onu-00045': 2, 'onu-00051': 2, 'onu-00052': 1}
+```
+
+O argumento de `defaultdict` é uma **fábrica**: uma função de zero argumentos chamada quando a chave falta. `list` para agrupar, `int` para contar, `set` para coleções sem repetição, `dict` para aninhar. Um `lambda: {"total": 0, "erros": 0}` funciona para estruturas próprias — mas se a fábrica ficar complicada, é sinal de que uma classe seria mais honesta.
+
+Há um comportamento que morde, e é o preço da conveniência:
+
+```text
+antes de olhar : {}
+depois de olhar: {'fantasma': []} <- a chave nasceu so por ter sido lida
+get nao cria   : None {'fantasma': []}
+```
+
+**Ler uma chave inexistente a cria.** Um simples `if d["talvez"]:` num `defaultdict` polui o dicionário com uma entrada vazia — e o problema aparece muito depois, quando alguém itera a estrutura e encontra chaves que ninguém inseriu. Para consultar sem criar, `d.get(chave)`; para saber se existe, `chave in d`.
+
+Quando a criação é rara ou o padrão é caro de construir, `setdefault` no `dict` comum resolve sem o efeito colateral:
+
+```text
+setdefault: {'onu-00043': [-29.8], 'onu-00045': [-31.7], 'onu-00051': [-21.4]}
+```
+
+`d.setdefault(k, []).append(v)` faz o mesmo em uma linha, mas constrói a lista vazia **em toda iteração**, mesmo quando a chave já existe, e a descarta. Em laço quente, `defaultdict` ganha; em código de configuração, `setdefault` é mais explícito.
+
+## `namedtuple`: tupla com nome de campo
+
+Uma tupla `("onu-00043", -29.8, "14:30")` é compacta e imutável, e ilegível a partir do terceiro campo — ninguém lembra o que é `r[2]`. `namedtuple` resolve sem custo:
+
+```python
+Leitura = namedtuple("Leitura", "onu potencia hora")
+r = Leitura("onu-00043", -29.8, "14:30")
+```
+
+```text
+registro    : Leitura(onu='onu-00043', potencia=-29.8, hora='14:30')
+por nome    : onu-00043 -29.8
+por indice  : onu-00043 -29.8
+desempacota : onu-00043 -29.8 14:30
+_asdict     : {'onu': 'onu-00043', 'potencia': -29.8, 'hora': '14:30'}
+_replace    : Leitura(onu='onu-00043', potencia=-30.5, hora='14:30')
+e tupla?    : True | tamanho: 3
+campos      : ('onu', 'potencia', 'hora')
+```
+
+Ela **é** uma tupla: desempacota, compara, serve de chave de dicionário, funciona em qualquer lugar que espere tupla. E ganha `repr` legível, acesso por nome, `_asdict()` para virar JSON e `_replace()` para produzir uma cópia alterada — que é como se "modifica" um valor imutável.
+
+O ganho de memória contra dicionário é real:
+
+```text
+memoria de 1000 registros:
+  namedtuple:    64,000 bytes
+  dict      :   184,000 bytes
+```
+
+Quase três vezes menos, porque a tupla não carrega uma tabela de *hash* por instância — os nomes moram na classe. Para milhões de registros lidos de um CSV, a diferença é decisiva.
+
+Fica a pergunta do @sec-cap046: quando `namedtuple` e quando `dataclass`? A regra prática:
+
+- **`namedtuple`** quando o valor é conceitualmente uma tupla — coordenada, intervalo, linha de resultado —, precisa ser imutável, leve, e desempacotável.
+- **`dataclass`** quando há comportamento, valor padrão, campo mutável, validação em `__post_init__` ou hierarquia. `frozen=True` dá imutabilidade sem virar tupla, o que evita comparações acidentais com tuplas soltas.
+- **`typing.NamedTuple`** quando quiser as duas coisas: a sintaxe de classe com anotações e a natureza de tupla.
+
+Uma pegadinha herdada da natureza de tupla: `Leitura("a", 1, "x") == ("a", 1, "x")` é `True`. Isso é conveniente e ocasionalmente esconde erro — um `dataclass` recusaria a comparação.
+
+## `ChainMap`: camadas de configuração sem cópia
+
+O problema clássico: valores padrão, sobrescritos por um arquivo de configuração, sobrescritos pela linha de comando. A solução comum é `{**padroes, **arquivo, **cli}`, que funciona e tem dois defeitos — copia tudo e perde a origem de cada valor. `ChainMap` encadeia sem copiar:
+
+```python
+cfg = ChainMap(cli, arquivo, padroes)
+```
+
+```text
+configuracao efetiva:
+  limite   : -30.0
+  janela   : 5
+  verboso  : True
+maps       : [{'verboso': True}, {'limite': -30.0}, {'limite': -28.0, 'janela': 5, 'verboso': False}]
+escrita vai para o primeiro: {'verboso': True, 'janela': 10}
+padroes intactos           : {'limite': -28.0, 'janela': 5, 'verboso': False}
+new_child                  : {'limite': -99.0, 'janela': 10, 'verboso': True}
+```
+
+A busca desce pelas camadas até achar a chave; a **escrita** vai sempre para a primeira. Isso é exatamente o que se quer numa pilha de configuração: ninguém contamina os padrões por acidente, e `cfg.maps` continua mostrando de onde cada valor veio, o que torna um `--debug-config` trivial de escrever.
+
+::: {#fig-chainmap}
+```{.tikz}
+%%| filename: chainmap-camadas
+%%| alt: Tres dicionarios empilhados como camadas de configuracao, com a busca descendo ate encontrar a chave e a escrita indo sempre para a camada de cima
+\begin{tikzpicture}[
+  cam/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!10,
+              text width=5.6cm, align=center, minimum height=1.0cm,
+              font=\ttfamily\scriptsize},
+  bsc/.style={->,>=stealth, very thick, manualblue},
+  esc/.style={->,>=stealth, very thick, manualgreen!65!black},
+  ach/.style={->,>=stealth, very thick, manualgreen!65!black},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 3.4) rectangle (15.0,-7.6);
+
+  \node[ttl] at (-0.4, 2.9) {\texttt{ChainMap(cli, arquivo, padroes)} --- busca por ``limite''};
+
+  \node[cam] (c1) at (4.4, 1.7) {cli: \{verboso: True\}};
+  \node[cam] (c2) at (4.4, 0.2) {arquivo: \{limite: -30.0\}};
+  \node[cam] (c3) at (4.4,-1.3) {padroes: \{limite: -28.0, janela: 5, verboso: False\}};
+
+  \draw[bsc] (0.9, 1.7) -- (c1.west);
+  \node[lb] at (-0.4, 2.0) {procura};
+  \draw[bsc] (c1.south) -- (c2.north);
+  \node[lb, text=manualred] at (5.0, 0.95) {não tem ``limite'' aqui};
+  \node[lb, text=manualgreen!55!black] at (7.6, 0.2) {achou: -30.0 --- para aqui};
+  \node[lb, text=manualgray] at (7.6,-1.3) {nem é consultado};
+
+  \draw[esc] (0.6,-2.6) -- (1.0,-2.6) -- (1.0, 2.35) -- (4.4, 2.35) -- (c1.north);
+  \node[lb, text=manualgreen!55!black] at (-0.4,-2.9) {escrita sempre na primeira camada};
+
+  \node[nt, text width=15.0cm] at (-0.4,-3.9)
+    {Nada é copiado: as três camadas continuam sendo os dicionários originais, e
+     alterar um deles muda a configuração efetiva na hora. Como \texttt{cfg.maps}
+     preserva a pilha, dá para responder ``de onde veio este valor?'' --- coisa
+     que o \texttt{\{**a, **b\}} perde no instante em que executa.};
+\end{tikzpicture}
+```
+A busca desce pelas camadas; a escrita fica na primeira.
+:::
+
+Vale conhecer as duas classes restantes do módulo, mesmo que raramente sejam necessárias. `OrderedDict` foi essencial até o Python 3.7, quando `dict` passou a preservar ordem de inserção por especificação; hoje só se justifica por `move_to_end()` e pela comparação sensível à ordem (`OrderedDict([(1,1),(2,2)]) != OrderedDict([(2,2),(1,1)])`, enquanto os `dict` equivalentes são iguais) — é o que sustenta um cache LRU escrito à mão. E `UserDict`, `UserList` e `UserString` existem para quando você precisa **herdar** de um tipo interno: herdar de `dict` direto não intercepta todos os caminhos internos, e um `__setitem__` sobrescrito não é chamado por `update()` nem pelo construtor.
+
+## 🐍 Jeito Pythônico
+
+**Fila é `deque`, pilha é `list`.** `list.pop(0)` e `list.insert(0, x)` são erro de estrutura, não de estilo.
+
+```python
+# antipadrão: quadrático, e o teste com 10 itens não denuncia
+fila = []
+fila.insert(0, tarefa)
+proxima = fila.pop()
+```
+
+```python
+# pythônico
+fila = deque()
+fila.appendleft(tarefa)
+proxima = fila.pop()
+```
+
+**Janela deslizante é `deque(maxlen=n)`** — o descarte automático elimina a única linha onde dava para errar.
+
+**Contar é `Counter`, agrupar é `defaultdict(list)`.** O laço com `if chave not in d` é código que a biblioteca padrão já escreveu.
+
+**`Counter` também subtrai e intersecta.** Comparação de duas contagens é uma operação, não um laço; lembre que `-` descarta negativos e `subtract()` os mantém.
+
+**Cuidado com a chave fantasma do `defaultdict`:** leitura cria. Consulta que não deve criar usa `get` ou `in`.
+
+**Registro imutável e leve é `namedtuple`; registro com comportamento é `dataclass`.**
+
+**Pilha de configuração é `ChainMap`,** que preserva a origem de cada valor — `{**a, **b}` não preserva.
+
+**`dict` comum já é ordenado** desde a 3.7. `OrderedDict` só por `move_to_end` ou por comparação sensível à ordem.
+
+Sobre versões:
+
+- **Python 3.1** — `Counter` e `OrderedDict` entram no módulo.
+- **Python 3.3** — `ChainMap`.
+- **Python 3.5** — `deque` ganha `index`, `insert` e `copy`.
+- **Python 3.7** — `dict` passa a garantir ordem de inserção por especificação, e `OrderedDict` deixa de ser necessário para isso.
+- **Python 3.10** — `Counter.total()`, que substitui o `sum(c.values())`.
+- **Python 3.12** — as classes abstratas migraram definitivamente para `collections.abc`; importá-las de `collections` deixou de funcionar (antes disso era só aviso).
+
+## 🧪 Laboratório
+
+Objetivo: medir o custo da estrutura errada e reescrever um analisador de log com as cinco estruturas.
+
+**1. Preparo.**
+
+```bash
+mkdir -p ~/lab57 && cd ~/lab57
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. A medida que motiva o capítulo.** Em `custo.py`, compare 100 mil `list.insert(0, i)` com 100 mil `deque.appendleft(i)` usando `time.perf_counter`:
+
+```text
+list.insert(0, x) x 100,000 :    1.255 s
+deque.appendleft  x 100,000 :    0.005 s
+```
+
+Repita com 10 mil e com 200 mil elementos e confirme que o tempo da `list` cresce com o **quadrado** e o da `deque`, linearmente. Os valores absolutos variam por máquina; a forma da curva, não.
+
+**3. O outro lado da moeda.** Meça o acesso `estrutura[n // 2]` um milhão de vezes numa `list` e numa `deque` do mesmo tamanho. Confirme que agora a `list` ganha, e escreva num comentário a regra de escolha que você extraiu das duas medidas.
+
+**4. Janela deslizante.** Implemente a média móvel das últimas 3 leituras com `deque(maxlen=3)`. Confirme o descarte automático:
+
+```text
+  apos onu-00043  -30.1 -> janela [-31.7, -21.4, -30.1]
+```
+
+Depois use `deque(maxlen=10)` para escrever um `tail.py` que imprime as últimas 10 linhas de um arquivo lendo-o **uma vez** e sem carregá-lo inteiro na memória.
+
+**5. `extendleft`.** Confirme a inversão:
+
+```text
+extendleft : deque([3, 2, 1, 'a', 'b', 'c', 'd', 'e', 'f'])
+```
+
+Escreva a linha que insere `[1, 2, 3]` à esquerda **preservando** a ordem.
+
+**6. `Counter`.** Conte as ONUs das leituras e imprima as duas mais frequentes. Depois construa dois `Counter` (hoje e ontem) e responda com uma operação só: o que apareceu hoje e não ontem; o que aumentou; e a variação de cada item, incluindo as quedas. Confirme a diferença entre `-` e `subtract()`:
+
+```text
+subtracao    : Counter({'onu-00043': 3, 'onu-00051': 2})
+subtract()   : Counter({'onu-00043': 3, 'onu-00051': 2, 'onu-00045': -3, 'onu-00099': -3})
+```
+
+**7. A chave fantasma.** Crie um `defaultdict(list)`, faça `if d["talvez"]:` e imprima o dicionário:
+
+```text
+depois de olhar: {'fantasma': []} <- a chave nasceu so por ter sido lida
+```
+
+Corrija para não criar. Este é o item do laboratório que mais aparece em bug real.
+
+**8. `namedtuple`.** Defina `Leitura` e confirme `_asdict()`, `_replace()` e que ela compara igual a uma tupla crua. Meça a memória de 1000 registros contra 1000 dicionários:
+
+```text
+  namedtuple:    64,000 bytes
+  dict      :   184,000 bytes
+```
+
+**9. `ChainMap`.** Monte a pilha `cli` → `arquivo` → `padroes`, confirme a resolução de cada chave e que escrever em `cfg` não toca os padrões. Escreva uma função `origem(cfg, chave)` que devolve o índice da camada de onde o valor veio — percorrendo `cfg.maps`.
+
+**10. Juntando tudo.** Escreva `analisar.py`, que lê um log de linhas `timestamp,onu,potencia,evento`, e usa: `Counter` para a contagem de eventos por tipo, `defaultdict(list)` para agrupar potências por ONU, `deque(maxlen=5)` para guardar os cinco últimos eventos críticos, `namedtuple` para cada registro e `ChainMap` para a configuração de limites. Ele deve imprimir um relatório e ter menos de 60 linhas — o ponto do exercício é que quase não sobra laço de bookkeeping.
+
+## Resumo
+
+- `list` é um vetor contíguo: `append` e `pop` no fim são baratos, e qualquer operação no início é linear. Medido, `insert(0, x)` 100 mil vezes ficou 239 vezes mais lento que `deque.appendleft`.
+- `deque` é encadeada por blocos: inserir e remover nas duas pontas custa constante, mas o acesso por índice ao meio é linear. Fila pede `deque`; acesso aleatório pede `list`.
+- `deque(maxlen=n)` implementa janela deslizante com descarte automático e elimina a linha onde dava para errar.
+- `extendleft` insere os elementos invertidos, porque cada um entra à esquerda por vez.
+- `Counter` conta a partir de qualquer iterável, ordena com `most_common`, devolve `0` para chave ausente e faz aritmética de multiconjuntos com `+`, `-`, `&` e `|`.
+- O operador `-` do `Counter` descarta contagens não positivas; o método `subtract()` as mantém — só ele mostra o que diminuiu.
+- `defaultdict(fabrica)` elimina o `if chave not in d` do agrupamento, mas **criar por leitura** é efeito colateral real: consultar sem criar exige `get` ou `in`.
+- `namedtuple` dá nome aos campos sem deixar de ser tupla, com `_asdict()` e `_replace()`, e ocupou quase três vezes menos memória que dicionários equivalentes.
+- `namedtuple` para registro imutável e leve; `dataclass` para registro com comportamento, padrão ou validação.
+- `ChainMap` empilha camadas de configuração sem copiar: busca desce, escrita fica na primeira camada, e `maps` preserva a origem de cada valor.
+- `OrderedDict` perdeu quase toda a razão de existir na 3.7; sobrou `move_to_end` e a comparação sensível à ordem.
+
+As estruturas deste capítulo respondem "onde guardar". O @sec-cap058 responde "como percorrer": `itertools` e `functools` trazem as ferramentas que compõem iteradores e funções — agrupar, agregar, combinar, memoizar — e permitem processar um arquivo maior que a memória sem escrever um único índice à mão.
