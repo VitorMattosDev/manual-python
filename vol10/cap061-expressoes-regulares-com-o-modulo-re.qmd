@@ -1,3 +1,647 @@
 # Expressões regulares com o módulo re {#sec-cap061}
 
-*(em elaboracao)*
+O @sec-cap060 terminou com o coletor registrando tudo o que faz. O problema mudou de lugar: agora existem 40 mil linhas de log, e a pergunta continua sendo *o que aconteceu entre 2h e 5h?*. Só que a resposta está em algum lugar dentro de linhas assim:
+
+```text
+187.45.201.7 - - [12/Aug/2026:03:14:22 -0300] "GET /api/onu/00043 HTTP/1.1" 200 1274
+187.45.201.7 - - [12/Aug/2026:03:14:23 -0300] "POST /api/leitura HTTP/1.1" 201 89
+10.0.0.15 - - [12/Aug/2026:03:14:51 -0300] "GET /api/onu/00052 HTTP/1.1" 504 0
+187.45.201.7 - - [12/Aug/2026:03:15:02 -0300] "GET /painel HTTP/1.1" 200 44120
+```
+
+O primeiro reflexo é `split`, e ele até funciona enquanto a pergunta for simples:
+
+```python
+linha.split()[0], linha.split()[8]
+```
+
+```text
+187.45.201.7 200
+```
+
+Funciona porque os campos que interessam estão em posições fixas. Basta uma rota com espaço, um campo vazio ou uma data em formato diferente para a contagem de índices desmoronar — e o `split` não avisa, apenas devolve outra coisa. Expressão regular é a ferramenta para descrever a **forma** do que se procura, em vez da posição.
+
+Este capítulo é sobre o módulo `re`: o que ele resolve muito bem, e as três ou quatro maneiras clássicas de usá-lo mal.
+
+## O primeiro casamento, e o objeto que ele devolve
+
+```python
+import re
+
+m = re.search(r"\d+\.\d+\.\d+\.\d+", linha)
+print(m)
+print(m.group(), m.span())
+```
+
+```text
+<re.Match object; span=(0, 12), match='187.45.201.7'>
+187.45.201.7 (0, 12)
+```
+
+Três coisas nessas duas linhas. `\d` significa "um algarismo", `+` significa "um ou mais", e `\.` é um ponto literal — porque `.` sozinho, no vocabulário das expressões regulares, significa "qualquer caractere".
+
+`re.search` não devolve a string encontrada: devolve um objeto `Match`, ou `None` se nada casou. O objeto sabe o que casou (`group()`), onde (`span()`, `start()`, `end()`) e, como veremos, o que cada pedaço capturou. Guardar o `Match` numa variável antes de usá-lo é o padrão, porque chamar `.group()` direto no retorno estoura com `AttributeError` quando não há casamento.
+
+### Por que o `r` antes das aspas
+
+```python
+len("\d"), len(r"\d")
+"\d" == r"\d"
+```
+
+```text
+2 2
+True
+```
+
+Neste caso os dois são iguais, porque `\d` não é uma sequência de escape que o Python conheça — mas ele **avisa**, com `SyntaxWarning: invalid escape sequence '\d'`, e em versões futuras isso passa a ser erro. Com `\b` a história é pior: numa string comum, `"\b"` é o caractere de *backspace*, e o padrão `"\bpython\b"` procura literalmente `backspace + python + backspace`, o que nunca casa e não gera aviso nenhum.
+
+A regra é sem exceção: **todo padrão de expressão regular se escreve como *raw string*.** As barras invertidas são para o motor de expressões regulares, não para o Python.
+
+## Procurar, casar e casar por inteiro
+
+```python
+alvo = "onu-00043 offline"
+
+re.search(r"onu-\d+", alvo)
+re.match(r"onu-\d+", alvo)
+re.fullmatch(r"onu-\d+", alvo)
+re.match(r"offline", alvo)
+```
+
+```text
+search    : <re.Match object; span=(0, 9), match='onu-00043'>
+match     : <re.Match object; span=(0, 9), match='onu-00043'>
+fullmatch : None
+match no meio: None
+```
+
+`search` procura em qualquer posição. `match` só casa a partir do **início** da string. `fullmatch` exige que o padrão consuma a string **inteira**.
+
+A confusão entre os três é a segunda causa mais comum de expressão regular que "não funciona": `re.match` parecendo funcionar porque o alvo do teste começava com o que se procurava. Na dúvida, `search` é o que quase sempre se quer — e para validar um campo (um CEP, um código de equipamento), `fullmatch` é o certo, porque `match` aceitaria `"00043-lixo-aqui"` sem reclamar.
+
+## Grupos nomeados: o extrator de verdade
+
+Agora o padrão que resolve a linha inteira do log:
+
+```python
+padrao = (
+    r'(?P<ip>\S+) \S+ \S+ \[(?P<quando>[^\]]+)\] '
+    r'"(?P<metodo>[A-Z]+) (?P<rota>\S+) [^"]+" '
+    r'(?P<status>\d{3}) (?P<bytes>\d+)'
+)
+
+m = re.search(padrao, linha)
+print(m.group("ip"), m.group("status"), m.group("rota"))
+print(m.groupdict())
+```
+
+```text
+187.45.201.7 200 /api/onu/00043
+{'ip': '187.45.201.7', 'quando': '12/Aug/2026:03:14:22 -0300', 'metodo': 'GET', 'rota': '/api/onu/00043', 'status': '200', 'bytes': '1274'}
+```
+
+Parênteses criam um **grupo de captura**; `(?P<nome>...)` dá nome a ele. `m.groupdict()` devolve um dicionário pronto — e é a diferença entre um extrator legível e uma sequência de `m.group(4)` que ninguém consegue manter.
+
+Três construções carregam esse padrão. `\S+` é "um ou mais caracteres que não sejam espaço", que é como se descreve um campo delimitado por espaços sem se importar com o conteúdo. `[^\]]+` é uma classe **negada**: um ou mais caracteres que **não** sejam `]` — a forma correta de dizer "vá até o fechamento". E `\d{3}` exige exatamente três algarismos, o que impede que um campo vizinho seja confundido com o código de status.
+
+Quando um grupo serve só para agrupar e não interessa capturar, `(?:...)` evita poluir os resultados — e é mais rápido, porque o motor não precisa registrar a posição.
+
+::: {#fig-anatomia-regex}
+```{.tikz}
+%%| filename: anatomia-regex
+%%| alt: Uma linha de log dividida em seis campos, cada um ligado ao fragmento de padrao que o descreve e ao nome do grupo que o captura
+\begin{tikzpicture}[
+  val/.style={draw=manualblue, very thick, rounded corners, fill=manualblue!11,
+              text width=2.25cm, align=center, minimum height=0.95cm,
+              font=\ttfamily\tiny},
+  pat/.style={draw=manualyellow!75!black, very thick, rounded corners,
+              fill=manualyellow!20, text width=2.25cm, align=center,
+              minimum height=0.95cm, font=\ttfamily\tiny},
+  gnm/.style={draw=manualgreen, very thick, rounded corners,
+              fill=manualgreen!13, text width=2.25cm, align=center,
+              minimum height=0.6cm, font=\ttfamily\scriptsize},
+  seg/.style={->,>=stealth, thick, manualgray},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.9) rectangle (15.6,-3.5);
+
+  \node[ttl] at (-0.4, 4.5) {a forma do dado, campo a campo --- não a posição dele};
+
+  \node[val] at ( 0.85, 3.0) {187.45.201.7};
+  \node[val] at ( 3.35, 3.0) {12/Aug/2026:\\03:14:22 -0300};
+  \node[val] at ( 5.85, 3.0) {GET};
+  \node[val] at ( 8.35, 3.0) {/api/onu/00043};
+  \node[val] at (10.85, 3.0) {200};
+  \node[val] at (13.35, 3.0) {1274};
+
+  \node[pat] at ( 0.85, 1.2) {\textbackslash S+};
+  \node[pat] at ( 3.35, 1.2) {[\^{}\textbackslash ]]+\\entre colchetes};
+  \node[pat] at ( 5.85, 1.2) {[A-Z]+};
+  \node[pat] at ( 8.35, 1.2) {\textbackslash S+};
+  \node[pat] at (10.85, 1.2) {\textbackslash d\{3\}};
+  \node[pat] at (13.35, 1.2) {\textbackslash d+};
+
+  \node[gnm] at ( 0.85,-0.4) {ip};
+  \node[gnm] at ( 3.35,-0.4) {quando};
+  \node[gnm] at ( 5.85,-0.4) {metodo};
+  \node[gnm] at ( 8.35,-0.4) {rota};
+  \node[gnm] at (10.85,-0.4) {status};
+  \node[gnm] at (13.35,-0.4) {bytes};
+
+  \foreach \xx in {0.85, 3.35, 5.85, 8.35, 10.85, 13.35} {
+    \draw[seg] (\xx, 2.5) -- (\xx, 1.7);
+    \draw[seg] (\xx, 0.7) -- (\xx,-0.1);
+  }
+
+  \node[lb, text=manualblue]        at (-0.4, 3.8) {o que está na linha};
+  \node[lb, text=manualyellow!75!black] at (-0.4, 1.95) {o fragmento que o descreve};
+  \node[lb, text=manualgreen]       at (-0.4,-1.05) {o nome pelo qual se lê};
+
+  \node[nt, text width=15.6cm] at (-0.4,-1.6)
+    {Cada fragmento diz uma coisa só. \texttt{\textbackslash S+} é ``campo sem
+     espaço'', que serve para qualquer valor cujo conteúdo não importa.
+     \texttt{[\^{}\textbackslash ]]+} é uma classe negada --- ``tudo até o
+     fechamento'' --- e é a forma correta de atravessar um campo delimitado, bem
+     mais segura do que um curinga guloso. \texttt{\textbackslash d\{3\}} fixa o
+     tamanho e impede que o campo vizinho seja lido no lugar do código de status.
+     Com \texttt{(?P} e o nome entre sinais de menor e maior, cada grupo vira
+     chave de \texttt{m.groupdict()}, e o extrator continua legível seis meses
+     depois --- ao contrário de uma sequência de \texttt{m.group(4)}.};
+\end{tikzpicture}
+```
+Um padrão descreve a forma de cada campo; o nome do grupo devolve o valor.
+:::
+
+## Varrer o arquivo inteiro: `finditer`, `findall`, `sub` e `split`
+
+`finditer` percorre todas as ocorrências devolvendo objetos `Match`, sem construir lista nenhuma — é o que se usa em arquivo grande:
+
+```python
+for m in re.finditer(padrao, LOG):
+    if m.group("status") != "200":
+        print(m.group("status"), m.group("rota"), m.group("ip"))
+```
+
+```text
+201 /api/leitura 187.45.201.7
+504 /api/onu/00052 10.0.0.15
+```
+
+`findall` é mais direto, e tem um comportamento que surpreende: se o padrão tiver grupos, ele devolve os **grupos**, não o casamento inteiro — e uma lista de tuplas quando há mais de um.
+
+```python
+re.findall(r"(\d{3}) (\d+)$", LOG, re.M)
+re.findall(r"\d{3}(?= \d+$)", LOG, re.M)
+```
+
+```text
+[('200', '1274'), ('201', '89'), ('504', '0'), ('200', '44120')]
+['200', '201', '504', '200']
+```
+
+`re.sub` substitui, e aceita uma **função** no lugar do texto — que é como se faz qualquer substituição que dependa do valor encontrado:
+
+```python
+texto = "chave=AKIA1234567890 e senha=trocar123"
+
+re.sub(r"(chave|senha)=(\S+)", r"\1=***", texto)
+
+def mascara(m):
+    v = m.group(2)
+    return f"{m.group(1)}={v[:4]}{'*' * (len(v) - 4)}"
+
+re.sub(r"(chave|senha)=(\S+)", mascara, texto)
+```
+
+```text
+chave=*** e senha=***
+chave=AKIA********** e senha=troc*****
+```
+
+No texto de substituição, `\1` e `\2` referem-se aos grupos capturados (e `\g<nome>` aos nomeados). `re.subn` devolve também quantas trocas fez, o que serve para confirmar que a expressão realmente pegou o que devia.
+
+`re.split` separa por um padrão em vez de por um literal — e, se o separador estiver num grupo, ele volta no resultado:
+
+```python
+re.split(r"[;,]\s*", "onu-1; onu-2,onu-3 ,  onu-4")
+re.split(r"([;,])\s*", "a;b,c")
+```
+
+```text
+['onu-1', 'onu-2', 'onu-3 ', 'onu-4']
+['a', ';', 'b', ',', 'c']
+```
+
+Repare no `'onu-3 '` com espaço no fim: o padrão consome espaço **depois** do separador, não antes. É o tipo de detalhe que só aparece olhando a saída — motivo pelo qual expressão regular se testa com dado real, não com o exemplo que a gente imaginou.
+
+## Guloso, preguiçoso e a classe negada
+
+O erro mais caro do vocabulário está aqui:
+
+```python
+html = '<b>alerta</b> e <i>aviso</i>'
+
+re.findall(r"<.+>", html)     # guloso
+re.findall(r"<.+?>", html)    # preguiçoso
+re.findall(r"<[^>]+>", html)  # classe negada
+```
+
+```text
+guloso  : ['<b>alerta</b> e <i>aviso</i>']
+preguic.: ['<b>', '</b>', '<i>', '</i>']
+classe  : ['<b>', '</b>', '<i>', '</i>']
+```
+
+Todo quantificador (`+`, `*`, `?`, `{n,m}`) é **guloso** por padrão: consome o máximo possível e depois recua até o resto do padrão encaixar. Por isso `<.+>` engoliu a linha toda — encontrou o último `>`, não o primeiro.
+
+Acrescentar `?` torna o quantificador preguiçoso: consome o mínimo. Funciona, mas a terceira forma é melhor. `[^>]+` não precisa recuar nunca, porque a classe negada já **não pode** atravessar o delimitador. É mais rápida, mais previsível e — como a próxima seção mostra — imune ao problema que derruba serviço em produção.
+
+## Bordas, âncoras e o `$` que engana
+
+```python
+re.findall(r"\bpython\b", "python, pythonic, o python3 e python.")
+re.findall(r"python",     "python, pythonic, o python3 e python.")
+```
+
+```text
+['python', 'python']
+['python', 'python', 'python', 'python']
+```
+
+`\b` é uma **borda de palavra**: posição entre um caractere de palavra e um que não seja. Não consome nada, apenas exige a transição. Com ele, `pythonic` e `python3` ficam de fora — que costuma ser exatamente a intenção de quem procura uma palavra.
+
+`^` e `$` ancoram no começo e no fim da string (ou de cada linha, com `re.MULTILINE`). E aqui mora uma armadilha silenciosa:
+
+```python
+re.search(r"preco: R$ (\d+)", "preco: R$ 45")
+re.search(r"preco: R\$ (\d+)", "preco: R$ 45").group(1)
+```
+
+```text
+None
+45
+```
+
+O primeiro padrão não tem erro de sintaxe — ele apenas exige um fim de string logo depois do `R`, o que nunca acontece. Devolve `None`, e um `if m:` mal escrito transforma isso em "nenhum preço encontrado" para sempre. Quando o texto procurado tem pontuação, `re.escape` resolve de vez:
+
+```python
+re.escape("preco (R$) [novo]")
+```
+
+```text
+preco\ \(R\$\)\ \[novo\]
+```
+
+Erro de sintaxe de verdade, esse sim, o módulo reporta bem:
+
+```text
+'(\\d+'              -> missing ), unterminated subpattern at position 0
+'a{2,1}'             -> min repeat greater than max repeat at position 2
+'[a-'                -> unterminated character set at position 0
+'(?P<n>x)(?P<n>y)'   -> redefinition of group name 'n' as group 2; was group 1 at position 12
+```
+
+A exceção é `re.PatternError` — nome novo na 3.13, com `re.error` mantido como sinônimo.
+
+## Sinalizadores, e o `VERBOSE` que salva a manutenção
+
+```python
+re.findall(r"erro", "Erro fatal, erro leve, ERRO grave", re.I)
+re.search(r"^10\.", LOG, re.M).group()
+```
+
+```text
+['Erro', 'erro', 'ERRO']
+10.
+```
+
+`re.IGNORECASE` (`re.I`) ignora maiúsculas. `re.MULTILINE` (`re.M`) faz `^` e `$` valerem por linha, e é o que torna possível varrer um log inteiro como uma string só. `re.DOTALL` (`re.S`) faz o `.` também casar quebra de linha — sem ele, `.` **não** atravessa `\n`, o que explica boa parte dos padrões multilinha que não casam.
+
+E `re.VERBOSE` (`re.X`), que permite escrever o padrão como se escreve código:
+
+```python
+PADRAO = re.compile(r"""
+    (?P<ip>\S+)                 # endereco de origem
+    \s+\S+\s+\S+\s+             # identidade e usuario (nao usados)
+    \[(?P<quando>[^\]]+)\]\s+   # data entre colchetes
+    "(?P<metodo>[A-Z]+)\s+
+     (?P<rota>\S+)[^"]*"\s+
+    (?P<status>\d{3})\s+
+    (?P<bytes>\d+)
+""", re.VERBOSE)
+```
+
+```text
+GET /api/onu/00043 1274
+```
+
+Com `VERBOSE`, espaços em branco fora de classes são ignorados e `#` inicia comentário — então espaço literal precisa virar `\s` ou `\ `. Qualquer padrão com mais de uns 40 caracteres merece essa forma. É a diferença entre uma expressão que se explica e uma que só se reescreve.
+
+## `re.compile`: quando importa, e quanto
+
+O módulo mantém um cache interno dos últimos padrões compilados, então `re.search(padrao, s)` num laço não recompila a cada volta. Ainda assim:
+
+```text
+re.search  : 0.091 s
+compilado  : 0.046 s
+economia   : 49.8%
+```
+
+Duzentas mil buscas, e o objeto compilado é o dobro mais rápido — o que sobra é só a consulta ao cache e a análise dos argumentos. Em laço quente, compilar uma vez no nível do módulo vale a pena; fora dele, a diferença é irrelevante e a forma direta é mais legível.
+
+O ganho real do `compile`, porém, não é desempenho: é ter o padrão nomeado, comentado com `VERBOSE` e testável isoladamente, em vez de espalhado como literal pelo código.
+
+## Retrocesso catastrófico: a expressão que derruba o serviço
+
+Este é o assunto que separa quem usa expressões regulares de quem as usa em produção.
+
+```python
+mau = re.compile(r"^(\w+\s?)+$")
+mau.match("a" * 22 + "!")
+```
+
+```text
+casou? False
+tempo com 22 caracteres: 0.265 s
+```
+
+Um quarto de segundo para dizer "não casou" sobre uma string de 23 caracteres. E o crescimento é o problema:
+
+```text
+  18 caracteres:    0.017 s
+  20 caracteres:    0.067 s
+  22 caracteres:    0.263 s
+  24 caracteres:    1.053 s
+```
+
+Cada dois caracteres **quadruplicam** o tempo. Com 40 caracteres, a conta passa de um dia. O motivo é o quantificador aninhado: `(\w+\s?)+` permite dividir a mesma sequência de letras entre os grupos de um número exponencial de maneiras, e o motor precisa tentar todas antes de concluir que o `!` final não encaixa em lugar nenhum.
+
+Isso tem nome — ReDoS — e é uma vulnerabilidade de negação de serviço quando o texto analisado vem de fora: um campo de formulário de 50 caracteres é suficiente para prender um processo do servidor.
+
+A partir do Python 3.11 existe a defesa direta, os **quantificadores possessivos** e os grupos atômicos:
+
+```python
+bom = re.compile(r"^(?:\w+\s?)++$")
+bom.match("a" * 22 + "!")
+```
+
+```text
+casou? False
+tempo possessivo       : 0.000006 s
+```
+
+Quarenta mil vezes mais rápido. O `++` diz ao motor: consuma o máximo e **não retroceda**. `(?>...)` faz o mesmo para um grupo inteiro. Como o retrocesso é justamente o que gera a explosão, proibi-lo elimina a classe inteira do problema — desde que o padrão continue correto sem ele, o que aqui é o caso.
+
+Antes disso, e ainda hoje como boa prática: evitar quantificador dentro de grupo quantificado, preferir classe negada a curinga, e ancorar o padrão. E, quando o texto vem de fonte não confiável e o padrão é complexo, o módulo `regex` do PyPI oferece o parâmetro `timeout=`, que o `re` da biblioteca padrão não tem.
+
+::: {#fig-retrocesso-catastrofico}
+```{.tikz}
+%%| filename: retrocesso-catastrofico
+%%| alt: A arvore de particoes que o motor precisa tentar num quantificador aninhado, crescendo por potencia de dois, e o corte que o quantificador possessivo faz
+\begin{tikzpicture}[
+  nd/.style={draw=manualred, very thick, rounded corners, fill=manualred!9,
+             minimum width=1.15cm, minimum height=0.55cm,
+             font=\ttfamily\tiny},
+  ok/.style={draw=manualgreen, very thick, rounded corners, fill=manualgreen!13,
+             text width=4.3cm, align=center, minimum height=0.9cm,
+             font=\ttfamily\scriptsize},
+  seg/.style={manualgray, thin},
+  ttl/.style={font=\small\bfseries, text=manualgray, align=left, anchor=west},
+  lb/.style={font=\scriptsize, text=manualgray, align=left, anchor=west},
+  ct/.style={font=\scriptsize, text=manualgray, align=center},
+  nt/.style={font=\scriptsize, text=manualgray, align=left, anchor=north west}]
+
+  \hyphenpenalty=10000 \exhyphenpenalty=10000 \tolerance=9999
+
+  \path (-0.6, 4.6) rectangle (15.6,-4.7);
+
+  \node[ttl] at (-0.4, 4.2)
+    {\texttt{(\textbackslash w+\textbackslash s?)+} --- as partições que o motor
+     tem de tentar antes de desistir};
+
+  \node[nd] (r) at (3.6, 3.2) {aaaa};
+
+  \node[nd] (a) at (1.8, 1.9) {a|aaa};
+  \node[nd] (b) at (3.6, 1.9) {aa|aa};
+  \node[nd] (c) at (5.4, 1.9) {aaa|a};
+
+  \node[nd] (d) at (0.9, 0.6) {a|a|aa};
+  \node[nd] (e) at (2.7, 0.6) {a|aa|a};
+  \node[nd] (f) at (4.5, 0.6) {aa|a|a};
+  \node[nd] (g) at (6.3, 0.6) {a|a|a|a};
+
+  \foreach \dst in {a,b,c} \draw[seg] (r) -- (\dst);
+  \draw[seg] (a) -- (d);  \draw[seg] (a) -- (e);
+  \draw[seg] (b) -- (f);  \draw[seg] (c) -- (g);
+
+  \node[ct, text=manualred, text width=6.6cm] at (3.6,-0.5)
+    {todas falham no \texttt{!} final --- e o número delas dobra
+     a cada caractere};
+
+  \draw[seg] (7.9, 4.0) -- (7.9,-1.0);
+
+  \node[lb] at (8.4, 3.7) {tempo medido, entrada de \emph{n} letras mais um
+                           \texttt{!}:};
+  \node[lb, text=manualred] at (8.7, 3.0) {18 caracteres \quad 0,017 s};
+  \node[lb, text=manualred] at (8.7, 2.4) {20 caracteres \quad 0,067 s};
+  \node[lb, text=manualred] at (8.7, 1.8) {22 caracteres \quad 0,263 s};
+  \node[lb, text=manualred] at (8.7, 1.2) {24 caracteres \quad 1,053 s};
+  \node[lb] at (8.4, 0.5) {mais dois caracteres, quatro vezes o tempo};
+
+  \node[ok] at (11.4,-0.4) {(?:\textbackslash w+\textbackslash s?)++\\0,000006 s};
+  \node[lb, text=manualgreen, text width=6.4cm] at (8.4,-1.5)
+    {O \texttt{++} da 3.11 proíbe o retrocesso: o motor consome o máximo e não
+     volta atrás. Some a árvore inteira.};
+
+  \node[nt, text width=15.6cm] at (-0.4,-2.6)
+    {O gatilho é o quantificador dentro de grupo quantificado --- aqui, o
+     \texttt{+} de dentro e o \texttt{+} de fora sobre a mesma sequência de
+     letras. Como as duas repetições podem repartir o mesmo trecho de várias
+     formas, e nenhuma delas conserta o \texttt{!} que sobra no fim, o motor
+     percorre todas antes de responder ``não''. Chama-se ReDoS e é uma
+     vulnerabilidade real quando o texto vem de fora: um campo de formulário de
+     50 caracteres prende um processo do servidor por horas. As três defesas, em
+     ordem de preferência: classe negada no lugar de curinga, quantificador
+     possessivo, e não aplicar padrão complexo a texto não confiável.};
+\end{tikzpicture}
+```
+Quantificador aninhado gera partições em número exponencial; `++` corta o retrocesso.
+:::
+
+## Unicode, que já vem certo
+
+```python
+nome = "João Não-Sei da Silva"
+
+re.findall(r"\w+", nome)
+re.findall(r"\w+", nome, re.ASCII)
+re.findall(r"[a-z]+", "ção", re.I)
+```
+
+```text
+['João', 'Não', 'Sei', 'da', 'Silva']
+['Jo', 'o', 'N', 'o', 'Sei', 'da', 'Silva']
+['o']
+```
+
+Em Python 3, `\w`, `\d` e `\b` são conscientes de Unicode por padrão (@sec-cap014): `João` é uma palavra só. O sinalizador `re.ASCII` restringe ao conjunto antigo e parte o nome ao meio — útil quando se analisa protocolo, nunca quando se analisa texto de gente.
+
+A terceira linha é o erro clássico: `[a-z]` é um **intervalo de pontos de código**, e `ç` não está entre `a` e `z`. Para "letras" em português, `\w` ou `[^\W\d_]`; nunca `[a-zA-Z]`.
+
+## Quando não usar expressão regular
+
+Três casos em que a resposta certa é outra ferramenta.
+
+**Formato com estrutura aninhada.** HTML, XML e JSON não são linguagens regulares — nenhuma expressão regular os analisa corretamente. A demonstração cabe em duas linhas:
+
+```python
+html = '<a href="/onu/43" title="onu de teste > limite">ver</a>'
+
+re.findall(r'href="([^"]+)"', html)
+re.findall(r"<a[^>]*>", html)
+```
+
+```text
+['/onu/43']
+['<a href="/onu/43" title="onu de teste >']
+```
+
+O primeiro funciona porque o alvo é um campo delimitado, simples e local. O segundo se quebra no primeiro `>` que aparece dentro de um atributo — e a correção "óbvia" gera o próximo caso especial, indefinidamente. Para HTML existem analisadores de verdade; para CSV e JSON, o próximo capítulo.
+
+**Comparação literal.** Se não há forma a descrever, o método de string é mais claro e mais rápido (@sec-cap013):
+
+```text
+str.startswith : 0.013 s
+regex compilado: 0.058 s
+regex e 4.5x mais lento
+```
+
+`in`, `startswith`, `endswith`, `split` e `replace` resolvem a maioria dos casos reais. Expressão regular entra quando existe **variação** a descrever.
+
+**Validação de e-mail.** A expressão regular correta segundo a RFC 5322 tem centenas de caracteres e ainda assim aceita endereços que não existem. Verificar se há um `@` com algo dos dois lados e mandar um e-mail de confirmação é a solução que funciona.
+
+## 🐍 Jeito Pythônico
+
+**Todo padrão é *raw string*.** `r"\bpython\b"`, sempre — `"\b"` é *backspace* e falha em silêncio.
+
+**Grupos nomeados, e `groupdict()` para extrair.**
+
+```python
+# antipadrão: posicional, ilegível, quebra ao inserir um grupo
+ip, _, status = m.group(1), m.group(2), m.group(5)
+```
+
+```python
+# pythônico
+dados = PADRAO.search(linha).groupdict()
+```
+
+**Classe negada antes de curinga.** `[^>]+` em vez de `.+?`, que por sua vez vem antes de `.+`. Mais rápido, mais previsível, imune a retrocesso catastrófico.
+
+**`VERBOSE` para qualquer padrão que não caiba num olhar,** com comentário em cada linha.
+
+**`fullmatch` para validar, `search` para extrair.** `match` quase nunca é o que se quer.
+
+**Teste o `None`.** `m = re.search(...)` e depois `if m:` — nunca `.group()` encadeado direto.
+
+**Nada de quantificador dentro de grupo quantificado** sobre texto que venha de fora.
+
+**`re.escape` em todo trecho literal** que entre num padrão vindo de variável.
+
+**Se não há variação a descrever, use método de string.**
+
+**Para HTML, XML, JSON e CSV, use o analisador do formato.**
+
+Sobre versões:
+
+- **Python 3.7** — `re.Pattern` e `re.Match` como nomes públicos, utilizáveis em anotação de tipo.
+- **Python 3.8** — `re.sub` deixou de aceitar escapes desconhecidos no texto de substituição.
+- **Python 3.11** — quantificadores possessivos (`*+`, `++`, `?+`, `{n,m}+`) e grupos atômicos `(?>...)`, a defesa direta contra ReDoS; e `re.NOFLAG`.
+- **Python 3.12** — `re.compile` mais rápido e mensagens de erro mais precisas.
+- **Python 3.13** — `re.PatternError` como nome oficial da exceção (`re.error` segue funcionando).
+
+Quando o `re` não basta — `\p{L}` por categoria Unicode, casamento difuso, sobreposição, `timeout=` — o módulo `regex` do PyPI é compatível e mais capaz. Mas ele é uma dependência, e a maioria dos casos não precisa dela.
+
+## 🧪 Laboratório
+
+Objetivo: construir um extrator de log que funcione, e depois quebrá-lo de propósito para ver cada armadilha acontecer.
+
+**1. Preparo.** Crie o diretório, o ambiente e um arquivo `acesso.log` com as quatro linhas da abertura do capítulo:
+
+```bash
+mkdir -p ~/lab61 && cd ~/lab61
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**2. O `split` que quase serve.** Extraia IP e status por índice. Depois acrescente ao arquivo uma linha cuja rota contenha um espaço e confirme que o índice `[8]` passa a devolver a coisa errada — **sem** levantar exceção.
+
+**3. Primeira busca.** Encontre o IP com `re.search` e imprima `group()` e `span()`. Confirme o tipo do retorno quando nada casa.
+
+**4. A *raw string*.** Compare `re.findall("\bpython\b", texto)` com `re.findall(r"\bpython\b", texto)` sobre `"python, pythonic, o python3 e python."`. Explique por que o primeiro devolve lista vazia:
+
+```text
+['python', 'python']
+```
+
+**5. Os três verbos.** Rode `search`, `match` e `fullmatch` de `r"onu-\d+"` sobre `"onu-00043 offline"` e sobre `"leitura de onu-00043"`. Monte uma tabela de qual devolve o quê, e decida qual usar para validar um código de equipamento.
+
+**6. O extrator.** Escreva o padrão com os seis grupos nomeados e imprima o `groupdict()` da primeira linha. Depois liste, com `finditer`, todas as requisições com status diferente de 200:
+
+```text
+201 /api/leitura 187.45.201.7
+504 /api/onu/00052 10.0.0.15
+```
+
+**7. Guloso contra classe negada.** Reproduza os três padrões sobre `'<b>alerta</b> e <i>aviso</i>'` e explique, com `span()`, por onde o guloso passou.
+
+**8. Substituição com função.** Mascare `chave=` e `senha=` preservando os quatro primeiros caracteres. Confirme com `re.subn` que houve duas trocas.
+
+**9. `VERBOSE`.** Reescreva o padrão do passo 6 em forma comentada e confirme que o resultado é idêntico. Depois esqueça de escapar um espaço literal e observe o padrão deixar de casar.
+
+**10. Meça o `compile`.** Compare 200 mil chamadas de `re.search` com 200 mil de padrão compilado, e depois compare o padrão compilado com `str.startswith`:
+
+```text
+re.search  : 0.091 s   |  compilado: 0.046 s
+startswith : 0.013 s   |  regex    : 0.058 s
+```
+
+Escreva em uma frase quando cada um se justifica.
+
+**11. Retrocesso catastrófico.** Meça `r"^(\w+\s?)+$"` contra `"a"*n + "!"` para `n` em 18, 20, 22 e 24. Confirme o fator 4:
+
+```text
+  22 caracteres:    0.263 s
+  24 caracteres:    1.053 s
+```
+
+Reescreva com `++` e meça de novo. **Não** rode com `n = 40` — a conta passa de um dia.
+
+**12. O `$` silencioso.** Rode `re.search(r"preco: R$ (\d+)", "preco: R$ 45")` e explique o `None`. Corrija com `\$` e depois com `re.escape`.
+
+**13. Unicode.** Compare `\w+` com e sem `re.ASCII` sobre `"João Não-Sei da Silva"`, e confirme que `[a-z]+` com `re.I` não acha `ç`.
+
+**14. O limite.** Tente extrair todas as tags de `'<a href="/onu/43" title="onu de teste > limite">ver</a>'` com `r"<a[^>]*>"`. Observe o corte no `>` de dentro do atributo e escreva por que nenhuma correção de padrão resolve o caso geral.
+
+## Resumo
+
+- Expressão regular descreve a **forma** do que se procura; `split` por índice descreve a posição, e a posição muda sem avisar.
+- Todo padrão se escreve como *raw string*: `"\b"` é o caractere de *backspace* e faz o padrão falhar em silêncio.
+- `re.search` devolve um objeto `Match` ou `None` — nunca a string; `search` procura em qualquer posição, `match` só no início e `fullmatch` exige a string inteira.
+- `(?P<nome>...)` cria grupo nomeado e `groupdict()` devolve o dicionário pronto; `(?:...)` agrupa sem capturar.
+- `findall` devolve os grupos quando o padrão os tem, e tuplas quando há mais de um; `finditer` devolve objetos `Match` sem construir lista.
+- `re.sub` aceita função no lugar do texto, e é assim que se faz substituição que depende do valor encontrado.
+- Quantificadores são gulosos por padrão; `?` os torna preguiçosos, mas a classe negada (`[^>]+`) é melhor que os dois.
+- `\b` é borda de palavra e não consome caractere; `^` e `$` ancoram, e um `$` no meio do padrão não é erro de sintaxe — só nunca casa.
+- `re.VERBOSE` permite espaços e comentários no padrão, e é obrigatório em qualquer expressão longa que alguém precise manter.
+- `re.compile` dá cerca de 2× em laço quente, mas o ganho verdadeiro é ter o padrão nomeado, comentado e testável.
+- Quantificador dentro de grupo quantificado gera retrocesso exponencial: 24 caracteres já levam mais de um segundo, e 40 levariam mais de um dia.
+- Os quantificadores possessivos e grupos atômicos da 3.11 (`++`, `(?>...)`) eliminam o retrocesso e reduziram o mesmo caso a 6 microssegundos.
+- `\w`, `\d` e `\b` são Unicode por padrão; `[a-z]` é intervalo de pontos de código e não inclui `ç`.
+- HTML, XML e JSON não são linguagens regulares — para eles, analisador de verdade; para comparação literal, método de string, que é 4× mais rápido.
+
+O próximo capítulo continua no mesmo eixo, mas do outro lado: em vez de arrancar dado de texto que não foi feito para ser lido por programa, trabalhar com os formatos que **foram** — JSON e CSV, os dois que todo programa Python acaba lendo e escrevendo.
