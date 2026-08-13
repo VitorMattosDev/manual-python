@@ -1,3 +1,533 @@
 # Documentação: docstrings, doctest e Sphinx {#sec-cap073}
 
-*(em elaboracao)*
+O coletor de estações está formatado (@sec-cap067), tipado (@sec-cap068), testado (@sec-cap070) e depurável (@sec-cap072). Alguém novo entra na equipe, abre o REPL e digita:
+
+```python
+help(estacao.validar)
+```
+
+```text
+validar(t: float) -> float
+```
+
+A anotação diz que entra um `float` e sai um `float`. Não diz o que a função faz, qual faixa aceita, o que acontece fora dela, nem por que ela existe. A pessoa vai ler o código-fonte — o que é aceitável para uma função de cinco linhas e inviável para um pacote de cinquenta módulos.
+
+Documentação é a parte da qualidade que nenhuma ferramenta consegue verificar sozinha: o *linter* não sabe se sua explicação está certa, o verificador de tipos não lê português, e o teste não valida um parágrafo. Este capítulo trata do que **é** verificável — docstrings que o Python expõe, exemplos que se executam, referência que se gera — e do que não é, mas decide se alguém vai conseguir usar o que você escreveu.
+
+## Docstrings: o texto que o objeto carrega
+
+Uma *docstring* é uma string literal como **primeira instrução** de um módulo, classe, função ou método. O Python a guarda em `__doc__`, e é dali que vêm o `help()`, a dica do editor e o gerador de documentação.
+
+```python
+"""Leitura e validacao de temperaturas de estacoes meteorologicas."""
+
+class LeituraInvalidaError(ValueError):
+    """Temperatura fora da faixa fisicamente plausivel."""
+
+
+def celsius_para_fahrenheit(c: float) -> float:
+    """Converte uma temperatura de Celsius para Fahrenheit."""
+    return c * 9 / 5 + 32
+```
+
+```text
+Help on function celsius_para_fahrenheit in module estacao:
+
+celsius_para_fahrenheit(c: float) -> float
+    Converte uma temperatura de Celsius para Fahrenheit.
+```
+
+A posição é rígida, com uma exceção que confunde. **Comentário antes não atrapalha** — o tokenizador o descarta, e a string continua sendo a primeira *instrução*:
+
+```python
+# comentario antes
+"""Docstring que continua sendo docstring."""
+```
+
+```text
+'Docstring que continua sendo docstring.'
+```
+
+Mas qualquer instrução de verdade antes dela quebra:
+
+```python
+VERSAO = "1.0"
+"""Docstring depois de uma atribuicao."""
+```
+
+```text
+None
+```
+
+A string virou um literal avaliado e descartado, e `__doc__` ficou `None`. É o modo mais comum de "escrevi a documentação e o `help` não mostra" — e a variante de módulo é traiçoeira porque um `import` ou um `from __future__` no topo já basta.
+
+### O que a PEP 257 pede
+
+A PEP 257 é curta e vale as regras principais:
+
+- **Sempre aspas triplas**, mesmo numa linha só — para que expandir depois não exija reescrever.
+- **A primeira linha é uma frase imperativa curta terminada em ponto**: "Converte uma temperatura", não "Esta função converte" nem "Conversão de temperatura". Ela aparece sozinha em índices e listas.
+- Numa *docstring* de várias linhas, **uma linha em branco depois do resumo**, o corpo, e as aspas de fechamento em linha própria.
+- **Documente o contrato, não a implementação.** Parâmetros, retorno, exceções, efeitos colaterais. Como o laço interno funciona é assunto do código, e vai ficar desatualizado.
+
+E a regra que decide o resto: **não documente o que a assinatura já diz**. Com `c: float` na assinatura, escrever "c (float): a temperatura" é duplicação que envelhece mal — o dia em que o tipo mudar, a *docstring* vira mentira. Anotações de tipo (@sec-cap068) tornaram obsoleta metade do que as *docstrings* antigas carregavam.
+
+### Os três dialetos
+
+O Python não define formato para o corpo. Três convenções dominam:
+
+| Estilo | Aparência | Onde predomina |
+|---|---|---|
+| **Google** | `Args:` / `Returns:` / `Raises:` com indentação | o mais legível em código; padrão de fato hoje |
+| **NumPy** | seções com sublinhado de hifens | ciência de dados, SciPy, pandas |
+| **reST** | `:param x:` / `:returns:` | Sphinx puro, código mais antigo |
+
+O estilo Google, que este manual usa:
+
+```python
+def validar(t: float) -> float:
+    """Devolve ``t`` se estiver na faixa aceitavel.
+
+    Args:
+        t: Temperatura em graus Celsius.
+
+    Returns:
+        A propria temperatura, inalterada.
+
+    Raises:
+        LeituraInvalidaError: Se ``t`` estiver fora da faixa.
+    """
+```
+
+Repare que `Args:` descreve o **significado** de `t`, não o tipo — o tipo está na assinatura. A escolha entre os três importa menos do que a consistência: o Sphinx entende os três (via extensão `napoleon` para Google e NumPy), e misturá-los no mesmo projeto quebra o gerador em silêncio, produzindo seções que não são reconhecidas e saem como texto corrido.
+
+## `doctest`: exemplo que não pode mentir
+
+O maior problema da documentação é apodrecer. O código muda, o exemplo na *docstring* fica, e ninguém percebe porque nada quebra.
+
+O `doctest` resolve isso lendo as *docstrings*, encontrando o que parece uma sessão do REPL, executando e comparando:
+
+```python
+def celsius_para_fahrenheit(c: float) -> float:
+    """Converte uma temperatura de Celsius para Fahrenheit.
+
+    >>> celsius_para_fahrenheit(0.0)
+    32.0
+    >>> celsius_para_fahrenheit(100.0)
+    212.0
+    >>> celsius_para_fahrenheit(-29.8)
+    -21.64
+    """
+    return c * 9 / 5 + 32
+```
+
+```bash
+python -m doctest estacao.py -v
+```
+
+```text
+   3 tests in estacao.celsius_para_fahrenheit
+   1 test in estacao.resumir
+   2 tests in estacao.validar
+6 tests in 5 items.
+6 passed.
+Test passed.
+```
+
+Sem `-v`, o sucesso é silencioso — o comando não imprime nada e sai com status 0.
+
+Exceções também funcionam, com o traceback abreviado por `...`:
+
+```python
+    """
+    >>> validar(200.0)
+    Traceback (most recent call last):
+        ...
+    estacao.LeituraInvalidaError: fora da faixa: 200.0
+    """
+```
+
+E, para integrar à suíte do @sec-cap070, o pytest coleta doctests como testes normais:
+
+```bash
+pytest --doctest-modules
+```
+
+```text
+...                                                                      [100%]
+3 passed in 0.13s
+```
+
+Uma linha no `addopts` do `pyproject.toml` e todo exemplo da sua documentação passa a ser verificado no CI. **É o único mecanismo que impede a documentação de mentir.**
+
+### As cinco armadilhas
+
+O `doctest` compara **texto exato**, e isso o torna frágil de maneiras específicas:
+
+```python
+def soma_float():
+    """
+    >>> 0.1 + 0.2
+    0.3
+    """
+
+
+def conjunto():
+    """
+    >>> {"c", "a", "b"}
+    {'a', 'b', 'c'}
+    """
+
+
+def objeto():
+    """
+    >>> object()
+    <object object at 0x7f0000000000>
+    """
+```
+
+```text
+Failed example:
+    {"c", "a", "b"}
+Expected:
+    {'a', 'b', 'c'}
+Got:
+    {'b', 'a', 'c'}
+**********************************************************************
+Failed example:
+    object()
+Expected:
+    <object object at 0x7f0000000000>
+Got:
+    <object object at 0x0000021D68150830>
+**********************************************************************
+Failed example:
+    0.1 + 0.2
+Expected:
+    0.3
+Got:
+    0.30000000000000004
+```
+
+1. **Ponto flutuante** (@sec-cap010): use `round(...)`, uma comparação booleana, ou valores que tenham representação exata.
+2. **Ordem de `set`** varia entre execuções: use `sorted(...)`.
+3. **Endereço de objeto e caminho absoluto** mudam sempre: use a diretiva `# doctest: +ELLIPSIS` e `0x...` no lugar do endereço.
+4. **Espaço em branco** conta. Uma linha de saída vazia encerra o exemplo — para uma saída que contém linha em branco, use `<BLANKLINE>`.
+5. **Barra invertida na *docstring* é interpretada pelo Python antes do `doctest` ver.** Um exemplo com `print("a\n\nb")` numa *docstring* comum vira um `print("a` seguido de quebras de linha reais, e o `doctest` reporta `SyntaxError: unterminated string literal` — um erro que não tem relação aparente com o que você escreveu. A correção é a ***docstring* crua**, `r"""..."""`, e a regra prática é usá-la sempre que houver `\` em qualquer lugar do texto.
+
+```python
+def com_vazia():
+    r"""
+    >>> print("a\n\nb")
+    a
+    <BLANKLINE>
+    b
+    """
+```
+
+Com o `r`, passa. Sem ele, falha com um erro de sintaxe.
+
+As diretivas resolvem os casos que não dá para evitar:
+
+```python
+    >>> object()  # doctest: +ELLIPSIS
+    <object object at 0x...>
+
+    >>> import pathlib; str(pathlib.Path("a") / "b")  # doctest: +SKIP
+    'a/b'
+```
+
+Com `+ELLIPSIS`, o exemplo passa. O `+SKIP` documenta sem executar — a saída aqui depende do sistema operacional, e o exemplo existe para o leitor, não para o CI.
+
+E a regra que vem de tudo isso: **doctest é para exemplo didático, não para suíte de testes.** Um exemplo de três linhas que mostra o uso típico é perfeito; testar oito casos de fronteira em *docstring* produz uma *docstring* ilegível e um teste ruim. As fronteiras vão para `parametrize` (@sec-cap071).
+
+## Gerando a referência
+
+::: {#fig-pipeline-docs}
+```{.tikz}
+%%| filename: pipeline-docs
+%%| alt: Uma docstring alimentando help, doctest e o gerador de documentacao
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=3.2cm,minimum height=1.25cm,font=\scriptsize},
+  src/.style={draw,rounded corners,align=center,text width=3.4cm,minimum height=2.0cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.2,-4.4) rectangle (14.6,3.4);
+
+  \node[src,fill=manualgray!20] (doc) at (0,0)
+    {\textbf{docstring}\\[3pt]\scriptsize resumo\\\scriptsize contrato\\\scriptsize exemplo \texttt{>>>}};
+
+  \node[bx,fill=manualblue!20]   (help) at (5.6,2.1)  {\texttt{help()} e editor\\\scriptsize le \texttt{\_\_doc\_\_} direto};
+  \node[bx,fill=manualred!18]    (dt)   at (5.6,0)    {\texttt{doctest}\\\scriptsize executa os \texttt{>>>}};
+  \node[bx,fill=manualyellow!30] (sx)   at (5.6,-2.1) {\texttt{sphinx.ext.autodoc}\\\scriptsize importa e extrai};
+
+  \node[bx,fill=manualgreen!20]  (ide)  at (11.0,2.1)  {dica na hora\\\scriptsize sem sair do editor};
+  \node[bx,fill=manualgreen!20]  (ci)   at (11.0,0)    {CI vermelho\\\scriptsize se o exemplo mentir};
+  \node[bx,fill=manualgreen!20]  (html) at (11.0,-2.1) {site HTML/PDF\\\scriptsize referencia navegavel};
+
+  \draw[->,>=stealth,thick] (doc) -- (help);
+  \draw[->,>=stealth,thick] (doc) -- (dt);
+  \draw[->,>=stealth,thick] (doc) -- (sx);
+  \draw[->,>=stealth,thick] (help) -- (ide);
+  \draw[->,>=stealth,thick] (dt) -- (ci);
+  \draw[->,>=stealth,thick] (sx) -- (html);
+
+  \node[nt,anchor=north,text width=13.6cm] at (5.6,-3.0)
+    {uma fonte, tres destinos: por isso a docstring e o unico lugar onde a documentacao de referencia deve morar};
+\end{tikzpicture}
+```
+A mesma *docstring* alimenta o `help()`, o CI e o site — e por isso ela não pode ser duplicada num arquivo à parte.
+:::
+
+### Sphinx
+
+O **Sphinx** é o gerador que documenta o próprio Python. Um projeto mínimo:
+
+```bash
+pip install sphinx
+mkdir docs
+```
+
+`docs/conf.py`:
+
+```python
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(".."))
+
+project = "Coletor"
+extensions = [
+    "sphinx.ext.autodoc",     # extrai docstrings do codigo
+    "sphinx.ext.napoleon",    # entende os estilos Google e NumPy
+    "sphinx.ext.doctest",     # roda os exemplos
+    "sphinx.ext.viewcode",    # link para o fonte
+]
+html_theme = "alabaster"
+autodoc_typehints = "description"
+```
+
+`docs/index.rst`:
+
+```rst
+Coletor
+=======
+
+.. automodule:: estacao
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+```bash
+sphinx-build -b html docs docs/_build
+```
+
+```text
+build succeeded.
+
+The HTML pages are in docs\_build.
+```
+
+Quatro extensões fazem o trabalho todo. **`autodoc`** é a essencial: ele **importa** o módulo e lê os objetos, o que significa que o código precisa importar sem efeito colateral — um `print` no nível do módulo aparece na saída do build, e uma conexão de banco aberta no import faz a documentação depender do banco. **`napoleon`** traduz Google e NumPy para o dialeto interno; sem ela, um bloco `Args:` sai como texto corrido. E `autodoc_typehints = "description"` move as anotações da assinatura para a descrição dos parâmetros, o que evita assinaturas ilegíveis quando os tipos são compostos.
+
+### A armadilha do `sphinx.ext.doctest`
+
+Rodar os exemplos pelo Sphinx **não** é a mesma coisa que rodá-los pelo `doctest` ou pelo pytest:
+
+```bash
+sphinx-build -b doctest docs docs/_doctest
+```
+
+```text
+6 tests in 1 item.
+0 passed and 6 failed.
+```
+
+Seis passavam há dois parágrafos. O motivo está no relatório:
+
+```text
+Failed example:
+    celsius_para_fahrenheit(0.0)
+Exception raised:
+    NameError: name 'celsius_para_fahrenheit' is not defined
+```
+
+O `doctest` do Python executa os exemplos **no espaço de nomes do módulo**, onde a função existe. O *builder* do Sphinx os executa num espaço de nomes do documento, que começa vazio. A correção é declarar o preparo no `.rst`:
+
+```rst
+.. testsetup:: *
+
+   from estacao import *
+```
+
+Vale conhecer o caso porque o sintoma — `NameError` em exemplos que passam em toda outra ferramenta — não sugere a causa. Na prática, a recomendação é rodar doctests por **`pytest --doctest-modules`** e deixar o Sphinx só gerando o site.
+
+### MkDocs, a alternativa
+
+Sphinx usa reStructuredText por padrão, que é mais poderoso e menos familiar que Markdown. Para projeto novo, a combinação **MkDocs + Material + mkdocstrings** escreve tudo em Markdown, gera o mesmo tipo de referência a partir das *docstrings*, e tem uma curva de entrada bem menor. Sphinx continua ganhando em documentação grande, com internacionalização, saída em PDF e referências cruzadas entre projetos (`intersphinx`) — que é exatamente o caso do próprio CPython. Quem quiser Markdown *dentro* do Sphinx tem a extensão `myst-parser`.
+
+## Documentação não é só referência
+
+Referência gerada de *docstring* responde "o que faz a função `validar`". Ela não responde "como começo", "como faço para X" nem "por que isso funciona assim". O modelo **Diátaxis**, adotado pela documentação oficial do Python, separa quatro produtos com propósitos diferentes:
+
+::: {#fig-diataxis}
+```{.tikz}
+%%| filename: diataxis
+%%| alt: Os quatro tipos de documentacao do modelo Diataxis
+\begin{tikzpicture}[
+  qd/.style={draw,rounded corners,align=left,text width=5.6cm,minimum height=2.4cm,font=\scriptsize},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-3.0,-4.2) rectangle (12.4,4.4);
+
+  \node[qd,fill=manualgreen!18] (tut) at (2.2,2.1)
+    {\textbf{Tutorial}\\\textit{\scriptsize orientado a aprendizado}\\[3pt]"Seu primeiro coletor em 10 min"\\passo a passo que sempre funciona};
+  \node[qd,fill=manualblue!18] (how) at (8.6,2.1)
+    {\textbf{Guia pratico}\\\textit{\scriptsize orientado a tarefa}\\[3pt]"Como exportar para CSV"\\receita para quem ja sabe o basico};
+  \node[qd,fill=manualyellow!30] (ref) at (2.2,-1.3)
+    {\textbf{Referencia}\\\textit{\scriptsize orientada a informacao}\\[3pt]assinatura, parametros, excecoes\\\textbf{gerada das docstrings}};
+  \node[qd,fill=manualred!15] (exp) at (8.6,-1.3)
+    {\textbf{Explicacao}\\\textit{\scriptsize orientada a entendimento}\\[3pt]"Por que a faixa vai ate -90"\\contexto e decisoes de projeto};
+
+  \node[nt,text width=2.6cm,rotate=90] at (-1.9,2.1) {enquanto\\se estuda};
+  \node[nt,text width=2.6cm,rotate=90] at (-1.9,-1.3) {enquanto\\se trabalha};
+
+  \node[nt,anchor=north,text width=13.0cm] at (5.4,-2.9)
+    {so o quadrante inferior esquerdo e automatizavel --- os outros tres alguem precisa escrever};
+\end{tikzpicture}
+```
+Os quatro produtos do modelo Diátaxis. Confundi-los é a causa mais comum de documentação que ninguém consegue usar.
+:::
+
+O erro clássico é escrever apenas referência e chamar de documentação. A pessoa que chega ao seu projeto precisa de um **tutorial** que funcione do começo ao fim sem escolhas; quem já usa precisa de **guias práticos** para tarefas concretas; e as decisões de projeto — por que a faixa vai até -90, por que o formato de configuração é TOML — só cabem em **explicação**.
+
+Na raiz do repositório, o mínimo aceitável:
+
+- **`README.md`** — o que é, para que serve, como instalar, um exemplo que funciona. É a única página que a maioria vai ler.
+- **`CHANGELOG.md`** — o que mudou em cada versão, com atenção especial ao que quebrou.
+- **`CONTRIBUTING.md`** — como rodar os testes e abrir um PR, se você aceita contribuição.
+
+## 🐍 Jeito Pythônico
+
+**Docstring é a fonte única da referência.** Duplicar a assinatura num arquivo `.md` à parte garante que os dois vão divergir. A referência se **gera**; o que se escreve à mão é tutorial, guia e explicação.
+
+**Documente o contrato, não a implementação, e não repita a assinatura.** Com anotações de tipo, `Args:` descreve significado e unidade ("temperatura em graus Celsius"), não `(float)`. O que a assinatura não diz — o que acontece com entrada vazia, qual exceção sobe, se o argumento é modificado no lugar — é exatamente o que a *docstring* deve dizer.
+
+**Todo exemplo em *docstring* é um doctest, e roda no CI.** `--doctest-modules` no `addopts` custa uma linha e é a única defesa real contra documentação obsoleta. Sem isso, seus exemplos são ficção testada por ninguém.
+
+**Um estilo por projeto.** Google é a escolha razoável hoje: mais legível no código-fonte e bem suportado por `napoleon` e `mkdocstrings`. NumPy se o ecossistema ao redor for científico. O que não funciona é misturar.
+
+**Não documente o óbvio.** `"""Retorna o nome."""` num método `nome()` é ruído que ninguém lê e todo mundo tem de rolar. Módulo, classe e função pública merecem *docstring*; um auxiliar privado de três linhas com nome bom não merece.
+
+**O `README` é a única página garantida.** Ele precisa ter, na primeira tela, o que o projeto faz e um exemplo que roda copiado e colado. Um `README` que começa com o histórico do projeto e a lista de patrocinadores perdeu o leitor antes da instalação.
+
+## 🧪 Laboratório
+
+Você vai documentar um módulo, transformar os exemplos em testes que rodam no CI, e gerar um site de referência.
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-docs && cd lab-docs
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install pytest sphinx
+```
+
+**Passo 2 — o módulo sem documentação.** Crie `estacao.py` com `celsius_para_fahrenheit`, `validar` e `resumir` (as três do capítulo), **sem nenhuma *docstring***. Abra o REPL e rode `help(estacao.validar)`: você vê a assinatura e nada mais. Guarde essa impressão — é o que outra pessoa encontra.
+
+**Passo 3 — *docstring* de módulo e de função.** Acrescente uma *docstring* de módulo na primeira linha do arquivo e uma de uma linha em cada função. Rode `help(estacao)` e confirme que o texto aparece. Agora faça o teste que ensina a regra da posição, em duas partes. Primeiro ponha um **comentário** antes da *docstring* do módulo e confira `print(estacao.__doc__)`: continua aparecendo, porque comentário não é instrução. Depois ponha uma **atribuição** (`VERSAO = "1.0"`) antes dela:
+
+```text
+None
+```
+
+Só a segunda quebra. A distinção importa porque a versão realista do defeito é um `import` no topo do arquivo, acima da *docstring*.
+
+**Passo 4 — o contrato completo, no estilo Google.** Expanda `validar` com `Args:`, `Returns:` e `Raises:`. Resista a escrever o tipo em `Args:` — ele já está na assinatura.
+
+**Passo 5 — exemplos que rodam.** Acrescente três exemplos `>>>` a `celsius_para_fahrenheit` e rode:
+
+```bash
+python -m doctest estacao.py -v
+```
+
+```text
+6 tests in 5 items.
+6 passed.
+Test passed.
+```
+
+Agora **quebre a função de propósito** (troque `9 / 5` por `9 / 4`) e rode de novo sem `-v`:
+
+```text
+Failed example:
+    celsius_para_fahrenheit(100.0)
+Expected:
+    212.0
+Got:
+    257.0
+--
+Failed example:
+    celsius_para_fahrenheit(-29.8)
+Expected:
+    -21.64
+Got:
+    -35.05
+```
+
+Cada exemplo que passou a mentir é apontado com o valor esperado e o obtido. Desfaça.
+
+**Passo 6 — as armadilhas, uma a uma.** Escreva cinco funções cuja *docstring* contenha, respectivamente: `0.1 + 0.2` esperando `0.3`; um `set` de três strings; um `object()` com endereço; uma saída com linha em branco no meio; e um exemplo com `\n` dentro de uma string. Rode `python -m doctest`.
+
+Repare que a quinta falha com `SyntaxError: unterminated string literal`, e não com uma diferença de saída — é a *docstring* comum interpretando o `\n` antes do `doctest` ler. Conserte cada uma pelo caminho certo — `round`, `sorted`, `+ELLIPSIS` com `0x...`, `<BLANKLINE>` e `r"""` — e confirme o silêncio.
+
+**Passo 7 — doctest na suíte.** Acrescente ao `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+addopts = "-ra --doctest-modules"
+```
+
+Rode `pytest`. Os doctests aparecem como testes normais. **Este é o passo que importa**: a partir daqui, um exemplo desatualizado derruba o CI.
+
+**Passo 8 — o site de referência.** Monte `docs/conf.py` e `docs/index.rst` como no capítulo e rode:
+
+```bash
+sphinx-build -b html docs docs/_build
+```
+
+```text
+build succeeded.
+```
+
+Abra `docs/_build/index.html`. Compare com o `help()` do passo 2: mesma fonte, saída navegável, com links para o código.
+
+**Passo 9 — a armadilha do builder de doctest.** Rode `sphinx-build -b doctest docs docs/_doctest` e leia `docs/_doctest/output.txt`:
+
+```text
+NameError: name 'celsius_para_fahrenheit' is not defined
+```
+
+Os mesmos exemplos que o pytest aprovou. Conserte acrescentando ao `index.rst`:
+
+```rst
+.. testsetup:: *
+
+   from estacao import *
+```
+
+Rode outra vez e confirme os seis passando. E então decida conscientemente: manter os dois caminhos, ou rodar doctest só pelo pytest (o mais comum) e deixar o Sphinx gerando o site.
+
+**Passo 10 — o que nenhuma ferramenta gera.** Escreva um `README.md` com quatro seções: o que o projeto faz em uma frase, como instalar, um exemplo que roda copiado e colado, e um link para a referência. Depois responda por escrito, em duas linhas, **por que a faixa de temperatura vai de -90 a 60** — essa é a "explicação" do Diátaxis, e é a única coisa deste capítulo que nenhuma ferramenta jamais vai gerar por você.
+
+## Resumo
+
+- Uma ***docstring*** é a primeira **instrução** do módulo, classe ou função. Comentário antes não atrapalha; uma atribuição ou um `import` antes dela fazem `__doc__` virar `None`. A PEP 257 pede aspas triplas sempre e uma primeira linha imperativa e curta.
+- **Documente o contrato, não a implementação**, e não repita o que a assinatura já diz: com anotações de tipo, `Args:` carrega significado e unidade, não o tipo.
+- Três dialetos (**Google**, NumPy, reST); Google é o padrão de fato hoje, `sphinx.ext.napoleon` entende os três, e misturá-los no mesmo projeto quebra o gerador em silêncio.
+- **`doctest` é a única defesa contra documentação obsoleta**: `pytest --doctest-modules` no `addopts` faz todo exemplo da documentação rodar no CI. Cuidado com as cinco armadilhas — ponto flutuante, ordem de `set`, endereço de objeto, espaço em branco e barra invertida — resolvidas com `round`, `sorted`, `+ELLIPSIS`, `<BLANKLINE>` e a *docstring* crua `r"""`.
+- **Sphinx** com `autodoc` + `napoleon` gera a referência a partir do código; `autodoc` **importa** o módulo, então import com efeito colateral quebra o build. O *builder* `-b doctest` roda os exemplos num espaço de nomes vazio e exige `.. testsetup::` — motivo pelo qual a prática comum é deixar os doctests com o pytest.
+- **MkDocs + mkdocstrings** é a alternativa em Markdown, mais simples para projeto novo; Sphinx ganha em documentação grande, PDF e `intersphinx`.
+- Referência é **um** dos quatro produtos do Diátaxis, e o único automatizável. Tutorial, guia prático e explicação alguém precisa escrever — e o `README` é a única página que a maioria vai ler.
