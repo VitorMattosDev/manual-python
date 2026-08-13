@@ -129,7 +129,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 075** - subprocess: chamando programas externos com segurança - `vol12/cap075-subprocess-chamando-programas-externos-com.qmd`
 - [x] **cap 076** - Interfaces de linha de comando com argparse, Click e Typer - `vol12/cap076-interfaces-de-linha-de-comando-com-argparse.qmd`
 - [x] **cap 077** - Redes com sockets: TCP, UDP e o modelo cliente-servidor - `vol12/cap077-redes-com-sockets-tcp-udp-e-o-modelo-cliente.qmd`
-- [ ] **cap 078** - Requisições HTTP com requests e httpx - `vol12/cap078-requisicoes-http-com-requests-e-httpx.qmd`
+- [x] **cap 078** - Requisições HTTP com requests e httpx - `vol12/cap078-requisicoes-http-com-requests-e-httpx.qmd`
 - [ ] **cap 079** - Raspagem de dados responsável: HTML, seletores e limites éticos - `vol12/cap079-raspagem-de-dados-responsavel-html-seletores.qmd`
 
 ### Volume 13 — Dados, Análise e Visualização
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (77 concluidos).
+**Total:** 104 capitulos em 16 volumes (78 concluidos).
 

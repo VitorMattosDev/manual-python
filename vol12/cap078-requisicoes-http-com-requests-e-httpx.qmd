@@ -1,3 +1,370 @@
 # Requisições HTTP com requests e httpx {#sec-cap078}
 
-*(em elaboracao)*
+O capítulo anterior mostrou o socket cru: abrir, enquadrar, decodificar, tratar o fim da conexão. Para falar com uma API, ninguém faz isso — usa-se HTTP, e HTTP em Python significa `requests` ou `httpx`.
+
+A biblioteca padrão tem `urllib.request`, e ela funciona. Mas ela exige montar `Request`, tratar `HTTPError` que também é um objeto de resposta, codificar parâmetros à mão e escrever cinco linhas para o que deveria ser uma. Não é por acaso que `requests` é uma das bibliotecas Python mais instaladas do mundo.
+
+Este capítulo usa **`requests` 2.34** e **`httpx` 0.28**, e todos os exemplos rodam contra um servidor HTTP local escrito com `http.server` — o que os torna reproduzíveis, offline e seguros.
+
+## O básico
+
+```bash
+pip install requests httpx
+```
+
+```python
+import requests
+
+r = requests.get(f"{BASE}/leituras", timeout=5)
+print("status  :", r.status_code)
+print("ok?     :", r.ok)
+print("tipo    :", r.headers["Content-Type"])
+dados = r.json()
+print("estacao :", dados["estacao"])
+```
+
+```text
+status  : 200
+ok?     : True
+tipo    : application/json
+servidor: coletor-teste/1.0
+estacao : onu-00043
+n       : 2
+```
+
+O objeto `Response` traz o que interessa: `status_code`, `headers` (um dicionário insensível a maiúsculas), `text` para o corpo decodificado, `content` para os bytes, `json()` para desserializar, e `url` com o endereço final.
+
+## A armadilha número um: erro de HTTP não é exceção
+
+```python
+r = requests.get(f"{BASE}/ausente", timeout=5)
+print("status_code:", r.status_code)
+print("levantou?  : nao")
+print("r.ok       :", r.ok)
+```
+
+```text
+status_code: 404
+levantou?  : nao
+r.ok       : False
+```
+
+**O 404 não levantou nada.** Para `requests`, uma resposta 404 é uma requisição bem-sucedida que devolveu 404 — a exceção fica reservada para falha de rede (DNS, conexão recusada, tempo esgotado).
+
+A consequência é o defeito mais comum de todo código HTTP: um script chama `r.json()` numa resposta 500 cujo corpo é uma página de erro em HTML, e o traceback fala de JSON inválido, apontando para o lugar errado.
+
+```python
+r.raise_for_status()
+```
+
+```text
+raise_for_status -> HTTPError | 404 Client Error: Not Found
+```
+
+**`raise_for_status()` depois de toda requisição** cujo sucesso você espera. Ele não faz nada em 2xx e levanta `HTTPError` em 4xx e 5xx.
+
+## Tempo limite: obrigatório
+
+```python
+requests.get(f"{BASE}/lento", timeout=1.0)
+```
+
+```text
+requests.Timeout: ReadTimeout
+```
+
+Sem `timeout`, o `requests` espera **para sempre**. Um servidor que aceita a conexão e nunca responde pendura sua *thread* indefinidamente, e num serviço isso esgota o pool e derruba tudo. Este é o padrão mais perigoso da biblioteca, porque o código sem `timeout` funciona perfeitamente até o dia em que não funciona.
+
+O valor pode ser uma tupla `(conexao, leitura)`: `timeout=(3.05, 27)` dá três segundos para estabelecer e vinte e sete para receber. É a forma de distinguir "servidor fora do ar" de "servidor lento".
+
+## Redirecionamentos, POST e cabeçalhos
+
+```python
+r = requests.get(f"{BASE}/antigo", timeout=5)
+print("status final :", r.status_code)
+print("url final    :", r.url)
+print("historico    :", [h.status_code for h in r.history])
+
+r = requests.get(f"{BASE}/antigo", timeout=5, allow_redirects=False)
+print("sem seguir   :", r.status_code, "->", r.headers["Location"])
+```
+
+```text
+status final : 200
+url final    : <base>/leituras
+historico    : [301]
+sem seguir   : 301 -> /leituras
+```
+
+O `requests` segue redirecionamentos por padrão e guarda o caminho em `r.history`. `r.url` é o endereço **final**, não o que você pediu — detalhe que importa ao registrar o que aconteceu.
+
+```python
+r = requests.post(f"{BASE}/leituras", json={"estacao": "onu-00051", "temperatura": -31.2}, timeout=5)
+```
+
+```text
+status  : 201
+resposta: {'recebido': {'estacao': 'onu-00051', 'temperatura': -31.2}, 'id': 7}
+enviado : application/json
+```
+
+Três formas de mandar corpo, e confundi-las é fonte de erro 400: **`json=`** serializa e define `Content-Type: application/json`; **`data=`** com dicionário envia formulário (`application/x-www-form-urlencoded`); **`data=`** com string ou bytes envia cru, sem tipo definido. Para parâmetros de consulta, `params={"estacao": "onu-00043"}` monta e escapa a *query string* — nunca por concatenação, pelo mesmo motivo do @sec-cap075.
+
+## Sessão: a diferença que quase ninguém faz
+
+```python
+s = requests.Session()
+s.headers["Authorization"] = "Bearer segredo-123"
+print("sem token :", requests.get(f"{BASE}/protegido", timeout=5).status_code)
+print("com token :", s.get(f"{BASE}/protegido", timeout=5).status_code)
+s.close()
+```
+
+```text
+sem token : 401
+com token : 200
+```
+
+A `Session` faz duas coisas. A visível é guardar cabeçalhos e *cookies* entre requisições. A invisível, e mais importante, é **reaproveitar a conexão TCP**: dez chamadas a `requests.get` abrem e fecham dez conexões, com aperto de mão TCP e TLS a cada uma; dez chamadas numa `Session` usam uma conexão só.
+
+Para mais de uma requisição ao mesmo servidor, sessão. Sempre.
+
+## `httpx`: a mesma API, mais recursos
+
+```python
+import httpx
+
+r = httpx.get(f"{BASE}/leituras", timeout=5)
+print("status:", r.status_code, "| estacao:", r.json()["estacao"])
+print("http  :", r.http_version)
+
+with httpx.Client(base_url=BASE, timeout=5, headers={"User-Agent": "coletor/1.0"}) as c:
+    print("client:", c.get("/leituras").status_code, c.get("/ausente").status_code)
+```
+
+```text
+status: 200 | estacao: onu-00043
+http  : HTTP/1.1
+client: 200 404
+```
+
+A API é deliberadamente quase idêntica à do `requests`, e migrar costuma ser trocar o import. O que o `httpx` acrescenta:
+
+::: {#fig-requests-httpx}
+```{.tikz}
+%%| filename: requests-httpx
+%%| alt: Comparacao entre requests e httpx
+\begin{tikzpicture}[
+  cx/.style={draw,rounded corners,align=left,text width=5.6cm,minimum height=4.6cm,font=\scriptsize},
+  tt/.style={font=\small\bfseries,align=center},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-1.4,-4.6) rectangle (13.4,3.6);
+
+  \node[tt] at (2.6,3.1)  {requests 2.34};
+  \node[tt] at (9.6,3.1)  {httpx 0.28};
+
+  \node[cx,fill=manualblue!16] at (2.6,0.4)
+    {\textbf{o padrao de fato}\\[4pt]
+     + API que todo mundo conhece\\
+     + estabilissima, onipresente\\
+     + ecossistema enorme\\[5pt]
+     -- so sincrono\\
+     -- so HTTP/1.1\\
+     -- \texttt{timeout} nao tem padrao\\[5pt]
+     \textit{script, codigo existente, quando a dependencia ja esta la}};
+
+  \node[cx,fill=manualgreen!16] at (9.6,0.4)
+    {\textbf{a alternativa moderna}\\[4pt]
+     + \texttt{sync} e \texttt{async} na mesma API\\
+     + HTTP/2 (extra \texttt{[http2]})\\
+     + \texttt{timeout} padrao de 5 s\\
+     + \texttt{base\_url} no cliente\\
+     + \texttt{MockTransport} para teste\\[5pt]
+     -- menos difundida\\[5pt]
+     \textit{projeto novo, especialmente se houver \texttt{async}}};
+
+  \node[nt,anchor=north,text width=12.6cm] at (6.1,-2.2)
+    {\texttt{raise\_for\_status()}, \texttt{timeout=} e \texttt{Session}/\texttt{Client} valem identicamente nas duas --- os habitos migram junto};
+\end{tikzpicture}
+```
+As duas bibliotecas compartilham a API; a escolha é sobre `async`, HTTP/2 e o que o projeto já usa.
+:::
+
+O ponto mais prático: **o `httpx` tem tempo limite padrão de 5 segundos**, enquanto o `requests` espera para sempre. Isso significa que o erro mais perigoso do `requests` simplesmente não existe no `httpx` por omissão.
+
+E o `raise_for_status` funciona igual, com exceção própria:
+
+```text
+status: 500
+httpx.HTTPStatusError: Server error '500 Internal Server Error' for url '...'
+```
+
+## Padrões que aparecem em toda integração
+
+### Paginação
+
+```python
+proxima = "/pagina?n=1"
+todos = []
+with httpx.Client(base_url=BASE, timeout=5) as c:
+    while proxima:
+        d = c.get(proxima).json()
+        todos.extend(d["itens"])
+        proxima = d["proxima"]
+```
+
+```text
+paginas percorridas ate o fim, itens: ['item-1-0', 'item-1-1', 'item-2-0', 'item-2-1', 'item-3-0', 'item-3-1']
+```
+
+O laço `while proxima` é o idioma: a API diz qual é a próxima página e devolve `None` no fim. Duas cautelas em produção — **limite o número de páginas** para não girar para sempre se a API tiver um defeito de ciclo, e escreva isso como um **gerador** (@sec-cap050), para não carregar cem mil itens na memória antes de processar o primeiro.
+
+### Repetição com recuo
+
+Serviço remoto falha por motivos temporários. Este servidor de teste devolve 503 nas duas primeiras chamadas e 200 na terceira:
+
+```text
+tentativa 1: 503
+tentativa 2: 503
+tentativa 3: 200
+  corpo: {"ok": true, "tentativas": 3}
+```
+
+As regras de uma repetição que não piora as coisas:
+
+- **Só repita o que é seguro repetir.** `GET`, `PUT` e `DELETE` são idempotentes; um `POST` que cria um recurso pode criar dois. Para `POST`, o servidor precisa aceitar uma chave de idempotência.
+- **Só repita erro temporário**: 429, 502, 503, 504 e falhas de conexão. Repetir um 400 ou um 401 vai falhar igual, mais rápido.
+- **Recuo exponencial com ruído.** `1s, 2s, 4s, 8s` mais um valor aleatório, para que mil clientes não voltem todos no mesmo instante.
+- **Respeite `Retry-After`** quando o servidor mandar.
+
+Na prática, use `tenacity` ou o `Retry` do `urllib3` em vez de escrever o laço:
+
+```python
+from urllib3.util import Retry
+from requests.adapters import HTTPAdapter
+
+politica = Retry(total=5, backoff_factor=0.5,
+                 status_forcelist=[429, 502, 503, 504],
+                 allowed_methods={"GET", "PUT", "DELETE"})
+s = requests.Session()
+s.mount("https://", HTTPAdapter(max_retries=politica))
+```
+
+### Respostas grandes
+
+```python
+with c.stream("GET", "/leituras") as r:
+    total = 0
+    for pedaco in r.iter_bytes(chunk_size=32):
+        total += len(pedaco)
+```
+
+```text
+bytes lidos em pedacos: 150
+```
+
+`r.content` carrega o corpo **inteiro** na memória. Para um CSV de 2 GB, isso é um `MemoryError`. `stream=True` no `requests` (com `iter_content`) ou `client.stream(...)` no `httpx` entregam o corpo em pedaços, e o `with` é obrigatório para liberar a conexão.
+
+## Segurança
+
+- **Verificação de certificado é ligada por padrão. Nunca desligue.** `verify=False` faz o erro sumir e a criptografia deixar de proteger contra intermediário — é como trancar a porta e deixar a chave na fechadura. Certificado interno se resolve com `verify="/caminho/ca.pem"` ou com o pacote `certifi` atualizado.
+- **Segredo não vai no código nem na URL.** Token em *query string* aparece no log do servidor, no histórico do navegador e no cabeçalho `Referer`. Use cabeçalho `Authorization`, e leia o valor de variável de ambiente ou de um cofre (@sec-cap066).
+- **Valide o que voltou.** Uma API que muda de forma faz `d["leituras"][0]["temperatura"]` levantar `KeyError` em produção. `pydantic` (Volume 14) é a ferramenta; enquanto isso, `TypedDict` (@sec-cap068) ao menos documenta a expectativa.
+- **Cuidado com redirecionamento para outro domínio.** O `requests` remove o cabeçalho `Authorization` ao redirecionar para outro *host*, mas não confie nisso ao construir uma URL a partir de entrada do usuário — aí o risco é o servidor ser induzido a chamar um endereço interno.
+
+## Testar código que faz HTTP
+
+Um teste que faz requisição de verdade é lento, falha quando a rede cai e depende de terceiros. As três saídas, em ordem de preferência:
+
+1. **`respx`** (para `httpx`) ou **`responses`** (para `requests`): interceptam as chamadas e devolvem respostas declaradas. É o caminho padrão.
+2. **`httpx.MockTransport`**: nativo, sem dependência extra — você escreve uma função que recebe a requisição e devolve a resposta.
+3. **Servidor local de verdade**, como o deste capítulo. Mais lento e mais fiel; vale para testes de integração, especialmente quando o comportamento sob teste envolve tempo limite, redirecionamento ou repetição — coisas que um dublê simplifica demais.
+
+E, acima de tudo: **isole a chamada HTTP numa função ou classe**. Se `buscar_leituras(cliente, estacao)` recebe o cliente como parâmetro, o teste passa um `httpx.Client` com `MockTransport` e não precisa de `patch` nenhum (@sec-cap071).
+
+## 🐍 Jeito Pythônico
+
+**`timeout=` em toda requisição, sem exceção.** No `requests` a ausência significa "espere para sempre", e esse é o defeito que só aparece em produção, de madrugada. O `httpx` tem padrão de 5 s, o que é um bom motivo para preferi-lo em serviço.
+
+**`raise_for_status()` sempre que o sucesso for esperado.** Sem ele, um 500 vira `JSONDecodeError` três linhas adiante e você depura o parser em vez do servidor.
+
+**`Session`/`Client` para mais de uma requisição.** Reaproveitar a conexão TCP e TLS é a maior diferença de desempenho disponível, e vem de graça. Use `with` para fechar.
+
+**Nunca monte URL por concatenação.** `params=` escapa; a f-string não. Vale para parâmetro de consulta e, sobretudo, para qualquer valor vindo de fora.
+
+**Repita apenas o idempotente, apenas o temporário, com recuo e ruído.** Repetição sem essas três condições transforma um serviço lento em serviço derrubado — e o culpado é o cliente.
+
+**`stream=True` para corpo grande**, sempre com `with`. Carregar tudo em memória funciona no teste com 10 KB e quebra com o arquivo de verdade.
+
+**Não desligue `verify`.** É a única linha deste capítulo que pode transformar um erro chato numa vulnerabilidade real.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente e servidor de teste.**
+
+```bash
+mkdir lab-http && cd lab-http
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install requests httpx pytest
+```
+
+Escreva `servidor_teste.py` com `http.server` expondo cinco rotas: `/leituras` (200 com JSON), `/ausente` (404), `/antigo` (301 para `/leituras`), `/lento` (dorme 3 s) e `/instavel` (503 nas duas primeiras chamadas, 200 depois). Suba com `ThreadingHTTPServer(("127.0.0.1", 0), Handler)` numa *thread* e descubra a porta com `server_address[1]` — a porta 0 do @sec-cap077 aqui também.
+
+**Passo 2 — o GET e o objeto `Response`.** Faça um `GET` em `/leituras` e imprima `status_code`, `headers["Content-Type"]`, `url`, e o resultado de `json()`. Depois imprima `r.text` e `r.content` e observe a diferença entre `str` e `bytes`.
+
+**Passo 3 — o erro que não é erro.** Faça um `GET` em `/ausente`:
+
+```text
+status_code: 404
+levantou?  : nao
+r.ok       : False
+```
+
+Agora chame `r.json()` nessa resposta e depois `r.raise_for_status()`. **Guarde os dois tracebacks lado a lado** — o primeiro é o que você vai ver em produção se esquecer o segundo.
+
+**Passo 4 — o tempo limite.** Faça um `GET` em `/lento` **sem** `timeout` e cronometre: três segundos. Agora com `timeout=1.0`:
+
+```text
+requests.Timeout: ReadTimeout
+```
+
+Depois repita as duas com `httpx` e note que o `httpx` já tem padrão de 5 s.
+
+**Passo 5 — redirecionamento.** `GET` em `/antigo` com e sem `allow_redirects=False`. Confirme `r.history == [301]` no primeiro e `r.headers["Location"]` no segundo.
+
+**Passo 6 — POST e os três corpos.** Mande o mesmo dicionário três vezes para `/leituras`: com `json=`, com `data=` e com `data=json.dumps(...)`. Imprima `r.request.headers["Content-Type"]` em cada uma e o que o servidor recebeu. As três são diferentes, e é isso que produz 400 inexplicável.
+
+**Passo 7 — sessão e conexão reaproveitada.** Faça vinte `requests.get` soltos e cronometre; depois vinte `s.get` numa `Session` e cronometre. Rode contra o servidor local — a diferença aparece mesmo em `localhost`, e num servidor com TLS ela é muito maior.
+
+**Passo 8 — paginação como gerador.** Escreva `def itens(cliente):` que percorre `/pagina?n=1` até `proxima` ser `None` e faz `yield` de cada item. Confirme com `list(itens(c))`:
+
+```text
+['item-1-0', 'item-1-1', 'item-2-0', 'item-2-1', 'item-3-0', 'item-3-1']
+```
+
+Acrescente um limite máximo de páginas e teste que ele interrompe.
+
+**Passo 9 — repetição.** Chame `/instavel` num laço com recuo exponencial, registrando cada tentativa:
+
+```text
+tentativa 1: 503
+tentativa 2: 503
+tentativa 3: 200
+```
+
+Depois refaça com `Retry` do `urllib3` montado numa `Session` e confirme que uma única chamada agora tem sucesso.
+
+**Passo 10 — testar sem rede.** Extraia `buscar_leituras(cliente, estacao)` recebendo o cliente como parâmetro. Escreva um teste com `httpx.MockTransport` que devolva um JSON fixo, e outro que devolva 500 e verifique que a sua função levanta a exceção certa. Nenhum dos dois abre socket — e é por isso que a função recebe o cliente em vez de criá-lo.
+
+## Resumo
+
+- `requests` e `httpx` compartilham quase a mesma API; `httpx` acrescenta `async`, HTTP/2, `base_url` no cliente e **tempo limite padrão de 5 s**, enquanto o `requests` espera para sempre.
+- **Status 4xx e 5xx não levantam exceção**: `requests` só falha em erro de rede. `raise_for_status()` depois de toda requisição cujo sucesso você espera, ou o 500 vira `JSONDecodeError` em outro lugar.
+- **`timeout=` é obrigatório** no `requests`; a tupla `(conexao, leitura)` separa "fora do ar" de "lento".
+- **`Session`/`Client` reaproveitam a conexão TCP e TLS**, além de guardar cabeçalhos e *cookies* — é a maior diferença de desempenho disponível e vem de graça.
+- `json=` manda JSON, `data=` com dicionário manda formulário, `params=` monta e **escapa** a *query string*; concatenar URL à mão é o mesmo erro de categoria do `shell=True`.
+- Paginação como **gerador** com limite de páginas; repetição **só do idempotente**, **só do temporário**, com recuo exponencial, ruído e respeito ao `Retry-After` — de preferência via `Retry` do `urllib3` ou `tenacity`.
+- Corpo grande é `stream=True` com `with`; segredo vai em cabeçalho, nunca na URL; e **`verify=False` nunca**, porque transforma um erro de certificado numa vulnerabilidade.
+- Para testar, **isole a chamada numa função que recebe o cliente** e use `respx`, `responses` ou `httpx.MockTransport` — servidor local de verdade fica para teste de integração.
