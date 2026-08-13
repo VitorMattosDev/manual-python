@@ -116,7 +116,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 068** - Anotações de tipo: fundamentos e o módulo typing - `vol11/cap068-anotacoes-de-tipo-fundamentos-e-o-modulo.qmd`
 - [x] **cap 069** - Tipagem avançada: genéricos, protocolos e mypy - `vol11/cap069-tipagem-avancada-genericos-protocolos-e-mypy.qmd`
 - [x] **cap 070** - Testes com pytest: fundamentos, asserções e fixtures - `vol11/cap070-testes-com-pytest-fundamentos-assercoes-e.qmd`
-- [ ] **cap 071** - Parametrização, dublês de teste e cobertura - `vol11/cap071-parametrizacao-dubles-de-teste-e-cobertura.qmd`
+- [x] **cap 071** - Parametrização, dublês de teste e cobertura - `vol11/cap071-parametrizacao-dubles-de-teste-e-cobertura.qmd`
 - [ ] **cap 072** - Depuração: pdb, breakpoint e o traceback difícil - `vol11/cap072-depuracao-pdb-breakpoint-e-o-traceback-dificil.qmd`
 - [ ] **cap 073** - Documentação: docstrings, doctest e Sphinx - `vol11/cap073-documentacao-docstrings-doctest-e-sphinx.qmd`
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (70 concluidos).
+**Total:** 104 capitulos em 16 volumes (71 concluidos).
 

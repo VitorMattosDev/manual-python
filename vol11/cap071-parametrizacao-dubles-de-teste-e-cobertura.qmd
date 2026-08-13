@@ -1,3 +1,524 @@
 # Parametrização, dublês de teste e cobertura {#sec-cap071}
 
-*(em elaboracao)*
+O capítulo anterior deixou a suíte do coletor com testes que funcionam. Três problemas aparecem assim que ela cresce.
+
+O primeiro é **repetição**: `classificar` tem quatro faixas, e testar as fronteiras corretamente exige uns oito casos que diferem apenas nos números. Copiar e colar oito vezes produz oito testes que ninguém vai manter.
+
+O segundo é **dependência externa**: `montar_relatorio` chama uma API de previsão do tempo. Um teste que faz requisição de rede é lento, falha quando a rede cai, e polui um serviço de terceiros a cada execução do CI.
+
+O terceiro é **saber o que ainda não foi testado**. A suíte tem cinquenta testes. Quais linhas do código nunca foram executadas por nenhum deles?
+
+Este capítulo resolve os três: `parametrize`, dublês de teste e cobertura — nessa ordem, que também é a ordem de utilidade.
+
+## Parametrização
+
+O decorador `@pytest.mark.parametrize` recebe o nome do parâmetro e a lista de valores, e gera **um teste independente para cada valor**:
+
+```python
+import pytest
+from coletor import LeituraInvalidaError, validar
+
+
+@pytest.mark.parametrize("valor", [-90.0, -29.8, 0.0, 60.0])
+def test_aceita_dentro_da_faixa(valor):
+    assert validar(valor) == valor
+
+
+@pytest.mark.parametrize("valor", [-90.1, 60.1, 1000.0])
+def test_recusa_fora_da_faixa(valor):
+    with pytest.raises(LeituraInvalidaError):
+        validar(valor)
+```
+
+```text
+tests/test_param.py::test_aceita_dentro_da_faixa[-90.0] PASSED           [  7%]
+tests/test_param.py::test_aceita_dentro_da_faixa[-29.8] PASSED           [ 15%]
+tests/test_param.py::test_aceita_dentro_da_faixa[0.0] PASSED             [ 23%]
+tests/test_param.py::test_aceita_dentro_da_faixa[60.0] PASSED            [ 30%]
+tests/test_param.py::test_recusa_fora_da_faixa[-90.1] PASSED             [ 38%]
+tests/test_param.py::test_recusa_fora_da_faixa[60.1] PASSED              [ 46%]
+tests/test_param.py::test_recusa_fora_da_faixa[1000.0] PASSED            [ 53%]
+```
+
+Sete testes de duas funções. E são **testes independentes de verdade**: cada um aparece com nome próprio, falha sozinho, e pode ser executado isoladamente com `pytest "tests/test_param.py::test_aceita_dentro_da_faixa[-90.0]"`. Isso é diferente de um laço `for` dentro de um único teste, que para na primeira falha e esconde as demais.
+
+### Vários parâmetros por caso
+
+```python
+@pytest.mark.parametrize(
+    ("temperatura", "esperado"),
+    [
+        (-40.0, "extremo"),
+        (-30.0, "frio"),
+        (-0.1, "frio"),
+        (0.0, "ameno"),
+        (29.9, "ameno"),
+        (30.0, "quente"),
+    ],
+)
+def test_classificar(temperatura, esperado):
+    assert classificar(temperatura) == esperado
+```
+
+Repare no conteúdo da tabela, que é o ponto pedagógico: os valores escolhidos são **as fronteiras**, não amostras aleatórias. `-30.0` e `-0.1`, `0.0` e `29.9`, `30.0`. É exatamente onde `<` e `<=` se confundem, e é onde o defeito mora. Uma tabela com `-40`, `-10`, `10` e `40` testa quatro vezes o meio de cada faixa e não descobre nada.
+
+### Identificadores legíveis
+
+O pytest gera o rótulo entre colchetes a partir dos valores, o que funciona para números e strings curtas. Para casos com significado, `pytest.param` com `id=` é melhor:
+
+```python
+@pytest.mark.parametrize(
+    ("temperatura", "esperado"),
+    [
+        pytest.param(-40.0, "extremo", id="polo-sul"),
+        pytest.param(-0.1, "frio", id="quase-zero"),
+        pytest.param(45.0, "quente", id="deserto"),
+        pytest.param(30.0, "ameno", id="fronteira-quente-errada"),
+    ],
+)
+def test_classificar(temperatura, esperado):
+    assert classificar(temperatura) == esperado
+```
+
+```text
+E       AssertionError: assert 'quente' == 'ameno'
+E
+E         - ameno
+E         + quente
+
+FAILED tests/test_ids.py::test_classificar[fronteira-quente-errada]
+```
+
+O nome do caso vai para o relatório. Num CI com trezentos testes, `test_classificar[fronteira-quente-errada]` diz o que quebrou; `test_classificar[30.0-ameno]` obriga a abrir o arquivo.
+
+`pytest.param` também aceita `marks=`, o que permite marcar **um caso** como `xfail` sem tocar nos outros:
+
+```python
+pytest.param(30.0, "ameno", id="fronteira", marks=pytest.mark.xfail(reason="issue 42")),
+```
+
+### Empilhando decoradores: produto cartesiano
+
+```python
+@pytest.mark.parametrize("unidade", ["C", "F"])
+@pytest.mark.parametrize("precisao", [1, 2])
+def test_produto_cartesiano(unidade, precisao): ...
+```
+
+Dois decoradores geram **quatro** testes, uma para cada combinação. É poderoso e cresce rápido: três decoradores de cinco valores são 125 testes. Empilhe quando as dimensões forem de fato independentes; quando não forem, uma única lista de tuplas é mais honesta e mais rápida.
+
+## Dublês de teste
+
+Um **dublê** é qualquer objeto que substitui uma dependência real durante o teste. A palavra "mock" virou sinônimo de todos eles no uso corrente, mas as categorias têm nomes distintos e a distinção é útil:
+
+| Dublê | O que faz | Quando usar |
+|---|---|---|
+| *Dummy* | é passado e nunca usado | preencher um parâmetro obrigatório |
+| *Stub* | devolve resposta fixa | isolar código de uma resposta conhecida |
+| *Spy* | devolve resposta e **registra as chamadas** | verificar que algo foi chamado |
+| *Mock* | registra chamadas e **falha se o esperado não ocorrer** | verificar interação obrigatória |
+| *Fake* | implementação real, mas simplificada | SQLite no lugar do Postgres |
+
+Na biblioteca padrão, `unittest.mock` cobre os quatro primeiros com a mesma classe. O quinto você escreve à mão.
+
+### `Mock`: o objeto que aceita tudo
+
+```python
+from unittest.mock import Mock
+
+m = Mock()
+print(m.metodo_que_nao_existe)
+print(m.qualquer_coisa(1, 2, 3))
+```
+
+```text
+<Mock name='mock.metodo_que_nao_existe' id='2249368677952'>
+<Mock name='mock.qualquer_coisa()' id='2249368678624'>
+```
+
+(O `id` muda a cada execução.) Um `Mock` responde a **qualquer** atributo e **qualquer** chamada, devolvendo outro `Mock`. É o que o torna conveniente e perigoso ao mesmo tempo.
+
+Como espião:
+
+```python
+repo = Mock()
+repo.salvar.return_value = 7
+
+resultado = repo.salvar("onu-00043", -29.8)
+
+print("retorno            :", resultado)
+print("foi chamado?       :", repo.salvar.called)
+print("quantas vezes      :", repo.salvar.call_count)
+print("com que argumentos :", repo.salvar.call_args)
+repo.salvar.assert_called_once_with("onu-00043", -29.8)
+```
+
+```text
+retorno            : 7
+foi chamado?       : True
+quantas vezes      : 1
+com que argumentos : call('onu-00043', -29.8)
+```
+
+E `side_effect` para respostas que variam ou falham:
+
+```python
+falho = Mock(side_effect=[1, 2, ConnectionError("caiu")])
+print(falho(), falho())
+falho()
+```
+
+```text
+1 2
+ConnectionError: caiu
+```
+
+Uma lista em `side_effect` devolve um item por chamada; um elemento que seja uma exceção é levantado. É como se testa reconexão, repetição e degradação sem derrubar nada de verdade.
+
+`MagicMock` é o irmão que também implementa os métodos especiais (@sec-cap048):
+
+```python
+mm = MagicMock()
+mm.__len__.return_value = 3
+print(len(mm))
+len(Mock())
+```
+
+```text
+3
+TypeError: object of type 'Mock' has no len()
+```
+
+### `autospec`: o dublê que respeita a assinatura
+
+Aqui está o maior risco dos dublês. Um `Mock` solto aceita chamadas que o objeto real recusaria:
+
+```python
+solto = Mock()
+print(solto.salvar("so-um-argumento"))
+print(solto.metodo_que_nao_existe())
+```
+
+```text
+<Mock name='mock.salvar()' id='2249368681984'>
+<Mock name='mock.metodo_que_nao_existe()' id='2249369846176'>
+```
+
+Os dois passam. Se o método real exige dois argumentos, ou se ele foi renomeado no mês passado, **o teste continua verde e o código está quebrado**. É a forma mais comum de suíte que aprova código que não funciona.
+
+`create_autospec` constrói o dublê a partir da classe real:
+
+```python
+from unittest.mock import create_autospec
+
+falso = create_autospec(Repositorio, instance=True)
+falso.salvar.return_value = 7
+
+print(falso.salvar("onu-00043", -29.8))
+falso.salvar("onu-00043")            # falta um argumento
+falso.metodo_que_nao_existe()
+```
+
+```text
+7
+TypeError: missing a required argument: 'temperatura'
+AttributeError: Mock object has no attribute 'metodo_que_nao_existe'
+```
+
+Agora o dublê recusa o que o real recusaria. **Use `autospec` por padrão** — `create_autospec`, ou `patch(..., autospec=True)`. O custo é zero e ele transforma uma classe inteira de falsos positivos em erro.
+
+### `patch`: e onde aplicá-lo
+
+`patch` substitui um nome temporariamente. A pergunta difícil é *qual* nome, e a resposta errada é intuitiva.
+
+::: {#fig-onde-aplicar-patch}
+```{.tikz}
+%%| filename: onde-aplicar-patch
+%%| alt: Por que o patch precisa ser aplicado no modulo que usa a funcao
+\begin{tikzpicture}[
+  md/.style={draw,rounded corners,align=left,text width=5.0cm,minimum height=1.9cm,font=\scriptsize\ttfamily},
+  nt/.style={font=\scriptsize,align=center},
+  tg/.style={draw,rounded corners,align=center,text width=5.0cm,minimum height=0.9cm,font=\scriptsize}
+]
+  \path (-1.6,-4.4) rectangle (14.4,3.4);
+
+  \node[md,fill=manualgray!20] (rede) at (1.6,1.5)
+    {\textbf{rede.py}\\[3pt] def buscar\_previsao(e):\\ \ \ ...};
+  \node[md,fill=manualgray!20] (rel) at (8.6,1.5)
+    {\textbf{relatorio.py}\\[3pt] from rede import\\ \ \ \ \ buscar\_previsao\\[3pt] def montar(e):\\ \ \ buscar\_previsao(e)};
+
+  \draw[->,>=stealth,thick,manualgray] (rede.east) -- (rel.west)
+    node[nt,midway,above,text width=1.9cm]{no import,\\o nome e copiado};
+
+  \node[tg,fill=manualred!15] (errado) at (1.6,-1.4) {\texttt{patch("rede.buscar\_previsao")}\\\scriptsize troca so este nome};
+  \node[tg,fill=manualgreen!20] (certo) at (8.6,-1.4) {\texttt{patch("relatorio.buscar\_previsao")}\\\scriptsize troca o nome que roda};
+
+  \draw[->,>=stealth,manualred!80!black] (errado) -- (rede);
+  \draw[->,>=stealth,manualgreen!60!black] (certo) -- (rel);
+
+  \node[nt,anchor=north,text width=13.4cm] at (6.4,-2.6)
+    {\texttt{relatorio} guarda a propria referencia desde o import; trocar o original nao alcanca a copia. Regra: aplique o patch \textbf{onde o nome e procurado}, nao onde ele foi definido.};
+\end{tikzpicture}
+```
+O `from X import f` copia a referência para o módulo que importa — e é essa cópia que precisa ser substituída.
+:::
+
+Os dois módulos:
+
+```python
+# rede.py
+def buscar_previsao(estacao: str) -> dict:
+    raise RuntimeError("chamada de rede real - nao deveria acontecer no teste")
+```
+
+```python
+# relatorio.py
+from rede import buscar_previsao
+
+
+def montar(estacao: str) -> str:
+    dados = buscar_previsao(estacao)
+    return f"{estacao}: {dados['temperatura']} C"
+```
+
+E os dois testes:
+
+```python
+from unittest.mock import patch
+from relatorio import montar
+
+
+def test_patch_no_lugar_errado():
+    with patch("rede.buscar_previsao", return_value={"temperatura": -29.8}):
+        assert montar("onu-00043") == "onu-00043: -29.8 C"
+
+
+def test_patch_no_lugar_certo():
+    with patch("relatorio.buscar_previsao", return_value={"temperatura": -29.8}):
+        assert montar("onu-00043") == "onu-00043: -29.8 C"
+```
+
+```text
+relatorio.py:5: in montar
+    dados = buscar_previsao(estacao)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+    def buscar_previsao(estacao: str) -> dict:
+>       raise RuntimeError("chamada de rede real - nao deveria acontecer no teste")
+E       RuntimeError: chamada de rede real - nao deveria acontecer no teste
+```
+
+O primeiro falha, o segundo passa. Quando `relatorio` executou `from rede import buscar_previsao`, ele criou no seu próprio espaço de nomes uma variável apontando para a função (@sec-cap029). Substituir `rede.buscar_previsao` troca o nome **no módulo `rede`**; `relatorio.buscar_previsao` continua apontando para a função original.
+
+Note também que o teste falhou de forma **barulhenta**, porque a dependência real levanta erro. Se `buscar_previsao` fizesse uma chamada de rede de verdade, o teste teria passado — lentamente, com uma requisição real disparada, e você jamais saberia que o dublê não estava sendo usado. Vale a pena fazer a dependência externa explodir alto em ambiente de teste.
+
+### `monkeypatch` ou `mock.patch`?
+
+Os dois substituem coisas e desfazem no fim. A escolha prática:
+
+- **`monkeypatch`** (fixture do pytest) para dados e ambiente: variável de ambiente, atributo de configuração, diretório corrente, item de dicionário. Sintaxe direta, nada de `Mock`.
+- **`mock.patch`** quando você quer um dublê que registre chamadas ou respeite assinatura — ou seja, quando o objetivo é *verificar a interação*, não só trocar o valor.
+
+## Cobertura
+
+```bash
+pip install pytest-cov
+pytest --cov=coletor --cov-report=term-missing
+```
+
+```text
+Name           Stmts   Miss  Cover   Missing
+--------------------------------------------
+cobertura.py       9      0   100%
+--------------------------------------------
+TOTAL              9      0   100%
+```
+
+Cem por cento. Agora o mesmo comando com `--cov-branch`:
+
+```text
+Name           Stmts   Miss Branch BrPart  Cover   Missing
+----------------------------------------------------------
+cobertura.py       9      0      4      1    92%   3->5
+----------------------------------------------------------
+TOTAL              9      0      4      1    92%
+```
+
+Noventa e dois. A coluna `Missing` diz `3->5`: existe um caminho da linha 3 para a linha 5 que nenhum teste percorreu. O código é este:
+
+```python
+def registrar(temperatura: float, alerta: bool = False) -> str:
+    texto = f"{temperatura:.1f}"
+    if alerta:                          # linha 3
+        texto = texto + " !"
+    return texto                        # linha 5
+```
+
+Todos os testes chamaram `registrar` com `alerta=True`. Toda linha foi executada, então a cobertura de linha é 100% — mas **o caso `alerta=False` nunca aconteceu**. Um `if` sem `else` é invisível para a cobertura de linha, e é exatamente onde os defeitos se escondem.
+
+**Sempre `--cov-branch`.** A cobertura de linha sozinha superestima o que a suíte realmente exercita, e o erro é maior justamente no código com mais ramos.
+
+### Por que cobertura não é meta
+
+Este é um teste real, e passa:
+
+```python
+def test_que_nao_testa_nada():
+    registrar(-29.8, alerta=True)
+    registrar(-29.8, alerta=False)
+    faixa(-1.0)
+    faixa(1.0)
+```
+
+```text
+Name           Stmts   Miss Branch BrPart  Cover   Missing
+----------------------------------------------------------
+cobertura.py       9      0      4      0   100%
+----------------------------------------------------------
+TOTAL              9      0      4      0   100%
+1 passed in 0.05s
+```
+
+**100% de cobertura de ramo, com um teste que não tem uma única asserção.** A cobertura mede o que foi *executado*, nunca o que foi *verificado*. Uma meta de cobertura imposta de cima produz exatamente este teste: alguém precisa subir o número, escreve o que sobe o número, e a suíte fica maior sem ficar melhor.
+
+O uso correto da métrica é o inverso: **cobertura baixa é um sinal confiável, cobertura alta não é uma garantia**. Um módulo com 30% tem, com certeza, código nunca exercitado. Um módulo com 95% pode estar testado ou pode estar cheio de chamadas sem asserção — e só a leitura dos testes diz qual.
+
+### Configuração
+
+```toml
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+```
+
+```text
+Required test coverage of 80.0% reached. Total coverage: 100.00%
+```
+
+`fail_under` derruba o comando quando a cobertura cai abaixo do valor — o modo de usá-lo é fixá-lo no patamar atual e subir de vez em quando, nunca colocar 100 e passar seis meses escrevendo testes vazios. `exclude_also` remove da conta linhas que nunca deveriam rodar em teste: blocos de `TYPE_CHECKING` (@sec-cap069), métodos abstratos, e o `__main__`.
+
+O relatório em HTML (`--cov-report=html`) é o que realmente se usa para trabalhar: ele pinta cada linha do código-fonte de verde ou vermelho, e encontrar o ramo esquecido vira questão de olhar.
+
+## 🐍 Jeito Pythônico
+
+**Parametrize as fronteiras, não amostras.** A tabela de `parametrize` é onde você escreve o que sabe sobre o domínio: o valor mínimo, o máximo, o zero, o vazio, o negativo, o que tem acento, o que tem um caractere só. Uma tabela de valores "típicos" gera cobertura e não gera confiança.
+
+**`autospec=True` em todo `patch`.** Um dublê que aceita qualquer assinatura aprova código que quebrou numa renomeação. É a diferença entre um teste que protege e um teste que decora o relatório.
+
+**Aplique o patch onde o nome é procurado.** `patch("relatorio.buscar_previsao")`, não `patch("rede.buscar_previsao")`. E prefira estruturar o código para não precisar de patch: uma função que **recebe** o cliente HTTP como parâmetro é testada passando um dublê, sem `patch` nenhum. Injeção de dependência é a alternativa a metade dos usos de `mock`.
+
+**Menos dublês, mais *fakes*.** Um repositório falso de vinte linhas guardando um dicionário em memória é mais legível, mais rápido de escrever e muito mais confiável do que quinze linhas de `mock.return_value` encadeadas. E ele testa que sua interface é usável, coisa que um `Mock` nunca faz.
+
+**Não teste o dublê.** `assert repo.salvar.called` verifica que seu código chamou o que você mandou chamar — informação zero. O que vale verificar é o efeito observável: o valor retornado, o estado final, a mensagem produzida. Asserção de interação é para quando a interação *é* o comportamento (enviou o e-mail? gravou o log de auditoria?).
+
+**Cobertura com `--cov-branch`, `fail_under` no patamar atual.** A métrica serve para achar o que ninguém testou, não para virar meta de time. Cobertura alta com asserções fracas é o pior dos mundos: custa manutenção e não pega nada.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-cobertura && cd lab-cobertura
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install pytest pytest-cov
+mkdir tests
+```
+
+**Passo 2 — o código.** Em `coletor.py`:
+
+```python
+TEMPERATURA_MINIMA = -90.0
+TEMPERATURA_MAXIMA = 60.0
+
+
+class LeituraInvalidaError(ValueError):
+    pass
+
+
+def validar(t: float) -> float:
+    if not TEMPERATURA_MINIMA <= t <= TEMPERATURA_MAXIMA:
+        raise LeituraInvalidaError(f"fora da faixa: {t}")
+    return t
+
+
+def classificar(t: float) -> str:
+    if t < -30.0:
+        return "extremo"
+    if t < 0.0:
+        return "frio"
+    if t < 30.0:
+        return "ameno"
+    return "quente"
+```
+
+**Passo 3 — parametrizar as fronteiras.** Escreva um `test_classificar` parametrizado com **as seis fronteiras**: `-40.0`, `-30.0`, `-0.1`, `0.0`, `29.9`, `30.0`. Rode com `-v` e confirme seis testes com nome próprio. Depois introduza um defeito de propósito — troque `if t < -30.0` por `if t <= -30.0`:
+
+```text
+FAILED tests/test_param.py::test_classificar[-30.0-frio] - AssertionError: as...
+1 failed, 12 passed in 0.12s
+```
+
+Um caso quebrou, e é exatamente a fronteira que o defeito moveu. Compare com o que aconteceria se os seis casos estivessem num único teste com um `for`: você veria "1 failed" e teria de descobrir qual valor. Desfaça o defeito.
+
+**Passo 4 — identificadores.** Converta dois casos para `pytest.param(..., id="...")` e confirme que o rótulo aparece na linha de `FAILED` quando você reintroduz o defeito.
+
+**Passo 5 — o patch no lugar errado.** Crie `rede.py` com uma função que levanta `RuntimeError`, e `relatorio.py` que faz `from rede import buscar_previsao` e a usa. Escreva os dois testes do capítulo — `patch("rede....")` e `patch("relatorio....")` — e confirme que **só o segundo passa**.
+
+Depois troque o import de `relatorio.py` para `import rede` e a chamada para `rede.buscar_previsao(estacao)`, e rode outra vez:
+
+```text
+..                                                                       [100%]
+2 passed in 0.06s
+```
+
+Agora **os dois passam**. Sem `from ... import`, não existe cópia da referência: `relatorio` procura o atributo `buscar_previsao` dentro do módulo `rede` no momento da chamada, e nesse momento ele já foi substituído. Guarde essa segunda parte — ela explica o mecanismo inteiro, e é o argumento a favor de `import modulo` em vez de `from modulo import funcao` em código que você vai precisar testar.
+
+**Passo 6 — `autospec` pegando o que `Mock` deixa passar.** Crie uma classe `Repositorio` com `salvar(self, estacao, temperatura)`. Faça um `Mock()` solto e chame `mock.salvar("um-argumento-so")`: passa. Faça um `create_autospec(Repositorio, instance=True)` e chame igual:
+
+```text
+TypeError: missing a required argument: 'temperatura'
+```
+
+**Passo 7 — a diferença entre linha e ramo.** Escreva a função `registrar(temperatura, alerta=False)` do capítulo e **um único teste** que a chame com `alerta=True`. Rode as duas medições:
+
+```bash
+pytest --cov=coletor --cov-report=term-missing
+pytest --cov=coletor --cov-branch --cov-report=term-missing
+```
+
+A primeira diz 100%, a segunda encontra o ramo `3->5`. Confirme os dois números antes de seguir — é o argumento inteiro a favor do `--cov-branch`.
+
+**Passo 8 — a cobertura que mente.** Apague seus testes e escreva **só** este:
+
+```python
+def test_que_nao_testa_nada():
+    registrar(-29.8, alerta=True)
+    registrar(-29.8, alerta=False)
+    classificar(-40.0)
+    classificar(0.0)
+```
+
+Rode com `--cov-branch`. Você vai ver 100%, sem uma única asserção no arquivo. Deixe esse resultado à mão para a próxima vez que alguém propuser uma meta de cobertura.
+
+**Passo 9 — o relatório que serve para trabalhar.** Restaure seus testes de verdade, configure o `pyproject.toml` com `branch = true` e `fail_under` no patamar que você atingiu, e gere `pytest --cov --cov-report=html`. Abra `htmlcov/index.html` e clique num módulo: as linhas vermelhas são a sua lista de tarefas, e ela é bem mais útil do que a porcentagem.
+
+## Resumo
+
+- **`@pytest.mark.parametrize`** gera um teste independente por caso, cada um com nome próprio no relatório — diferente de um `for` dentro do teste, que para na primeira falha. Empilhar decoradores produz o produto cartesiano, que cresce rápido demais.
+- A tabela de parâmetros deve conter **as fronteiras** do domínio, não amostras típicas; `pytest.param(..., id="...")` dá nome legível ao caso, e `marks=` permite marcar um caso isolado como `xfail`.
+- Os dublês têm nomes distintos (*dummy*, *stub*, *spy*, *mock*, *fake*) e `unittest.mock` cobre os quatro primeiros. Um `Mock` solto **aceita qualquer atributo e qualquer assinatura** — use `autospec=True` sempre, ou a suíte aprova código quebrado por renomeação.
+- **`patch` vai onde o nome é procurado**, não onde foi definido: `from X import f` copia a referência para o módulo que importa, e é essa cópia que precisa ser trocada. Usar `import X` e chamar `X.f()` elimina o problema, porque a busca acontece em tempo de chamada.
+- `monkeypatch` para ambiente e dados; `mock.patch` quando o objetivo é verificar interação. E, sempre que possível, injeção de dependência no lugar de qualquer um dos dois.
+- **Cobertura de linha superestima**: um `if` sem `else` totalmente executado dá 100% de linha e deixa um ramo inteiro sem teste. `--cov-branch` sempre.
+- **Cobertura mede execução, não verificação**: um teste sem nenhuma asserção pode alcançar 100% de ramo. Cobertura baixa é sinal confiável; cobertura alta não é garantia, e como meta de time produz testes vazios.
