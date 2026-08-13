@@ -1,3 +1,604 @@
 # Anotações de tipo: fundamentos e o módulo typing {#sec-cap068}
 
-*(em elaboracao)*
+Abra uma função qualquer de um projeto que você não escreveu:
+
+```python
+def processar(dados, limite, modo):
+    ...
+```
+
+Três perguntas sem resposta. `dados` é uma lista? Um dicionário? Um caminho de arquivo? `limite` é um número ou um objeto de configuração? `modo` é uma string, e se for, quais valores ela aceita? A resposta está espalhada entre a *docstring* (que pode estar desatualizada), o corpo da função (que você vai ter de ler inteiro) e os locais que a chamam (que você vai ter de procurar).
+
+**Anotações de tipo** transformam essas três respostas em algo que fica na assinatura, que o editor lê para completar código, e que uma ferramenta verifica automaticamente contra todos os locais de chamada:
+
+```python
+def processar(dados: list[float], limite: float, modo: Literal["media", "soma"]) -> float:
+    ...
+```
+
+Este capítulo cobre a mecânica: o que uma anotação é (e, principalmente, o que ela **não** é), a sintaxe moderna do Python 3.13, os construtores do módulo `typing` que se usa todo dia, e como as anotações são avaliadas — um ponto que mudou de forma importante no 3.14. Genéricos, protocolos e a configuração do `mypy` são o capítulo seguinte.
+
+## Uma anotação não faz nada
+
+Este é o ponto de partida e o mal-entendido mais comum. O Python **não verifica anotações em tempo de execução**. Ele as avalia como expressões, guarda o resultado num dicionário e segue em frente.
+
+```python
+def media(valores: list[float]) -> float:
+    return sum(valores) / len(valores)
+
+print(media.__annotations__)
+print(media([1, 2, 3]))
+```
+
+```text
+{'valores': list[float], 'return': <class 'float'>}
+2.0
+```
+
+A anotação virou uma entrada em `media.__annotations__`. Nada mais. Chamar a função com o tipo errado não produz erro de tipo:
+
+```python
+media(["a", "bb"])
+```
+
+```text
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+```
+
+Repare que o `TypeError` **não** veio da anotação — veio do `sum` tentando somar `0 + "a"` lá dentro. A anotação `list[float]` foi ignorada por completo. Se a função fosse `return valores[0]`, a chamada com strings devolveria `"a"` sem reclamação nenhuma.
+
+Anotações também valem para variáveis, com ou sem valor atribuído:
+
+```python
+TEMPERATURA_MINIMA: float = -40.0
+estacoes: dict[str, float] = {}
+sem_valor: int
+```
+
+```text
+{'TEMPERATURA_MINIMA': <class 'float'>, 'estacoes': dict[str, float], 'sem_valor': <class 'int'>}
+sem_valor existe? False
+```
+
+O caso de `sem_valor` é peculiar e vale entender: a linha registra a anotação no `__annotations__` do módulo **sem criar a variável**. `sem_valor` não existe; usá-lo levanta `NameError`. É a forma de declarar "este atributo terá este tipo" sem lhe dar um valor — útil em classes e em `TypedDict`.
+
+### Então para que servem?
+
+Para um segundo leitor do arquivo, que nunca executa nada.
+
+::: {#fig-dois-leitores}
+```{.tikz}
+%%| filename: dois-leitores
+%%| alt: O mesmo arquivo lido pelo interpretador e por um verificador de tipos
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=3.4cm,minimum height=1.5cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.6,-4.4) rectangle (13.4,3.6);
+
+  \node[bx,fill=manualgray!20,minimum height=2.0cm] (src) at (0,0)
+    {\textbf{coletor.py}\\\scriptsize codigo + anotacoes};
+
+  \node[bx,fill=manualblue!20] (interp) at (5.6,1.9) {\textbf{interpretador}\\\scriptsize executa o codigo};
+  \node[bx,fill=manualred!20]  (checker) at (5.6,-1.9) {\textbf{verificador}\\\scriptsize \texttt{mypy}, editor};
+
+  \node[bx,fill=manualyellow!30] (ann) at (11.0,1.9) {guarda em\\\texttt{\_\_annotations\_\_}\\\scriptsize e ignora o resto};
+  \node[bx,fill=manualgreen!20]  (erro) at (11.0,-1.9) {erro apontado\\\scriptsize antes de rodar};
+
+  \draw[->,>=stealth,thick] (src) -- (interp);
+  \draw[->,>=stealth,thick] (src) -- (checker);
+  \draw[->,>=stealth,thick] (interp) -- (ann);
+  \draw[->,>=stealth,thick] (checker) -- (erro);
+
+  \node[nt,anchor=south,text width=7.0cm] at (5.6,3.05) {roda o programa; a anotacao nao muda nada};
+  \node[nt,anchor=north,text width=7.0cm] at (5.6,-3.15) {nunca roda o programa; a anotacao e tudo};
+\end{tikzpicture}
+```
+A anotação é inerte para o interpretador e é o material de trabalho do verificador.
+:::
+
+O contraste fica concreto com um arquivo que tem dois defeitos:
+
+```python
+def media(valores: list[float]) -> float:
+    return sum(valores) / len(valores)
+
+
+def rotular(estacao: str, temperatura: float) -> str:
+    return f"{estacao}: {temperatura:.1f} C"
+
+
+leituras = [-29.8, -30.1, -28.4]
+print(media(leituras))
+print(rotular("onu-00043", media(leituras)))
+print(rotular(-29.8, "onu-00043"))     # argumentos trocados
+print(media(["a", "b"]))
+```
+
+O verificador de tipos lê o arquivo sem executá-lo:
+
+```bash
+mypy coletor.py
+```
+
+```text
+coletor.py:12: error: Argument 1 to "rotular" has incompatible type "float"; expected "str"  [arg-type]
+coletor.py:12: error: Argument 2 to "rotular" has incompatible type "str"; expected "float"  [arg-type]
+coletor.py:13: error: List item 0 has incompatible type "str"; expected "float"  [list-item]
+coletor.py:13: error: List item 1 has incompatible type "str"; expected "float"  [list-item]
+Found 4 errors in 1 file (checked 1 source file)
+```
+
+Quatro erros, com linha, posição e a explicação exata. O Python, executando o mesmo arquivo:
+
+```text
+-29.433333333333334
+onu-00043: -29.4 C
+Traceback (most recent call last):
+  File "coletor.py", line 12, in <module>
+    print(rotular(-29.8, "onu-00043"))
+  File "coletor.py", line 6, in rotular
+    return f"{estacao}: {temperatura:.1f} C"
+ValueError: Unknown format code 'f' for object of type 'str'
+```
+
+Três diferenças que resumem o valor da tipagem estática. Primeira: o programa **produziu duas linhas de saída antes de falhar** — num script que grava em banco, essas duas linhas já viraram efeito colateral permanente. Segunda: a mensagem é `Unknown format code 'f'`, que aponta para o especificador de formato, **não** para os argumentos trocados que são a causa real. Terceira: o erro da linha 13 nunca chegou a acontecer, porque o programa morreu antes. O verificador achou os quatro de uma vez, em meio segundo, sem rodar nada.
+
+## A sintaxe moderna
+
+A tipagem em Python acumulou dez anos de sintaxe, e boa parte do que se encontra em tutorial antigo está obsoleta. O que vale no 3.13:
+
+::: {#fig-evolucao-tipos}
+```{.tikz}
+%%| filename: evolucao-tipos
+%%| alt: Evolucao da sintaxe de anotacoes de tipo por versao do Python
+\begin{tikzpicture}[
+  vr/.style={draw,rounded corners,align=center,text width=2.2cm,minimum height=1.0cm,font=\small},
+  sx/.style={draw,rounded corners,align=center,text width=6.4cm,minimum height=1.0cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.0,-4.6) rectangle (13.6,3.4);
+
+  \node[vr,fill=manualgray!25]    (v35) at (0,2.6)  {\textbf{3.5} (2015)};
+  \node[vr,fill=manualgray!25]    (v39) at (0,1.0)  {\textbf{3.9} (2020)};
+  \node[vr,fill=manualblue!20]    (v10) at (0,-0.6) {\textbf{3.10} (2021)};
+  \node[vr,fill=manualblue!20]    (v12) at (0,-2.2) {\textbf{3.12} (2023)};
+  \node[vr,fill=manualgreen!20]   (v14) at (0,-3.8) {\textbf{3.14} (2025)};
+
+  \node[sx,fill=manualred!12]     (s35) at (6.6,2.6)  {\texttt{List[str]}, \texttt{Optional[int]}\\\scriptsize PEP 484 --- hoje desencorajado};
+  \node[sx,fill=manualgreen!15]   (s39) at (6.6,1.0)  {\texttt{list[str]}, \texttt{dict[str, float]}\\\scriptsize PEP 585 --- generico embutido};
+  \node[sx,fill=manualgreen!15]   (s10) at (6.6,-0.6) {\texttt{int | None}, \texttt{int | str}\\\scriptsize PEP 604 --- uniao com barra};
+  \node[sx,fill=manualgreen!15]   (s12) at (6.6,-2.2) {\texttt{type Celsius = float}\\\scriptsize PEP 695 --- apelido de tipo};
+  \node[sx,fill=manualyellow!25]  (s14) at (6.6,-3.8) {avaliacao preguicosa\\\scriptsize PEP 649 --- muda \texttt{\_\_annotations\_\_}};
+
+  \draw[->,>=stealth] (v35) -- (s35);
+  \draw[->,>=stealth] (v39) -- (s39);
+  \draw[->,>=stealth] (v10) -- (s10);
+  \draw[->,>=stealth] (v12) -- (s12);
+  \draw[->,>=stealth] (v14) -- (s14);
+\end{tikzpicture}
+```
+Dez anos de sintaxe de anotações. As três faixas verdes são o que se escreve hoje.
+:::
+
+### Genéricos embutidos (3.9+)
+
+Nada de `typing.List`, `typing.Dict`, `typing.Tuple`, `typing.Set`. Desde o Python 3.9 (PEP 585), os próprios tipos embutidos aceitam parâmetro:
+
+```python
+def agrupar(leituras: list[float]) -> dict[str, list[float]]:
+    ...
+
+coordenadas: tuple[float, float] = (-15.79, -47.88)
+codigos: set[str] = {"onu-00043"}
+```
+
+As formas do `typing` continuam funcionando por compatibilidade, mas estão obsoletas — é o `UP006` e o `UP035` que o Ruff apontou em @sec-cap067. Para coleções abstratas, a origem correta é `collections.abc`, não `typing`:
+
+```python
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+```
+
+### União com barra (3.10+)
+
+```python
+print(int | None)
+print(Optional[int])
+print(int | None == Optional[int])
+print(type(int | None))
+```
+
+```text
+int | None
+typing.Optional[int]
+True
+<class 'types.UnionType'>
+```
+
+`X | None` e `Optional[X]` são o mesmo tipo, e a primeira forma é a preferida. Note que `Optional` **não** significa "argumento opcional" — significa "pode ser `None`". Um argumento com valor padrão não é automaticamente `Optional`:
+
+```python
+# limite tem valor padrao, mas nunca e None: anotacao e int
+def buscar(estacao: str, limite: int = 10) -> list[float]:
+    ...
+
+# desde pode chegar como None: aqui o `| None` e obrigatorio
+def consultar(estacao: str, desde: str | None = None) -> list[float]:
+    ...
+```
+
+O objeto produzido por `|` é um `types.UnionType` de verdade, e serve em `isinstance`:
+
+```python
+print(isinstance(3, int | float))
+print(isinstance("x", int | float))
+```
+
+```text
+True
+False
+```
+
+### Apelidos de tipo (3.12+)
+
+Quando a mesma anotação composta aparece em cinco assinaturas, dê um nome a ela. A instrução `type` da PEP 695 faz isso:
+
+```python
+type Celsius = float
+type Registro = dict[str, float | str]
+
+def converter(t: Celsius) -> Celsius: ...
+```
+
+```text
+Celsius <class 'typing.TypeAliasType'>
+<class 'float'>
+dict[str, float | str]
+```
+
+`Celsius` é um `TypeAliasType`, e o valor real fica em `__value__`. Antes do 3.12 escrevia-se `Celsius: TypeAlias = float` ou simplesmente `Celsius = float`; ambos ainda funcionam, e a segunda forma é ambígua justamente por ser indistinguível de uma atribuição comum.
+
+Um apelido **não cria um tipo novo**: `Celsius` é `float`, e passar qualquer `float` onde se pede `Celsius` é aceito. Para um tipo realmente distinto — que impeça misturar Celsius com Fahrenheit — existe `typing.NewType`, assunto do próximo capítulo.
+
+## Os construtores que se usa todo dia
+
+### `Any`: a porta de saída
+
+```python
+from typing import Any
+
+def qualquer(x: Any) -> Any:
+    return x
+```
+
+`Any` é compatível com tudo, nos dois sentidos: qualquer valor pode ir para um `Any`, e um `Any` pode ir para qualquer lugar. Isso o torna a válvula de escape do sistema — e também a forma mais eficiente de desligar a verificação sem perceber. Uma função que devolve `Any` contamina tudo que toca o resultado dela, silenciosamente.
+
+`object` é frequentemente o que se queria dizer: também aceita qualquer valor, mas **não** permite usar o resultado sem antes estreitar o tipo. Se a intenção é "não sei o que é isso e vou verificar depois", `object` é honesto; `Any` é uma promessa vazia.
+
+### `Literal`: quando os valores válidos são poucos e conhecidos
+
+```python
+from typing import Literal
+
+Modo = Literal["leitura", "escrita"]
+
+def abrir(caminho: str, modo: Modo = "leitura") -> None: ...
+```
+
+```text
+typing.Literal['leitura', 'escrita']
+```
+
+É o construtor mais subestimado do `typing`. Ele transforma "modo é uma string" — informação quase inútil — em "modo é uma destas duas strings", que o editor completa e o verificador confere. Para conjuntos maiores ou que precisem existir em tempo de execução, `enum.Enum` (@sec-cap046) é a escolha; `Literal` é para o caso pequeno e fechado.
+
+### `Final`: o que não deve ser reatribuído
+
+```python
+from typing import Final
+
+LIMITE: Final = 100
+```
+
+O verificador reclama de qualquer reatribuição de `LIMITE`. Em tempo de execução, nada impede — como todo o resto deste capítulo, é uma promessa verificada estaticamente, não uma constante de verdade.
+
+### `Callable`: funções como parâmetro
+
+```python
+from collections.abc import Callable
+
+def aplicar(f: Callable[[float], float], v: list[float]) -> list[float]:
+    return [f(x) for x in v]
+
+print(aplicar(lambda t: t * 2, [1.0, 2.0]))
+```
+
+```text
+[2.0, 4.0]
+{'f': collections.abc.Callable[[float], float], 'v': list[float], 'return': list[float]}
+```
+
+A leitura de `Callable[[float], float]` é: uma chamada que recebe um `float` e devolve um `float`. A lista interna é a de parâmetros — `Callable[[], int]` não recebe nada, `Callable[..., int]` recebe qualquer coisa (as reticências são literais).
+
+### `TypedDict`: dicionário com forma conhecida
+
+O coletor lê JSON, e JSON vira dicionário (@sec-cap062). `dict[str, Any]` descreve isso mal. `TypedDict` descreve bem:
+
+```python
+from typing import TypedDict
+
+class Leitura(TypedDict):
+    estacao: str
+    temperatura: float
+
+x: Leitura = {"estacao": "onu-00043", "temperatura": -29.8}
+print(x, type(x))
+print(Leitura.__required_keys__)
+```
+
+```text
+{'estacao': 'onu-00043', 'temperatura': -29.8} <class 'dict'>
+frozenset({'temperatura', 'estacao'})
+```
+
+Repare no `type(x)`: é `dict`, um dicionário comum. `TypedDict` não cria classe nova nem custa nada em tempo de execução — descreve para o verificador quais chaves existem e de que tipo é cada valor. Acessar `x["umidade"]` vira erro estático; `x["temperatura"] + 1` é aceito, enquanto `x["estacao"] + 1` não é.
+
+Quando os dados **não** vêm de JSON e você controla a estrutura, uma `dataclass` (@sec-cap046) costuma ser melhor: dá validação em tempo de execução, `__repr__` e atributos com ponto. `TypedDict` é para o caso em que o dicionário já existe e você só quer descrevê-lo.
+
+## Quando a anotação é avaliada
+
+Este é o canto escuro do assunto, e ele mudou recentemente.
+
+Até o Python 3.13, anotações são **expressões avaliadas na hora em que a definição é executada**. Isso quebra referências para frente:
+
+```python
+class Config:
+    limite: NaoDefinidoAinda
+```
+
+```text
+Python 3.13.15
+Traceback (most recent call last):
+  ...
+NameError: name 'NaoDefinidoAinda' is not defined
+```
+
+A saída clássica era escrever a anotação como string — `limite: "NaoDefinidoAinda"` — ou pôr `from __future__ import annotations` no topo do arquivo, que faz o Python guardar **todas** as anotações como strings sem avaliá-las. Quem precisa do valor real usa `typing.get_type_hints`, que resolve as strings no contexto certo:
+
+```python
+def futura(x: "list[int]") -> "str":
+    return str(x)
+
+print("cru      :", futura.__annotations__)
+print("resolvido:", get_type_hints(futura))
+```
+
+```text
+cru      : {'x': 'list[int]', 'return': 'str'}
+resolvido: {'x': list[int], 'return': <class 'str'>}
+```
+
+O **Python 3.14 muda o modelo** (PEP 649): as anotações passam a ser avaliadas *sob demanda*, na primeira vez que alguém acessa `__annotations__`. O mesmo arquivo, nas duas versões:
+
+```text
+=== Python 3.13 ===
+NameError: name 'NaoDefinidoAinda' is not defined      <- ao criar a classe
+
+=== Python 3.14 ===
+classe criada sem erro
+NameError: name 'NaoDefinidoAinda' is not defined      <- ao ler __annotations__
+```
+
+No 3.14 a classe é construída sem problema; o erro só aparece quando alguém pede as anotações. Isso resolve referência para frente sem `from __future__` e sem aspas — e é o motivo pelo qual `from __future__ import annotations`, que já foi conselho universal, está em caminho de se tornar desnecessário. Em código que precisa rodar em 3.13 e anteriores, ele continua sendo a forma correta de escrever uma referência para frente.
+
+## 🐍 Jeito Pythônico
+
+**Anotar o contorno, não o interior.** O lugar onde a anotação paga é a fronteira: assinatura de função pública, atributo de classe, retorno. Anotar toda variável local é ruído — `contador: int = 0` não informa nada que `contador = 0` já não diga, e o verificador infere sozinho. A regra prática é anotar o que outra pessoa (ou outro módulo) vai consumir.
+
+**Sintaxe moderna, sem exceção.** `list[str]` e não `List[str]`; `X | None` e não `Optional[X]`; `collections.abc.Callable` e não `typing.Callable`. Todas as formas antigas continuam funcionando, e é exatamente por isso que elas se perpetuam em código novo copiado de tutorial de 2018. O `UP` do Ruff (@sec-cap067) pega isso automaticamente, desde que `target-version` esteja correto.
+
+**`Any` é uma decisão, não um padrão.** Escrever `Any` porque o tipo é complicado é abrir mão da verificação naquele ponto e em tudo que depende dele. Quando você não sabe o tipo, `object` é mais honesto; quando o tipo é "um dos três", `Union` ou `Literal` resolvem; quando é "qualquer coisa que tenha o método X", é `Protocol`, tema do próximo capítulo.
+
+**Anotação não valida entrada.** Esse é o erro conceitual mais caro. Um `def criar(idade: int)` não impede que chegue `"quarenta"` de um formulário web. Validação em tempo de execução, para dados que vêm de fora do programa, é trabalho de `pydantic` (Volume 14) ou de código de verificação escrito à mão. Tipagem estática cobre o que você escreveu; ela não cobre o que o usuário digitou.
+
+**Tipar código existente é incremental — e a meia-tipagem engana.** Comece pelos módulos de baixo nível, que os outros importam, e suba. Mas saiba que o `mypy`, por padrão, **não verifica o corpo de funções sem nenhuma anotação**: um projeto tipado pela metade produz `Success` com defeitos evidentes dentro das funções que ficaram de fora. Enquanto a cobertura não fecha, `--check-untyped-defs` é o que impede que o verde signifique "não olhei". A configuração que sustenta essa adoção gradual é o próximo capítulo.
+
+## 🧪 Laboratório
+
+Você vai anotar um módulo pequeno, ver o verificador achar um defeito real, e descobrir na prática que a anotação não protege nada em tempo de execução.
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-tipos && cd lab-tipos
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install mypy
+mypy --version
+```
+
+```text
+mypy 2.3.0 (compiled: yes)
+```
+
+**Passo 2 — o módulo sem anotação.** Crie `estacao.py`:
+
+```python
+def media(valores):
+    return sum(valores) / len(valores)
+
+
+def rotular(estacao, temperatura):
+    return f"{estacao}: {temperatura:.1f} C"
+
+
+def resumo(leituras):
+    return rotular(media(leituras), "onu-00043")
+```
+
+Repare que `resumo` tem um defeito: os argumentos de `rotular` estão trocados. Rode `mypy estacao.py`:
+
+```text
+Success: no issues found in 1 source file
+```
+
+Sem anotação, não há o que verificar. **Guarde essa observação** — é o motivo de tipagem gradual funcionar, e é a primeira metade de uma armadilha.
+
+**Passo 3 — anotar as duas primeiras funções**, deixando `resumo` como está:
+
+```python
+def media(valores: list[float]) -> float:
+    return sum(valores) / len(valores)
+
+
+def rotular(estacao: str, temperatura: float) -> str:
+    return f"{estacao}: {temperatura:.1f} C"
+```
+
+Rode `mypy estacao.py` outra vez:
+
+```text
+Success: no issues found in 1 source file
+```
+
+**Ainda nada** — e agora a armadilha está completa. As duas funções chamadas por `resumo` estão anotadas, o defeito é evidente, e o `mypy` continua calado. O motivo: por padrão, o `mypy` **não verifica o corpo de funções que não têm nenhuma anotação**. `resumo` é uma função "não tipada", e o corpo dela é território ignorado.
+
+Há duas saídas. A primeira é ligar a checagem explicitamente:
+
+```bash
+mypy --check-untyped-defs estacao.py
+```
+
+```text
+estacao.py:10: error: Argument 1 to "rotular" has incompatible type "float"; expected "str"  [arg-type]
+estacao.py:10: error: Argument 2 to "rotular" has incompatible type "str"; expected "float"  [arg-type]
+Found 2 errors in 1 file (checked 1 source file)
+```
+
+A segunda é anotar `resumo` — e é a razão pela qual tipar um projeto pela metade dá uma falsa sensação de cobertura.
+
+**Passo 4 — anotar `resumo` e corrigir.** Primeiro só a assinatura:
+
+```python
+def resumo(leituras: list[float]) -> str:
+    return rotular(media(leituras), "onu-00043")
+```
+
+Os mesmos dois erros aparecem, agora sem opção nenhuma de linha de comando. Corrija a ordem:
+
+```python
+    return rotular("onu-00043", media(leituras))
+```
+
+**Passo 5 — provar que a anotação não valida nada.** Acrescente ao final:
+
+```python
+if __name__ == "__main__":
+    print(resumo(["a", "bb", "ccc"]))
+```
+
+```text
+estacao.py:14: error: List item 0 has incompatible type "str"; expected "float"  [list-item]
+estacao.py:14: error: List item 1 has incompatible type "str"; expected "float"  [list-item]
+estacao.py:14: error: List item 2 has incompatible type "str"; expected "float"  [list-item]
+Found 3 errors in 1 file (checked 1 source file)
+```
+
+Agora **execute assim mesmo**, com `python estacao.py`:
+
+```text
+  File "estacao.py", line 10, in resumo
+    return rotular("onu-00043", media(leituras))
+                                ~~~~~^^^^^^^^^^
+  File "estacao.py", line 2, in media
+    return sum(valores) / len(valores)
+           ~~~^^^^^^^^^
+TypeError: unsupported operand type(s) for +: 'int' and 'str'
+```
+
+O `TypeError` vem de dentro do `sum`, não da assinatura. O Python nunca olhou para a anotação.
+
+**Passo 6 — `Literal` e o valor de um tipo estreito.** Acrescente:
+
+```python
+from typing import Literal
+
+type Unidade = Literal["C", "F"]
+
+
+def converter(t: float, para: Unidade) -> float:
+    if para == "F":
+        return t * 9 / 5 + 32
+    return t
+```
+
+Chame `converter(20.0, "K")` e rode o `mypy`:
+
+```text
+lit.py:12: error: Argument 2 to "converter" has incompatible type "Literal['K']"; expected "Literal['C', 'F']"
+```
+
+A mensagem cita as duas opções válidas — informação que uma anotação `para: str` jamais daria.
+
+**Passo 7 — `TypedDict` sobre dados de JSON.**
+
+```python
+import json
+from typing import TypedDict
+
+
+class Registro(TypedDict):
+    estacao: str
+    temperatura: float
+
+
+def carregar(texto: str) -> Registro:
+    return json.loads(texto)
+
+
+r = carregar('{"estacao": "onu-00043", "temperatura": -29.8}')
+print(r["estacao"].upper())
+print(r["umidade"])
+```
+
+```text
+td.py:16: error: TypedDict "Registro" has no key "umidade"  [typeddict-item]
+Found 1 error in 1 file (checked 1 source file)
+```
+
+Repare também que `carregar` devolve `Registro` sem nenhuma validação: `json.loads` devolve `Any`, e você **prometeu** ao verificador que aquilo é um `Registro`. Se o JSON vier diferente, o programa quebra em tempo de execução e o verificador terá aprovado. É a fronteira exata onde tipagem estática acaba e validação começa.
+
+**Passo 8 — a avaliação da anotação.** Crie `frente.py`:
+
+```python
+class Config:
+    proxima: Etapa
+
+
+class Etapa:
+    nome: str
+```
+
+Rode com Python 3.13:
+
+```text
+    proxima: Etapa
+             ^^^^^
+NameError: name 'Etapa' is not defined
+```
+
+`Etapa` ainda não existe quando a anotação de `Config` é avaliada. Conserte de duas formas e confirme que ambas funcionam — com aspas (`proxima: "Etapa"`) e com `from __future__ import annotations` na primeira linha. Se você tiver um Python 3.14 à mão, rode o arquivo **original**, sem correção nenhuma, nele:
+
+```text
+ok
+```
+
+Nenhuma mudança no arquivo, dois comportamentos. É a PEP 649 em uma linha.
+
+## Resumo
+
+- **Uma anotação não faz nada em tempo de execução.** O Python a avalia, guarda em `__annotations__` e ignora; passar o tipo errado não levanta erro por causa da anotação.
+- O valor está no **segundo leitor**: verificador de tipos e editor, que leem o arquivo sem executá-lo e apontam o defeito antes de o programa produzir efeito colateral — e com uma mensagem que aponta a causa, não o sintoma.
+- **Sintaxe do 3.13**: `list[str]` e `dict[str, float]` (PEP 585, 3.9+), `X | None` no lugar de `Optional[X]` (PEP 604, 3.10+), `type Apelido = ...` (PEP 695, 3.12+). As formas de `typing.List` e `typing.Optional` estão obsoletas.
+- Os construtores do dia a dia: **`Literal`** para conjunto pequeno e fechado de valores, **`Final`** para o que não se reatribui, **`Callable`** de `collections.abc` para funções como parâmetro, **`TypedDict`** para dicionário de forma conhecida — e **`Any`** como decisão consciente, nunca como padrão.
+- Até o 3.13, anotações são avaliadas na definição, o que exige aspas ou `from __future__ import annotations` para referência para frente; o **3.14 passa a avaliá-las sob demanda** (PEP 649), e o erro só aparece ao ler `__annotations__`.
+- **Anotação não valida entrada externa.** Na fronteira com JSON, formulário ou banco, a tipagem estática confia na sua promessa; validação em tempo de execução é outro assunto e outra ferramenta.
