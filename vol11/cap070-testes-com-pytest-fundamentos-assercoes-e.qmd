@@ -1,3 +1,650 @@
 # Testes com pytest: fundamentos, asserções e fixtures {#sec-cap070}
 
-*(em elaboracao)*
+O coletor de estações tem uma função que valida temperatura. Você mexeu nela hoje, rodou no terminal com três valores, viu que funcionava e commitou. Duas semanas depois alguém troca o limite inferior de -90 para -80 e o programa começa a rejeitar leituras da Antártida em silêncio. Ninguém percebe por um mês.
+
+O teste manual não é ruim porque é manual — é ruim porque **não se repete**. Você testou três valores uma vez; o teste automatizado testa os mesmos três valores em toda alteração, para sempre, sem que ninguém precise lembrar.
+
+Python tem `unittest` na biblioteca padrão desde sempre, herdado do JUnit e com o sotaque Java inteiro: classes obrigatórias, `setUp`, `tearDown`, e três dezenas de métodos `assertAlgumaCoisa`. E tem o **pytest**, que não está na biblioteca padrão e é o que praticamente todo projeto Python usa. Este capítulo é sobre pytest: como escrever um teste, como ler uma falha, e como as *fixtures* resolvem o problema de preparar o cenário.
+
+## O `assert` e por que ele basta
+
+Comece pelo problema. Este é o `assert` puro do Python quando falha:
+
+```python
+assert resumo() == {"estacao": "onu-00043", "validas": 3}
+```
+
+```text
+  File "<string>", line 3, in <module>
+    assert resumo() == {'estacao':'onu-00043','validas':3}
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+```
+
+`AssertionError`, e nada mais. O que `resumo()` devolveu? Não dá para saber. Foi por isso que o `unittest` criou métodos dedicados: `assertEqual` recebe os dois lados como argumentos e pode imprimi-los.
+
+```python
+self.assertEqual(resumo(), {"estacao": "onu-00043", "validas": 3, ...})
+```
+
+```text
+AssertionError: {'estacao': 'onu-00043', 'validas': 2, ...} != {'estacao': 'onu-00043', 'validas': 3, ...}
+- {'estacao': 'onu-00043', 'media': -29.4, 'rejeitadas': 1, 'validas': 2}
+?                                                                      ^
++ {'estacao': 'onu-00043', 'media': -29.4, 'rejeitadas': 1, 'validas': 3}
+?                                                                      ^
+```
+
+Informação útil, ao custo de decorar qual dos trinta métodos usar: `assertEqual`, `assertIn`, `assertIsNone`, `assertAlmostEqual`, `assertCountEqual`, `assertRaisesRegex`… O pytest resolve a mesma coisa sem inventar nenhum método.
+
+::: {#fig-reescrita-assert}
+```{.tikz}
+%%| filename: reescrita-assert
+%%| alt: O pytest reescreve a arvore sintatica do assert no momento do import
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=3.1cm,minimum height=1.4cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.4,-3.6) rectangle (15.4,2.8);
+
+  \node[bx,fill=manualgray!20]   (arq)  at (0,0)    {\texttt{test\_x.py}\\[2pt]\scriptsize \texttt{assert f(a) == b}};
+  \node[bx,fill=manualblue!20]   (hook) at (4.6,0)  {\textbf{gancho de import}\\\scriptsize do pytest};
+  \node[bx,fill=manualyellow!30] (ast)  at (9.2,0)  {\textbf{AST reescrita}\\\scriptsize guarda os dois lados\\\scriptsize em variaveis};
+  \node[bx,fill=manualgreen!20]  (out)  at (13.4,0) {\textbf{falha}\\\scriptsize mostra o valor\\\scriptsize de cada lado};
+
+  \draw[->,>=stealth,thick] (arq) -- (hook);
+  \draw[->,>=stealth,thick] (hook) -- (ast);
+  \draw[->,>=stealth,thick] (ast) -- (out);
+
+  \node[nt,anchor=north,text width=13.0cm] at (6.5,-1.3)
+    {acontece uma vez, no momento em que o modulo de teste e importado};
+
+  \node[nt,anchor=north,text width=13.6cm,align=left] at (6.5,-2.0)
+    {consequencia pratica: o \texttt{assert} so e reescrito em arquivo que o pytest coleta como teste --- num modulo auxiliar de \texttt{tests/}, use \texttt{pytest.register\_assert\_rewrite}};
+\end{tikzpicture}
+```
+O pytest reescreve a árvore sintática do módulo de teste no momento do import, e é daí que sai a introspecção.
+:::
+
+Na prática:
+
+```python
+def test_resumo():
+    assert resumo() == {
+        "estacao": "onu-00043",
+        "validas": 3,
+        "rejeitadas": 1,
+        "media": -29.4,
+    }
+```
+
+```text
+E       AssertionError: assert {'estacao': '...media': -29.4} == {'estacao': '...media': -29.4}
+E
+E         Omitting 3 identical items, use -vv to show
+E         Differing items:
+E         {'validas': 2} != {'validas': 3}
+E         Use -v to get more diff
+```
+
+Um `assert` comum, e um relatório que **omite os três itens idênticos** e mostra só o que difere. Não há método para decorar: você escreve a expressão booleana que quer que seja verdadeira.
+
+## O primeiro teste
+
+O módulo sob teste, `coletor.py`:
+
+```python
+TEMPERATURA_MINIMA = -90.0
+TEMPERATURA_MAXIMA = 60.0
+
+
+class LeituraInvalidaError(ValueError):
+    pass
+
+
+def validar(temperatura: float) -> float:
+    if not TEMPERATURA_MINIMA <= temperatura <= TEMPERATURA_MAXIMA:
+        raise LeituraInvalidaError(f"fora da faixa: {temperatura}")
+    return temperatura
+
+
+def media(valores: list[float]) -> float:
+    if not valores:
+        raise ValueError("lista vazia")
+    return sum(valores) / len(valores)
+```
+
+E `tests/test_coletor.py`:
+
+```python
+from coletor import media, validar
+
+
+def test_validar_aceita_faixa():
+    assert validar(-29.8) == -29.8
+
+
+def test_media_de_tres():
+    assert media([-29.8, -30.1, -28.4]) == -29.43
+```
+
+```bash
+pytest
+```
+
+```text
+============================= test session starts =============================
+platform win32 -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+collected 3 items
+
+tests\test_coletor.py .F.                                                [100%]
+
+================================== FAILURES ===================================
+_____________________________ test_media_de_tres ______________________________
+
+    def test_media_de_tres():
+>       assert media([-29.8, -30.1, -28.4]) == -29.43
+E       assert -29.433333333333334 == -29.43
+E        +  where -29.433333333333334 = media([-29.8, -30.1, -28.4])
+
+tests\test_coletor.py:9: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_coletor.py::test_media_de_tres - assert -29.433333333333334...
+========================= 1 failed, 2 passed in 0.15s =========================
+```
+
+Vale ler o relatório com calma, porque ele é o produto principal da ferramenta:
+
+- A linha `.F.` é o progresso: ponto para passou, `F` para falhou, `s` para pulado, `x` para falha esperada.
+- O `>` marca a linha da asserção que falhou.
+- As linhas `E` são a explicação. A segunda delas — `where -29.433333333333334 = media([...])` — é a reescrita em ação: o pytest guardou o resultado da chamada e o mostra separado.
+- O `short test summary info` no fim é o que você lê primeiro quando há vinte falhas.
+
+O teste que falhou está **errado**, não o código: `-29.43` é uma aproximação escrita à mão de um valor que tem dízima. É o assunto da próxima seção.
+
+### Como o pytest encontra os testes
+
+Sem configuração, a coleta segue convenções rígidas:
+
+| Elemento | Convenção |
+|---|---|
+| Arquivo | `test_*.py` ou `*_test.py` |
+| Função | começa com `test` |
+| Classe | começa com `Test` e **não** tem `__init__` |
+| Método | começa com `test` |
+
+Uma função chamada `verifica_media` num arquivo `test_coletor.py` simplesmente não roda, e o pytest não avisa. É a causa número um de "meu teste passou mas eu sei que está quebrado".
+
+## Comparando números de ponto flutuante
+
+@sec-cap010 mostrou por que `0.1 + 0.2 != 0.3`. Num teste, isso aparece assim:
+
+```python
+def test_soma_de_floats():
+    assert 0.1 + 0.2 == 0.3
+```
+
+```text
+E       assert (0.1 + 0.2) == 0.3
+```
+
+A resposta certa não é arredondar o valor esperado, é declarar a tolerância:
+
+```python
+import pytest
+
+
+def test_soma_aproximada():
+    assert 0.1 + 0.2 == pytest.approx(0.3)
+
+
+def test_media_aproximada():
+    assert media([-29.8, -30.1, -28.4]) == pytest.approx(-29.43, abs=1e-2)
+```
+
+Os dois passam. `pytest.approx` usa por padrão uma tolerância relativa de 1e-6, o que resolve o ruído de representação; `abs=` fixa uma tolerância absoluta, que é o que você quer quando o valor esperado foi escrito com um número específico de casas. `approx` também funciona sobre listas, dicionários e arrays numéricos — comparar dois vetores de leituras com uma linha só.
+
+## Testando exceções
+
+Um teste que espera erro não pode simplesmente chamar a função:
+
+```python
+import pytest
+from coletor import LeituraInvalidaError, validar
+
+
+def test_recusa_fora_da_faixa():
+    with pytest.raises(LeituraInvalidaError):
+        validar(200.0)
+
+
+def test_mensagem_do_erro():
+    with pytest.raises(LeituraInvalidaError, match=r"fora da faixa: 200"):
+        validar(200.0)
+
+
+def test_inspeciona_a_excecao():
+    with pytest.raises(LeituraInvalidaError) as info:
+        validar(-300.0)
+    assert "-300" in str(info.value)
+    assert isinstance(info.value, ValueError)
+```
+
+Três níveis de rigor. O primeiro confirma o tipo. O segundo confirma o tipo **e a mensagem** — `match` recebe uma expressão regular (@sec-cap061) aplicada com `re.search`, então um trecho basta. O terceiro captura o objeto da exceção em `info` para inspecioná-lo depois do bloco; note que `info.value` só existe **fora** do `with`.
+
+Verificar a mensagem importa mais do que parece: `pytest.raises(ValueError)` passa se qualquer `ValueError` for levantado, inclusive um vindo de um erro de digitação numa linha completamente diferente da função.
+
+E quando o erro esperado não vem:
+
+```text
+E       Failed: DID NOT RAISE LeituraInvalidaError
+```
+
+## Fixtures: preparar o cenário
+
+Todo teste precisa de dados. Escrever a mesma lista em oito testes é repetição; escrevê-la uma vez num nível de módulo é pior, porque um teste que a modifica contamina os outros.
+
+Uma *fixture* é uma função decorada com `@pytest.fixture` cujo **nome vira parâmetro** dos testes que a querem:
+
+```python
+import pytest
+
+
+@pytest.fixture
+def leituras() -> list[float]:
+    return [-29.8, -30.1, -28.4]
+```
+
+```python
+def test_usa_leituras(leituras):
+    assert len(leituras) == 3
+
+
+def test_leituras_sao_novas_a_cada_teste(leituras):
+    leituras.append(100.0)
+    assert len(leituras) == 4
+
+
+def test_confirma_isolamento(leituras):
+    assert len(leituras) == 3
+```
+
+Os três passam. O segundo teste modificou a lista e o terceiro recebeu uma lista nova — porque a fixture, por padrão, **executa uma vez por teste**. Esse isolamento é o motivo de a fixture ser preferível a uma constante de módulo.
+
+Essa injeção pelo nome do parâmetro é a ideia central do pytest, e também a que mais confunde no início: não há import, não há decorador no teste. O pytest olha os nomes dos parâmetros e procura fixtures com esses nomes.
+
+### `conftest.py`: fixtures compartilhadas
+
+Uma fixture definida em `tests/conftest.py` fica disponível para todos os testes daquele diretório e dos subdiretórios, **sem import**. É o mecanismo de compartilhamento, e o `conftest.py` é o único arquivo do pytest com nome obrigatório.
+
+### Escopo: quando a fixture roda
+
+Preparar uma lista custa nada. Abrir um banco de dados custa. O parâmetro `scope` controla a frequência:
+
+```python
+@pytest.fixture(scope="session")
+def banco():
+    print("\n  [session] abrindo banco")
+    yield {"conexao": "aberta"}
+    print("\n  [session] fechando banco")
+
+
+@pytest.fixture
+def estacao(banco):
+    print("    [function] preparando estacao")
+    yield {"id": "onu-00043", "banco": banco}
+    print("    [function] limpando estacao")
+```
+
+Duas coisas novas. Primeira: uma fixture pode **depender de outra**, pedindo-a como parâmetro — `estacao` recebe `banco`. Segunda: uma fixture com `yield` entrega o valor e retoma depois do teste; o que vem antes do `yield` é preparação, o que vem depois é limpeza, e a limpeza roda **mesmo que o teste falhe**. É a mesma mecânica de um gerenciador de contexto (@sec-cap040).
+
+Rodando dois testes que usam `estacao`, com `-s` para ver os `print`:
+
+```text
+tests/test_fixtures.py::test_escopo_a
+  [session] abrindo banco
+    [function] preparando estacao
+PASSED    [function] limpando estacao
+
+tests/test_fixtures.py::test_escopo_b     [function] preparando estacao
+PASSED    [function] limpando estacao
+
+  [session] fechando banco
+```
+
+O banco abriu **uma vez** e fechou no fim de tudo; a estação foi preparada e limpa **duas vezes**, uma por teste.
+
+::: {#fig-escopo-fixture}
+```{.tikz}
+%%| filename: escopo-fixture
+%%| alt: Escopos de fixture do pytest aninhados, de sessao a funcao
+\begin{tikzpicture}[
+  nt/.style={font=\scriptsize,align=center},
+  tb/.style={draw,rounded corners,fill=manualgreen!25,align=center,text width=1.7cm,minimum height=0.8cm,font=\scriptsize}
+]
+  \path (-1.0,-3.4) rectangle (13.4,3.6);
+
+  \draw[draw=manualblue,fill=manualblue!12,rounded corners,thick] (0,-2.4) rectangle (12.4,3.0);
+  \node[nt,anchor=north west,font=\scriptsize\bfseries,manualblue] at (0.15,2.9) {scope="session" --- uma vez por execucao do pytest};
+
+  \draw[draw=manualgreen!70!black,fill=manualgreen!12,rounded corners] (0.4,-2.0) rectangle (6.0,2.3);
+  \node[nt,anchor=north west,font=\scriptsize\bfseries] at (0.55,2.2) {scope="module"};
+  \draw[draw=manualgreen!70!black,fill=manualgreen!12,rounded corners] (6.4,-2.0) rectangle (12.0,2.3);
+  \node[nt,anchor=north west,font=\scriptsize\bfseries] at (6.55,2.2) {scope="module"};
+
+  \draw[draw=manualred!70!black,fill=manualred!10,rounded corners] (0.8,-1.6) rectangle (5.6,1.5);
+  \node[nt,anchor=north west,font=\scriptsize\bfseries] at (0.95,1.4) {scope="class"};
+  \draw[draw=manualred!70!black,fill=manualred!10,rounded corners] (6.8,-1.6) rectangle (11.6,1.5);
+  \node[nt,anchor=north west,font=\scriptsize\bfseries] at (6.95,1.4) {scope="class"};
+
+  \node[tb] at (2.0,-0.4) {teste 1};
+  \node[tb] at (4.4,-0.4) {teste 2};
+  \node[tb] at (8.0,-0.4) {teste 3};
+  \node[tb] at (10.4,-0.4) {teste 4};
+  \node[nt,anchor=north] at (3.2,-1.02) {\texttt{function}: uma por caixa verde};
+  \node[nt,anchor=north] at (9.2,-1.02) {\texttt{function}: uma por caixa verde};
+
+  \node[nt,anchor=north,text width=13.8cm] at (6.2,-2.6)
+    {a limpeza de cada nivel roda quando a caixa correspondente termina, e roda mesmo se o teste falhar};
+\end{tikzpicture}
+```
+Os quatro escopos são caixas aninhadas: quanto mais externo, menos vezes a fixture roda.
+:::
+
+Os escopos são `function` (padrão), `class`, `module`, `package` e `session`. A regra é simples: **use o menor escopo que ainda seja rápido o bastante**. Um escopo largo economiza tempo e paga com acoplamento — um teste que suja o objeto compartilhado quebra os seguintes, e você acaba com uma suíte cujo resultado depende da ordem.
+
+### As fixtures que já vêm prontas
+
+Três resolvem a maior parte dos casos:
+
+```python
+def test_tmp_path(tmp_path):
+    destino = tmp_path / "leituras.csv"
+    destino.write_text("-29.8\n-30.1", encoding="utf-8")
+    assert destino.exists()
+    print(f"\n  diretorio do teste: {destino.parent.name}")
+```
+
+```text
+  diretorio do teste: test_tmp_path0
+```
+
+**`tmp_path`** é um `Path` (@sec-cap037) para um diretório vazio, único por teste, que o pytest cria e descarta. É a resposta certa para qualquer teste que toque no sistema de arquivos — nunca escreva num caminho fixo, nunca use o diretório do projeto.
+
+```python
+def test_capsys(capsys):
+    print("estacao onu-00043 registrada")
+    capturado = capsys.readouterr()
+    assert "onu-00043" in capturado.out
+    assert capturado.err == ""
+```
+
+**`capsys`** captura o que foi para a saída padrão e para a de erro. `readouterr()` devolve o acumulado e zera o buffer.
+
+```python
+def ler_limite() -> float:
+    return float(os.environ.get("TEMP_MAXIMA", "60.0"))
+
+
+def test_monkeypatch_env(monkeypatch):
+    assert ler_limite() == 60.0
+    monkeypatch.setenv("TEMP_MAXIMA", "45.5")
+    assert ler_limite() == 45.5
+
+
+def test_ambiente_restaurado():
+    assert ler_limite() == 60.0
+```
+
+**`monkeypatch`** altera variável de ambiente, atributo de objeto, item de dicionário ou diretório corrente — e **desfaz tudo ao fim do teste**. O terceiro teste é a prova: a variável voltou ao que era. Modificar `os.environ` à mão num teste é um vazamento que aparece muito depois, na forma de uma suíte que passa sozinha e falha em conjunto.
+
+## Pulando e esperando falha
+
+```python
+@pytest.mark.skip(reason="depende de hardware ausente")
+def test_sensor_real(): ...
+
+
+@pytest.mark.skipif(os.name != "posix", reason="so em POSIX")
+def test_so_linux(): ...
+
+
+@pytest.mark.xfail(reason="bug conhecido: issue 42")
+def test_defeito_conhecido():
+    assert 0.1 + 0.2 == 0.3
+```
+
+```text
+============= 4 passed, 2 skipped, 1 xfailed, 1 xpassed in 0.14s ==============
+```
+
+`skip` e `skipif` removem o teste da execução. `xfail` é diferente e mais útil: o teste **roda**, e uma falha é registrada como `xfailed` sem quebrar a suíte. Se ele passar, aparece como **`xpassed`** — o aviso de que o defeito foi corrigido e a marcação pode sair. É a forma correta de registrar um *bug* conhecido: o teste existe, documenta o problema, e avisa sozinho quando deixar de ser problema.
+
+## A linha de comando que se usa
+
+```bash
+pytest                     # tudo
+pytest -q                  # so o essencial
+pytest -v                  # um nome de teste por linha
+pytest -x                  # para na primeira falha
+pytest -k "media or faixa" # filtra por nome
+pytest --lf                # so os que falharam da ultima vez
+pytest -s                  # nao captura print
+pytest tests/test_x.py::test_y   # um teste especifico
+```
+
+Os dois que mais mudam o dia a dia são `-x` e `--lf`. Numa suíte grande com uma falha, `pytest --lf -x` roda **só o teste quebrado**, em vez de esperar os outros mil:
+
+```text
+=== -k filtro ===
+2 failed, 2 passed, 16 deselected in 0.11s
+
+=== -x para no primeiro ===
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 1 passed in 0.11s
+```
+
+## Configuração e estrutura
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "lento: testes que levam mais de um segundo",
+    "integracao: precisa de servico externo",
+]
+```
+
+`addopts` são opções sempre aplicadas: `-ra` imprime o resumo de tudo que não passou, e **`--strict-markers` transforma marcador não declarado em erro** — sem ela, `@pytest.mark.integracao` com erro de digitação vira um marcador novo e silencioso, e `pytest -m integracao` não roda nada sem avisar.
+
+A estrutura que funciona:
+
+```text
+projeto/
+    pyproject.toml
+    src/
+        coletor/
+            __init__.py
+            leitura.py
+    tests/
+        conftest.py
+        test_leitura.py
+```
+
+Testes **fora** do pacote, num diretório `tests/` sem `__init__.py`. Isso garante que a suíte importe o pacote instalado (`pip install -e .`), e não os arquivos ao lado — a diferença entre testar o que será distribuído e testar o que está na sua pasta.
+
+## 🐍 Jeito Pythônico
+
+**`assert` puro, sempre.** Não há razão para `assertEqual` num projeto Python novo. Se você encontrar `self.assertTrue(x == y)` em código existente, ele está pedindo duas vezes: primeiro pela reescrita do pytest, depois porque `assertTrue` de uma comparação descarta justamente a informação que faria a falha legível.
+
+**Um comportamento por teste, e o nome descreve o comportamento.** `test_validar_recusa_temperatura_acima_do_maximo` é longo e está certo — o nome aparece sozinho no relatório de falha, e é ali que ele precisa se explicar. `test_validar_2` não diz nada quando quebra às três da manhã.
+
+**Estruture em Preparar, Agir, Verificar.** Os dados e o cenário vêm de fixtures, a ação é uma linha, e as asserções ficam no fim. Um teste com asserção no meio do arranjo é um teste que testa duas coisas e falha por motivos ambíguos.
+
+**Fixture, não `setUp`.** A vantagem não é sintática: fixtures se compõem (uma pede a outra), têm escopo independente, e um teste declara exatamente o que precisa em vez de herdar um estado montado por uma classe base. Um `setUp` que prepara sete coisas roda as sete para o teste que precisa de uma.
+
+**Nunca escreva fora de `tmp_path`.** Teste que grava em `./saida.txt` funciona na sua máquina, falha em paralelo, e deixa lixo no repositório. `tmp_path` custa uma palavra e resolve os três.
+
+**`xfail` para *bug* conhecido, nunca `skip`.** Um `skip` some do radar para sempre; um `xfail` roda, e o `xpassed` avisa no dia em que o problema for corrigido por acaso.
+
+**Cobertura não é o objetivo.** Um teste que executa uma linha sem verificar o resultado dela conta na cobertura e não testa nada. O assunto — e a medição — é o próximo capítulo.
+
+## 🧪 Laboratório
+
+Você vai montar um projeto com `src/` e `tests/`, escrever testes que falham por motivos diferentes, e usar as fixtures para isolar o que precisa ser isolado.
+
+**Passo 1 — o projeto.**
+
+```bash
+mkdir lab-pytest && cd lab-pytest
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install pytest
+mkdir -p src/coletor tests
+touch src/coletor/__init__.py
+pytest --version
+```
+
+```text
+pytest 9.1.1
+```
+
+**Passo 2 — o código sob teste.** Em `src/coletor/leitura.py`:
+
+```python
+TEMPERATURA_MINIMA = -90.0
+TEMPERATURA_MAXIMA = 60.0
+
+
+class LeituraInvalidaError(ValueError):
+    pass
+
+
+def validar(temperatura: float) -> float:
+    if not TEMPERATURA_MINIMA <= temperatura <= TEMPERATURA_MAXIMA:
+        raise LeituraInvalidaError(f"fora da faixa: {temperatura}")
+    return temperatura
+
+
+def media(valores: list[float]) -> float:
+    if not valores:
+        raise ValueError("lista vazia")
+    return sum(valores) / len(valores)
+```
+
+E um `pyproject.toml` mínimo, para que o pacote seja importável:
+
+```toml
+[project]
+name = "coletor"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+pythonpath = ["src"]
+```
+
+A opção `pythonpath = ["src"]` é o atalho para o laboratório. Em projeto de verdade, `pip install -e .` é o caminho — e é o que garante que você está testando o pacote instalado.
+
+**Passo 3 — o teste que falha por engano seu.** Em `tests/test_leitura.py`:
+
+```python
+from coletor.leitura import media, validar
+
+
+def test_validar_aceita_faixa():
+    assert validar(-29.8) == -29.8
+
+
+def test_media_de_tres():
+    assert media([-29.8, -30.1, -28.4]) == -29.43
+```
+
+Rode `pytest`. Leia a saída com atenção e localize a linha `where -29.433333333333334 = media([...])`. **Esse é o assert reescrito.** Conserte com `pytest.approx(-29.43, abs=1e-2)` e confirme que passa.
+
+**Passo 4 — o teste que não roda.** Renomeie `test_validar_aceita_faixa` para `verifica_validar_aceita_faixa` e rode de novo. O total cai de 2 para 1 e **o pytest não reclama**. Desfaça. Essa é a falha silenciosa mais comum da ferramenta.
+
+**Passo 5 — exceções, nos três níveis.**
+
+```python
+import pytest
+from coletor.leitura import LeituraInvalidaError, validar
+
+
+def test_recusa_acima_do_maximo():
+    with pytest.raises(LeituraInvalidaError):
+        validar(200.0)
+
+
+def test_mensagem_cita_o_valor():
+    with pytest.raises(LeituraInvalidaError, match=r"fora da faixa: 200"):
+        validar(200.0)
+```
+
+Agora troque `match=r"fora da faixa: 200"` por `match=r"fora do intervalo"`:
+
+```text
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'fora do intervalo'
+E         Actual message: 'fora da faixa: 200.0'
+```
+
+O relatório mostra o padrão e a mensagem real, lado a lado. Desfaça.
+
+**Passo 6 — fixture e isolamento.** Em `tests/conftest.py`:
+
+```python
+import pytest
+
+
+@pytest.fixture
+def leituras() -> list[float]:
+    return [-29.8, -30.1, -28.4]
+```
+
+Escreva três testes: um que confere o tamanho, um que faz `leituras.append(100.0)` e confere que ficaram 4, e um terceiro que confere que ainda são 3. **Os três passam.** Agora troque a fixture por uma constante de módulo `LEITURAS = [...]` e rode de novo:
+
+```text
+E        +  where 4 = len([-29.8, -30.1, -28.4, 100.0])
+FAILED tests/test_iso.py::test_c - assert 4 == 3
+1 failed, 2 passed in 0.11s
+```
+
+O terceiro teste quebra porque o segundo sujou a lista compartilhada — e repare que ele quebra **por causa de outro teste**, o tipo de falha mais caro de diagnosticar. Você acabou de ver por que fixture não é enfeite.
+
+**Passo 7 — escopo.** Acrescente ao `conftest.py`:
+
+```python
+@pytest.fixture(scope="session")
+def banco():
+    print("\n  abrindo banco")
+    yield {"conexao": "aberta"}
+    print("\n  fechando banco")
+```
+
+Use `banco` em dois testes e rode `pytest -s -v`. Confirme que "abrindo banco" aparece **uma vez só**. Troque para `scope="function"` e rode de novo: agora aparece duas.
+
+**Passo 8 — `tmp_path` e `monkeypatch`.** Escreva uma função `salvar(caminho, linhas)` no módulo e um teste que a exercite com `tmp_path`. Depois, uma função que leia `os.environ["TEMP_MAXIMA"]` com padrão `60.0`, um teste que use `monkeypatch.setenv` para trocá-la, e **um segundo teste, sem `monkeypatch`, que confirme que o valor voltou ao padrão**. Esse terceiro teste é o que prova a restauração automática.
+
+**Passo 9 — `xfail` e o aviso de conserto.** Marque um teste que você sabe que falha:
+
+```python
+@pytest.mark.xfail(reason="bug conhecido: issue 42")
+def test_soma_de_floats():
+    assert 0.1 + 0.2 == 0.3
+```
+
+Confirme o `1 xfailed` no resumo. Agora conserte o teste (com `pytest.approx`) **sem tirar o marcador** e rode outra vez: aparece `1 xpassed`. É o pytest avisando que a marcação virou mentira.
+
+## Resumo
+
+- O pytest **reescreve a árvore sintática** dos módulos de teste no import, e por isso um `assert` comum produz um relatório com o valor dos dois lados. Não existem trinta métodos `assertX` para decorar.
+- A coleta segue convenções rígidas — arquivo `test_*.py`, função começando com `test` — e uma função fora do padrão **não roda sem aviso nenhum**.
+- **`pytest.approx`** é a forma correta de comparar ponto flutuante (@sec-cap010); **`pytest.raises`** testa exceções, e o parâmetro `match` é o que impede que um erro vindo de outra linha passe por aprovado.
+- **Fixtures** injetam cenário pelo nome do parâmetro, rodam uma vez por teste por padrão (isolamento), compõem-se entre si, e a parte depois do `yield` é a limpeza — que roda mesmo com o teste falhando. Compartilhadas via `conftest.py`, sem import.
+- `scope` vai de `function` a `session`: use o menor escopo que ainda seja rápido, porque escopo largo troca tempo por acoplamento entre testes.
+- **`tmp_path`, `capsys` e `monkeypatch`** cobrem sistema de arquivos, saída e estado global, os três com desfazimento automático. **`xfail`** documenta *bug* conhecido e avisa com `xpassed` quando ele some; `skip` só desaparece.
+- Estrutura: `src/` para o pacote, `tests/` sem `__init__.py`, configuração em `[tool.pytest.ini_options]` com `--strict-markers` ligado.
