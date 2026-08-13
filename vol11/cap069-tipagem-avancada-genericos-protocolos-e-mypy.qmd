@@ -1,3 +1,653 @@
 # Tipagem avançada: genéricos, protocolos e mypy {#sec-cap069}
 
-*(em elaboracao)*
+O capítulo anterior anotou funções cujos tipos eram conhecidos: `list[float]` entra, `float` sai. Agora considere uma função que o coletor de estações realmente tem:
+
+```python
+def primeiro(itens):
+    return itens[0]
+```
+
+Qual é a anotação? `list[Any] -> Any` funciona e não diz nada: o verificador perde a pista de que, se você passou uma lista de `float`, o que volta é um `float`. Duas funções diferentes com esse mesmo problema, e todo o benefício do capítulo anterior evapora.
+
+Depois considere a outra ponta. O coletor recebe sensores, e um sensor é qualquer objeto que tenha um método `medir`. Não há classe base comum — o termômetro vem de uma biblioteca, o barômetro de outra, o simulador de testes é uma classe de dez linhas. Como se escreve "qualquer coisa que saiba medir" sem obrigar todo mundo a herdar de algo?
+
+As respostas são **genéricos** e **protocolos**. Este capítulo cobre os dois, mais o restante do vocabulário que aparece em código tipado de verdade, e fecha com a configuração do `mypy` que torna a adoção sustentável.
+
+## Genéricos: o tipo como parâmetro
+
+Desde o Python 3.12 (PEP 695), a sintaxe é a mesma de um parâmetro comum, entre colchetes depois do nome:
+
+```python
+def primeiro[T](itens: list[T]) -> T:
+    return itens[0]
+```
+
+Lê-se: para algum tipo `T`, esta função recebe uma lista de `T` e devolve um `T`. O `T` não é um tipo — é uma **variável de tipo**, preenchida a cada chamada:
+
+```python
+print(primeiro([1, 2, 3]), type(primeiro([1, 2, 3])))
+print(primeiro(["a", "b"]), type(primeiro(["a", "b"])))
+print(primeiro.__type_params__)
+```
+
+```text
+1 <class 'int'>
+a <class 'str'>
+(T,)
+```
+
+Em tempo de execução isso não muda absolutamente nada — a função é a mesma de sempre, e `__type_params__` é a única pegada que fica. A diferença está no verificador. A função `reveal_type` do `mypy`, que não existe em tempo de execução mas é entendida por qualquer verificador, mostra o que ele deduziu:
+
+```python
+reveal_type(primeiro([1, 2, 3]))
+reveal_type(primeiro(["a", "b"]))
+```
+
+```text
+estatico.py:8: note: Revealed type is "int"
+estatico.py:9: note: Revealed type is "str"
+```
+
+O verificador resolveu `T` para `int` numa chamada e para `str` na outra. É exatamente a informação que `Any` teria destruído.
+
+### Classes genéricas
+
+A mesma sintaxe vale para classes:
+
+```python
+class Pilha[T]:
+    def __init__(self) -> None:
+        self._itens: list[T] = []
+
+    def empilhar(self, x: T) -> None:
+        self._itens.append(x)
+
+    def desempilhar(self) -> T:
+        return self._itens.pop()
+
+
+p: Pilha[int] = Pilha()
+p.empilhar(1)
+p.empilhar(2)
+print(p.desempilhar())
+print(Pilha[int])
+```
+
+```text
+2
+__main__.Pilha[int]
+```
+
+`Pilha[int]` é um objeto real (um `types.GenericAlias`), e `p.desempilhar()` tem tipo `int` para o verificador.
+
+### Limitando o tipo: `bound`
+
+Um `T` sem restrição aceita qualquer coisa, o que impede usá-lo. Esta função não compila no verificador, porque nem todo tipo suporta `>`:
+
+```python
+def maior[T](a: T, b: T) -> T:
+    return a if a > b else b
+```
+
+```text
+bound.py:2: error: Unsupported left operand type for > ("T")  [operator]
+```
+
+O limite superior resolve:
+
+```python
+def maior[T: float](a: T, b: T) -> T:
+    return a if a > b else b
+
+print(maior(2, 3), maior(1.5, 0.5))
+```
+
+```text
+3 1.5
+```
+
+`[T: float]` significa "`T` é `float` ou um subtipo dele". Note que `maior(2, 3)` devolveu `3`, um `int` — e o verificador sabe disso, porque `int` é aceito onde se pede `float` por uma regra especial da especificação de tipos (o chamado *numeric tower*), não por herança real.
+
+Antes do 3.12, a mesma coisa se escrevia com `TypeVar`, e ainda é o que se vê em código existente:
+
+```python
+from typing import TypeVar
+
+T = TypeVar("T", bound=float)
+
+def maior(a: T, b: T) -> T: ...
+```
+
+A forma nova é preferível: o escopo do `T` fica visivelmente ligado à função ou à classe, em vez de ser uma variável de módulo que qualquer um pode reusar por engano.
+
+## Protocolos: descrever a forma, não a linhagem
+
+Aqui está o segundo problema do início do capítulo. Em @sec-cap047 você viu duas maneiras de descrever "objeto que sabe medir": herança de uma classe base abstrata, e *duck typing*. A primeira é verificável mas intrusiva; a segunda é flexível mas invisível para o verificador.
+
+`Protocol` é a terceira: **verificável e não intrusiva**.
+
+::: {#fig-nominal-estrutural}
+```{.tikz}
+%%| filename: nominal-estrutural
+%%| alt: Tipagem nominal por heranca comparada com tipagem estrutural por protocolo
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=2.9cm,minimum height=1.1cm,font=\small},
+  ab/.style={draw,rounded corners,align=center,text width=3.4cm,minimum height=1.1cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.4,-5.4) rectangle (15.4,3.2);
+
+  % --- nominal ---
+  \node[nt,anchor=south,font=\small\bfseries] at (2.4,2.75) {nominal (ABC)};
+  \node[ab,fill=manualblue!20] (abc) at (2.4,1.6) {\texttt{Sensor}\\\scriptsize classe base abstrata};
+  \node[bx,fill=manualgray!20] (t1) at (0.4,-0.7) {\texttt{Termometro}};
+  \node[bx,fill=manualgray!20] (b1) at (4.4,-0.7) {\texttt{Barometro}};
+  \draw[->,>=stealth,thick] (t1) -- (abc);
+  \draw[->,>=stealth,thick] (b1) -- (abc);
+  \node[nt,anchor=north,text width=5.6cm] at (2.4,-1.7)
+    {a heranca e obrigatoria\\e tem de ser declarada};
+  \node[bx,fill=manualred!15,text width=5.4cm] (fora) at (2.4,-3.6)
+    {classe de terceiros\\\scriptsize nao herda: nao serve};
+
+  % --- estrutural ---
+  \node[nt,anchor=south,font=\small\bfseries] at (10.2,2.75) {estrutural (Protocol)};
+  \node[ab,fill=manualgreen!20] (proto) at (10.2,1.6) {\texttt{Mensuravel}\\\scriptsize exige \texttt{medir() -> float}};
+  \node[bx,fill=manualgray!20] (t2) at (8.2,-0.7) {\texttt{Termometro}};
+  \node[bx,fill=manualgray!20] (b2) at (12.2,-0.7) {\texttt{Barometro}};
+  \draw[->,>=stealth,dashed,manualgreen] (t2) -- (proto);
+  \draw[->,>=stealth,dashed,manualgreen] (b2) -- (proto);
+  \node[nt,anchor=north,text width=5.0cm] at (10.2,-1.7)
+    {nenhuma relacao declarada:\\basta ter o metodo};
+  \node[bx,fill=manualgreen!15,text width=4.8cm] (dentro) at (10.2,-3.6)
+    {classe de terceiros\\\scriptsize tem \texttt{medir}: serve};
+  \draw[->,>=stealth,dashed,manualgreen]
+    (dentro.east) .. controls (14.8,-3.2) and (14.8,0.4) .. (proto.east);
+\end{tikzpicture}
+```
+A tipagem nominal pergunta "de quem você herda?"; a estrutural pergunta "o que você sabe fazer?".
+:::
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class Mensuravel(Protocol):
+    def medir(self) -> float: ...
+
+
+class Termometro:
+    def medir(self) -> float:
+        return -29.8
+
+
+class Barometro:
+    def medir(self) -> float:
+        return 1013.2
+
+
+class Relogio:
+    def hora(self) -> str:
+        return "12:00"
+
+
+def registrar(s: Mensuravel) -> float:
+    return s.medir()
+
+
+print(registrar(Termometro()), registrar(Barometro()))
+print("Termometro e Mensuravel?", isinstance(Termometro(), Mensuravel))
+print("Relogio e Mensuravel?", isinstance(Relogio(), Mensuravel))
+print("Mensuravel esta no MRO de Termometro?", Mensuravel in Termometro.__mro__)
+```
+
+```text
+-29.8 1013.2
+Termometro e Mensuravel? True
+Relogio e Mensuravel? False
+Mensuravel esta no MRO de Termometro? False
+```
+
+A última linha é o ponto inteiro: `Termometro` **não herda** de `Mensuravel`, não sabe que ele existe, e ainda assim satisfaz o protocolo. Você pode declarar um protocolo para uma classe de uma biblioteca de terceiros que você não controla.
+
+O decorador `@runtime_checkable` é o que permite o `isinstance`, e ele tem uma limitação importante: verifica apenas a **existência dos métodos**, nunca as assinaturas. Uma classe com `def medir(self, unidade)` passa no `isinstance` e falha no verificador estático. Sem o decorador, `isinstance` levanta `TypeError` — o protocolo continua útil, só não é consultável em tempo de execução.
+
+O verificador, esse, é rigoroso:
+
+```text
+estatico.py:25: error: Argument 1 to "registrar" has incompatible type "Relogio"; expected "Mensuravel"  [arg-type]
+```
+
+## O resto do vocabulário
+
+### `NewType`: um tipo de verdade sobre um tipo existente
+
+@sec-cap068 mostrou que `type IdEstacao = str` é apenas um apelido: qualquer `str` serve. Quando você quer impedir que um identificador de estação seja confundido com uma string qualquer, `NewType` cria um tipo distinto para o verificador:
+
+```python
+from typing import NewType
+
+IdEstacao = NewType("IdEstacao", str)
+
+e = IdEstacao("onu-00043")
+print(e, type(e), e.upper())
+```
+
+```text
+onu-00043 <class 'str'> ONU-00043
+```
+
+Em tempo de execução, `e` é uma `str` comum e `IdEstacao(...)` é uma chamada que devolve o argumento intacto — custo praticamente zero. Estaticamente, a distinção é dura:
+
+```text
+estatico.py:33: error: Argument 1 to "consultar" has incompatible type "str"; expected "IdEstacao"  [arg-type]
+```
+
+É o remédio para a família de defeitos em que um `id` de usuário e um `id` de pedido são os dois `int` e acabam trocados.
+
+### `Self`: métodos encadeados que sobrevivem à herança
+
+```python
+from typing import Self
+
+class Consulta:
+    def __init__(self) -> None:
+        self.filtros: list[str] = []
+
+    def onde(self, f: str) -> Self:
+        self.filtros.append(f)
+        return self
+
+
+class ConsultaSQL(Consulta):
+    pass
+
+
+c = ConsultaSQL().onde("temp > 0").onde("estacao = 'x'")
+print(type(c).__name__, c.filtros)
+```
+
+```text
+ConsultaSQL ['temp > 0', "estacao = 'x'"]
+```
+
+Anotar o retorno como `-> "Consulta"` seria errado: o verificador passaria a achar que `ConsultaSQL().onde(...)` devolve uma `Consulta`, e qualquer método específico da subclasse ficaria inacessível depois do primeiro encadeamento. `Self` (3.11+) diz "a classe de quem chamou".
+
+### `overload`: uma função, várias assinaturas
+
+Quando o tipo do retorno depende do tipo do argumento:
+
+```python
+from typing import overload
+
+@overload
+def buscar(chave: int) -> str: ...
+@overload
+def buscar(chave: str) -> list[str]: ...
+def buscar(chave: int | str) -> str | list[str]:
+    return "um" if isinstance(chave, int) else ["varios"]
+```
+
+As declarações com `...` existem só para o verificador; a última, sem decorador, é a implementação real e a única que roda. Sem `overload`, o retorno seria `str | list[str]` em toda chamada, e quem chamasse com um `int` teria de estreitar o tipo à mão.
+
+### `TYPE_CHECKING`: importar só para anotar
+
+Um import que existe apenas para uma anotação custa tempo de carga e pode criar ciclo entre módulos. A saída:
+
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from meu_projeto.pesado import Relatorio
+
+
+def gerar(r: "Relatorio") -> None: ...
+```
+
+`TYPE_CHECKING` é `False` em tempo de execução e `True` para o verificador. A anotação precisa ir entre aspas (ou o arquivo precisa de `from __future__ import annotations`), porque o nome não existe quando o Python avalia a linha — no 3.14, com a avaliação preguiçosa da PEP 649, as aspas deixam de ser necessárias.
+
+## Configurando o mypy
+
+### A escada de rigor
+
+O `mypy` não tem um modo certo: tem um controle deslizante. O mesmo arquivo, com e sem `--strict`:
+
+```python
+import requests
+
+
+def carregar(caminho):
+    with open(caminho) as f:
+        return f.read()
+
+
+def contar(texto: str):
+    return len(texto.split())
+
+
+def total(caminhos: list[str]) -> int:
+    return sum(contar(carregar(c)) for c in caminhos)
+```
+
+```bash
+mypy frouxo.py
+```
+
+```text
+frouxo.py:1: error: Library stubs not installed for "requests"  [import-untyped]
+frouxo.py:1: note: Hint: "python3 -m pip install types-requests"
+Found 1 error in 1 file (checked 1 source file)
+```
+
+```bash
+mypy --strict frouxo.py
+```
+
+```text
+frouxo.py:1: error: Library stubs not installed for "requests"  [import-untyped]
+frouxo.py:4: error: Function is missing a type annotation  [no-untyped-def]
+frouxo.py:9: error: Function is missing a return type annotation  [no-untyped-def]
+frouxo.py:14: error: Call to untyped function "carregar" in typed context  [no-untyped-call]
+Found 4 errors in 1 file (checked 1 source file)
+```
+
+::: {#fig-escada-mypy}
+```{.tikz}
+%%| filename: escada-mypy
+%%| alt: Escada de rigor do mypy, do padrao ao modo estrito
+\begin{tikzpicture}[
+  dg/.style={draw,rounded corners,align=center,text width=7.4cm,minimum height=1.15cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-1.2,-1.4) rectangle (14.2,6.4);
+
+  \node[dg,fill=manualgray!20]    (d0) at (3.9,0.0) {\textbf{padrao}\\\scriptsize so verifica o que ja esta anotado};
+  \node[dg,fill=manualyellow!25]  (d1) at (5.3,1.4) {\texttt{check\_untyped\_defs}\\\scriptsize entra no corpo de funcao sem anotacao};
+  \node[dg,fill=manualyellow!30]  (d2) at (6.7,2.8) {\texttt{disallow\_untyped\_defs}\\\scriptsize exige anotacao em toda funcao};
+  \node[dg,fill=manualgreen!20]   (d3) at (8.1,4.2) {\texttt{warn\_return\_any}, \texttt{no\_implicit\_optional}\\\scriptsize fecha os vazamentos de \texttt{Any}};
+  \node[dg,fill=manualblue!25]    (d4) at (9.5,5.6) {\texttt{-{}-strict}\\\scriptsize liga tudo acima de uma vez};
+
+  \draw[->,>=stealth,thick,manualgray] (0.6,-0.75) -- (0.6,6.0)
+    node[nt,pos=0.5,rotate=90,above=2pt]{rigor crescente};
+\end{tikzpicture}
+```
+A adoção de tipagem é uma subida de degraus, não um interruptor.
+:::
+
+A escada importa porque `--strict` num projeto existente produz milhares de erros e a reação natural é desligar tudo. O caminho que funciona é subir um degrau por vez, e — crucialmente — **por módulo**.
+
+### `pyproject.toml`
+
+```toml
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# modulos ja tipados: rigor total
+[[tool.mypy.overrides]]
+module = ["meu_projeto.dominio.*", "meu_projeto.db.*"]
+strict = true
+
+# dependencia sem stubs: silencia so ela
+[[tool.mypy.overrides]]
+module = ["biblioteca_obscura.*"]
+ignore_missing_imports = true
+```
+
+O bloco `overrides` é o que torna a adoção incremental viável: rigor total onde o código já está pronto, tolerância onde ainda não está, sem um `# type: ignore` em cada linha.
+
+Duas opções merecem destaque. **`warn_unused_ignores`** avisa quando um `# type: ignore` deixou de ser necessário — sem ela, esses comentários se acumulam para sempre e escondem erros novos. E **`ignore_missing_imports` deve ser sempre por módulo, nunca global**: ligado globalmente, ele transforma qualquer erro de digitação num nome de import em silêncio.
+
+### Stubs: quando a biblioteca não é tipada
+
+Duas mensagens diferentes, dois problemas diferentes:
+
+```text
+error: Library stubs not installed for "requests"  [import-untyped]
+Hint: "python3 -m pip install types-requests"
+```
+
+```text
+error: Cannot find implementation or library stub for module named "biblioteca_obscura"  [import-not-found]
+```
+
+A primeira diz: a biblioteca existe, é conhecida, e as anotações dela vivem num pacote separado (`types-requests`), mantido no **typeshed**, o repositório oficial de stubs. Instale e pronto. A segunda diz: ninguém tem anotação para isso. Aí a saída é `ignore_missing_imports` para aquele módulo, ou escrever um arquivo `.pyi` mínimo com as poucas funções que você usa.
+
+Se você publica um pacote, um arquivo vazio chamado `py.typed` dentro dele (declarado no `pyproject.toml`) é o que avisa aos verificadores que suas anotações são para valer. Sem ele, quem usa seu pacote vê `Any` em tudo.
+
+### Não é só o mypy
+
+O `mypy` é a implementação de referência, mas em 2026 não é a única. O **pyright** (Microsoft) é o motor por trás do Pylance no VS Code — muita gente já usa um verificador o dia inteiro sem saber. E o **`ty`**, da Astral (a mesma do Ruff e do `uv`), é escrito em Rust e ainda está em versão inicial — `0.0.71` no momento desta escrita, o que é um aviso claro para não colocá-lo sozinho num CI de produção.
+
+Vale ver o mesmo arquivo pelos dois. No caso do protocolo, o `mypy` diz:
+
+```text
+estatico.py:25: error: Argument 1 to "registrar" has incompatible type "Relogio"; expected "Mensuravel"
+```
+
+E o `ty`:
+
+```text
+error[invalid-argument-type]: Argument to function `registrar` is incorrect
+  --> estatico.py:25:11
+   |
+25 | registrar(Relogio())
+   |           ^^^^^^^^^ Expected `Mensuravel`, found `Relogio`
+info: type `Relogio` is not assignable to protocol `Mensuravel`
+info: └── protocol member `medir` is not defined on type `Relogio`
+```
+
+A diferença é a última linha: o `ty` diz **qual membro do protocolo está faltando**. Num protocolo de um método a informação é redundante; num de oito, é a diferença entre corrigir em dez segundos e comparar assinaturas na mão.
+
+## 🐍 Jeito Pythônico
+
+**Protocolo em vez de classe base abstrata, salvo quando você precisa de implementação compartilhada.** Uma ABC força quem usa seu código a herdar; um `Protocol` descreve o que você precisa e deixa qualquer um satisfazê-lo, inclusive classes que já existiam antes do seu protocolo. A ABC continua ganhando quando há código concreto a compartilhar entre as subclasses — aí a herança está pagando por algo.
+
+**Anote o parâmetro com o mínimo que a função usa.** Se você só itera sobre o argumento, o tipo é `Iterable[T]`, não `list[T]`. Se você só lê chaves, é `Mapping[K, V]`, não `dict[K, V]`. Pedir `list` quando `Iterable` bastaria rejeita geradores, tuplas e conjuntos por nada — e é o erro de anotação mais comum depois de `Any`. A simetria oposta vale no retorno: devolva o tipo concreto (`list[str]`), porque quem recebe quer saber o que pode fazer com ele.
+
+**`cast` é uma mentira assinada por você.** `cast(list[int], dados)` não verifica nada em tempo de execução — apenas manda o verificador calar a boca. Use quando você sabe algo que ele não pode saber (o resultado de um `json.loads` cuja forma você já validou), e nunca como atalho para um erro que você não entendeu. `warn_redundant_casts` avisa quando um `cast` virou desnecessário.
+
+**Genéricos com a sintaxe do 3.12.** `def primeiro[T](...)` em vez de `T = TypeVar("T")` no topo do módulo. O escopo fica explícito, o `TypeVar` deixa de ser um objeto global reutilizável por engano, e o Ruff sinaliza a forma antiga quando `target-version` permite.
+
+**Rigor por módulo, não por projeto.** `--strict` global num código existente é como ligar todos os alarmes de uma vez: o resultado é desligar todos. `check_untyped_defs = true` para o projeto inteiro, `strict = true` nos `overrides` dos módulos já prontos, e a fronteira vai andando.
+
+## 🧪 Laboratório
+
+Você vai escrever um pequeno registro de sensores usando genérico e protocolo, ver o verificador recusar o que precisa ser recusado, e subir a escada de rigor num projeto de duas pastas.
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-tipagem && cd lab-tipagem
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install mypy
+mkdir -p src/coletor
+touch src/coletor/__init__.py
+```
+
+O `__init__.py` não é decorativo. Sem ele, num projeto com `src/`, o `mypy` acha o mesmo arquivo por dois caminhos e para tudo com uma mensagem que não parece ter nada a ver:
+
+```text
+error: Source file found twice under different module names: "sensores" and "src.coletor.sensores"
+```
+
+É a primeira pedra em que quase todo mundo tropeça ao adotar `mypy` num layout `src/`; a outra metade da solução é o `mypy_path` do passo 6.
+
+**Passo 2 — o protocolo e dois sensores.** Crie `src/coletor/sensores.py`:
+
+```python
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Mensuravel(Protocol):
+    def medir(self) -> float: ...
+
+
+class Termometro:
+    def medir(self) -> float:
+        return -29.8
+
+
+class Relogio:
+    def hora(self) -> str:
+        return "12:00"
+
+
+def registrar(s: Mensuravel) -> float:
+    return s.medir()
+```
+
+Acrescente `registrar(Relogio())` ao final e rode `mypy src`. Confirme o erro `arg-type`. Agora **apague** a linha e acrescente, no lugar dela:
+
+```python
+print(isinstance(Termometro(), Mensuravel))
+print(isinstance(Relogio(), Mensuravel))
+print(Mensuravel in Termometro.__mro__)
+```
+
+Rode com `python src/coletor/sensores.py`:
+
+```text
+True
+False
+False
+```
+
+`Termometro` satisfaz o protocolo **sem herdar dele** — a terceira linha é a prova. Apague os três `print` antes de seguir.
+
+**Passo 3 — um registro genérico.** Crie `src/coletor/registro.py`:
+
+```python
+class Registro[T]:
+    def __init__(self) -> None:
+        self._itens: list[T] = []
+
+    def guardar(self, x: T) -> None:
+        self._itens.append(x)
+
+    def ultimo(self) -> T:
+        return self._itens[-1]
+```
+
+E, num arquivo de teste rápido, confirme que o verificador acompanha o tipo:
+
+```python
+r: Registro[float] = Registro()
+r.guardar(-29.8)
+reveal_type(r.ultimo())
+r.guardar("frio")
+```
+
+```text
+uso.py:5: note: Revealed type is "float"
+uso.py:6: error: Argument 1 to "guardar" of "Registro" has incompatible type "str"; expected "float"  [arg-type]
+```
+
+Troque a anotação para `Registro[str]` e veja os dois resultados se inverterem.
+
+**Passo 4 — provar que o genérico é só estático.** Rode o mesmo arquivo com `python`, sem a linha do `reveal_type` (que não existe em tempo de execução). O `r.guardar("frio")` funciona perfeitamente. O genérico nunca esteve lá durante a execução.
+
+**Passo 5 — `NewType` e a troca de identificadores.**
+
+```python
+from typing import NewType
+
+IdEstacao = NewType("IdEstacao", str)
+IdSensor = NewType("IdSensor", str)
+
+
+def leitura(estacao: IdEstacao, sensor: IdSensor) -> float:
+    return 0.0
+
+
+e = IdEstacao("onu-00043")
+s = IdSensor("t1")
+leitura(s, e)      # trocados
+leitura("a", "b")  # strings cruas
+```
+
+```text
+news.py:13: error: Argument 1 to "leitura" has incompatible type "IdSensor"; expected "IdEstacao"
+news.py:13: error: Argument 2 to "leitura" has incompatible type "IdEstacao"; expected "IdSensor"
+news.py:14: error: Argument 1 to "leitura" has incompatible type "str"; expected "IdEstacao"
+news.py:14: error: Argument 2 to "leitura" has incompatible type "str"; expected "IdSensor"
+Found 4 errors in 1 file (checked 1 source file)
+```
+
+Duas linhas, quatro erros. Compare com o que aconteceria se os dois parâmetros fossem `str`: nenhum.
+
+**Passo 6 — a escada de rigor.** Acrescente um módulo com superfície não tipada, `src/coletor/relatorio.py`:
+
+```python
+from coletor.sensores import Termometro, registrar
+
+
+def formatar(valor, unidade="C"):
+    return f"{valor:.1f} {unidade}"
+
+
+def resumir(sensores):
+    linhas = []
+    for s in sensores:
+        linhas.append(formatar(registrar(s)))
+    linhas.append(formatar(registrar("estacao-1")))   # defeito real
+    return "\n".join(linhas)
+
+
+def principal() -> str:
+    return resumir([Termometro()])
+```
+
+E acrescente uma função sem anotação a `sensores.py`, para ela também aparecer na conta:
+
+```python
+def descrever(sensor):
+    return f"{type(sensor).__name__}: {sensor.medir()}"
+```
+
+Crie `pyproject.toml`:
+
+```toml
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "src"
+files = ["src"]
+```
+
+Rode `mypy` sem argumentos (ele lê `files` da configuração), depois acrescente uma linha de cada vez e rode de novo:
+
+| Configuração | Resultado |
+|---|---|
+| padrão | `Success: no issues found in 4 source files` |
+| `check_untyped_defs = true` | `Found 1 error in 1 file` |
+| `+ disallow_untyped_defs = true` | `Found 4 errors in 2 files` |
+| `strict = true` | `Found 8 errors in 2 files` |
+
+Repare no degrau que mais importa: **o padrão diz `Success` num arquivo que tem um defeito de verdade** — `registrar("estacao-1")` passa uma `str` onde se pede um `Mensuravel`. Só o `check_untyped_defs` o encontra, porque `resumir` não tem anotação e seu corpo é território ignorado por omissão. É a mesma armadilha de @sec-cap068, agora num projeto de duas pastas.
+
+Essa curva de 0 para 8 é exatamente a que você vai apresentar quando alguém propuser "ligar o modo estrito" numa base grande.
+
+**Passo 7 — rigor por módulo.** Volte a configuração para o degrau baixo e acrescente:
+
+```toml
+[[tool.mypy.overrides]]
+module = ["coletor.sensores"]
+strict = true
+```
+
+Agora `sensores.py` é verificado com rigor total e o resto do projeto não. **Este é o padrão que se usa na prática** — a lista de módulos estritos cresce a cada semana, e o CI garante que ela nunca encolhe.
+
+**Passo 8 — uma dependência sem stubs.** Adicione `import requests` no topo de `registro.py` e rode `mypy`. Leia a mensagem: ela nomeia o pacote de stubs. Resolva das duas formas e compare — primeiro com `python -m pip install types-requests`, depois removendo os stubs e usando um `override` com `ignore_missing_imports = true`. A primeira dá verificação de verdade; a segunda só cala o erro.
+
+## Resumo
+
+- **Genéricos** dão nome a um tipo que varia por chamada: `def primeiro[T](itens: list[T]) -> T` (PEP 695, 3.12+) preserva a informação que `Any` destruiria. `[T: float]` limita o que `T` pode ser; a forma antiga com `TypeVar` de módulo ainda funciona mas tem escopo pior.
+- **`Protocol` é tipagem estrutural**: descreve o que o objeto sabe fazer, sem exigir herança. Funciona com classes de terceiros que você não controla, e `@runtime_checkable` o torna consultável por `isinstance` — verificando apenas a existência dos métodos, nunca as assinaturas.
+- **`NewType`** cria um tipo distinto sobre um existente (custo zero em execução) e resolve a família de defeitos em que dois identificadores do mesmo tipo base são trocados. **`Self`** mantém a classe correta em métodos encadeados sob herança; **`overload`** descreve retornos que dependem do tipo do argumento; **`TYPE_CHECKING`** importa só para anotar.
+- O `mypy` é uma **escada de rigor**, não um interruptor: `check_untyped_defs`, depois `disallow_untyped_defs`, depois `--strict`. A adoção viável é **por módulo**, via `[[tool.mypy.overrides]]` no `pyproject.toml`, com a lista de módulos estritos crescendo aos poucos.
+- Biblioteca sem anotação tem duas mensagens distintas: **stub disponível no typeshed** (`pip install types-requests`) ou **inexistente** (`ignore_missing_imports` só para aquele módulo). Se você publica um pacote, `py.typed` é o que faz suas anotações valerem para quem o instala.
+- Anote o parâmetro com o mínimo que a função usa (`Iterable`, `Mapping`) e devolva o tipo concreto; `cast` é uma promessa não verificada, para quando você sabe algo que o verificador não pode saber.
