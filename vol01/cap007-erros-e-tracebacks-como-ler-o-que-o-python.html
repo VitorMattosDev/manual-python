@@ -1057,7 +1057,7 @@ ValueError: could not convert string to float: 'sem-leitura'</code></pre>
 <p><strong>A primeira linha é um aviso de ordenação</strong>, não informação sobre o erro: <code>most recent call last</code> significa “a chamada mais recente está por último”. É o Python dizendo onde olhar, e quase todo mundo ignora.</p>
 <p><strong>No meio vêm os quadros</strong> (<em>frames</em>), um por chamada de função que estava em andamento. Cada quadro tem três linhas: o arquivo e a linha, o nome da função (<code>in media_niveis</code>), o código daquela linha, e — desde o Python 3.11 — a marcação de coluna com til e circunflexo apontando o trecho exato da expressão que estava sendo avaliado.</p>
 <p><strong>A última linha é a resposta</strong>: o tipo da exceção (<code>ValueError</code>), dois pontos, e a mensagem. <code>could not convert string to float: 'sem-leitura'</code> diz o que deu errado <strong>e</strong> qual dado causou o problema.</p>
-<p><a href="#fig-anatomia-traceback" class="quarto-xref">Figura&nbsp;<span>7.1</span></a> organiza a leitura.</p>
+<p><a href="../vol11/cap072-depuracao-pdb-breakpoint-e-o-traceback-dificil.html#fig-anatomia-traceback" class="quarto-xref">Figura&nbsp;<span>72.1</span></a> organiza a leitura.</p>
 <div id="fig-anatomia-traceback" class="quarto-float quarto-figure quarto-figure-center anchored">
 <figure class="quarto-float quarto-float-fig figure">
 <div aria-describedby="fig-anatomia-traceback-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
