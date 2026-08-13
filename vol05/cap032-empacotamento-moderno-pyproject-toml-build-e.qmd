@@ -63,8 +63,8 @@ O `pip` não adivinha. Ele procura instruções, e desde a PEP 518 (2016) e a PE
     \texttt{pip} e o PyPI vão ler --- padrão da PEP 621, igual em toda
     ferramenta};
 
-  \node[sec] at (0.0,-4.2) {[tool.ruff]\\[tool.pytest.ini\_options]\\
-                            [tool.hatch.version]};
+  \node[sec] at (0.0,-4.2) {[tool.ruff]\\{}[tool.pytest.ini\_options]\\
+                            {}[tool.hatch.version]};
   \node[qm]  at (8.3,-5.0) {cada ferramenta};
   \node[lb, text width=4.0cm] at (10.6,-4.9) {configuração livre --- é aqui que
     morre a era do \texttt{setup.cfg}, \texttt{.flake8} e companhia};
