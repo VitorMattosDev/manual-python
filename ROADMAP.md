@@ -112,7 +112,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ### Volume 11 — Qualidade: Testes, Tipagem e Ferramentas
 
-- [ ] **cap 067** - Estilo, PEP 8 e formatação automática com Ruff e Black - `vol11/cap067-estilo-pep-8-e-formatacao-automatica-com-ruff.qmd`
+- [x] **cap 067** - Estilo, PEP 8 e formatação automática com Ruff e Black - `vol11/cap067-estilo-pep-8-e-formatacao-automatica-com-ruff.qmd`
 - [ ] **cap 068** - Anotações de tipo: fundamentos e o módulo typing - `vol11/cap068-anotacoes-de-tipo-fundamentos-e-o-modulo.qmd`
 - [ ] **cap 069** - Tipagem avançada: genéricos, protocolos e mypy - `vol11/cap069-tipagem-avancada-genericos-protocolos-e-mypy.qmd`
 - [ ] **cap 070** - Testes com pytest: fundamentos, asserções e fixtures - `vol11/cap070-testes-com-pytest-fundamentos-assercoes-e.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (66 concluidos).
+**Total:** 104 capitulos em 16 volumes (67 concluidos).
 

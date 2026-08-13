@@ -1,3 +1,688 @@
 # Estilo, PEP 8 e formatação automática com Ruff e Black {#sec-cap067}
 
-*(em elaboracao)*
+O coletor de estações meteorológicas que atravessou os dez primeiros volumes deste manual já lê configuração, grava em SQLite e emite log estruturado. Ele funciona. E, na primeira vez que outra pessoa abre um *pull request* nele, acontece o seguinte: o diff tem 180 linhas alteradas, das quais 6 mudam comportamento. As outras 174 são espaço em branco, aspas simples viradas em duplas e imports reordenados, porque o editor do colega tem outra configuração.
+
+Discussão de estilo é a discussão mais barata de se ter e a mais cara de se manter. Ela consome revisão de código que deveria estar procurando erro de lógica, polui o histórico do Git a ponto de o `git blame` deixar de responder quem escreveu aquela linha, e nunca termina — porque não há resposta certa sobre onde quebrar uma expressão longa.
+
+A saída que a comunidade Python encontrou tem duas partes. A primeira é um documento, a **PEP 8**, que estabelece um vocabulário comum. A segunda, muito mais recente e muito mais eficaz, é **entregar a decisão a um programa**: um formatador que reescreve o arquivo sempre do mesmo jeito, e um *linter* que aponta o que está errado antes de o código chegar à revisão. Este capítulo trata das duas, com foco na ferramenta que hoje domina o ecossistema — o **Ruff**.
+
+## PEP 8: o que ela diz e o que ela não diz
+
+A PEP 8 é de 2001, escrita por Guido van Rossum, Barry Warsaw e Nick Coghlan. Ela é um **guia de estilo para código na biblioteca padrão** — e essa origem explica muito do seu tom. Não é uma especificação da linguagem: nada nela é verificado pelo interpretador, e código que a viola roda exatamente igual.
+
+O que ela padroniza, em resumo:
+
+| Elemento | Convenção | Exemplo |
+|---|---|---|
+| Módulo e pacote | minúsculas, curto | `coleta`, `db` |
+| Função e variável | `snake_case` | `validar_leitura` |
+| Constante | `MAIUSCULAS_COM_UNDERSCORE` | `TEMPERATURA_MINIMA` |
+| Classe | `CapWords` | `EstacaoMeteorologica` |
+| Exceção | `CapWords` + sufixo `Error` | `LeituraInvalidaError` |
+| Atributo interno | prefixo `_` | `_cache` |
+| Evitar colisão com palavra reservada | sufixo `_` | `class_`, `id_` |
+
+E o resto: indentação de **4 espaços** (nunca tabulação), duas linhas em branco entre definições de topo e uma entre métodos, espaço depois da vírgula mas não antes dos parênteses, operadores binários cercados de um espaço, imports em linhas separadas e agrupados em três blocos (biblioteca padrão, terceiros, projeto local).
+
+Dois pontos costumam ser mal lidos.
+
+**O limite de 79 colunas.** A PEP 8 pede 79 caracteres por linha, herança de terminais de 80 colunas e de janelas lado a lado. Praticamente ninguém usa isso hoje: o Black adotou **88** (10% a mais, escolhido empiricamente por reduzir o número de quebras), e projetos grandes vão a 100 ou 120. O número em si é menos importante do que existir um número e ele ser o mesmo para todo mundo no repositório.
+
+**"A foolish consistency is the hobgoblin of little minds".** A própria PEP 8 abre com uma seção dizendo quando ignorá-la: quando aplicá-la deixa o código *menos* legível, quando o código ao redor já segue outra convenção (consistência local vence consistência global), ou quando o trecho é anterior à convenção e mudá-lo não traz benefício. Isso é o contrário de "cada um faz como quiser" — é uma cláusula de escape para casos concretos, não uma dispensa geral.
+
+## Duas ferramentas, dois trabalhos diferentes
+
+A confusão mais comum de quem começa é achar que *linter* e formatador são a mesma coisa. Não são, e a diferença define como cada um entra no fluxo de trabalho.
+
+::: {#fig-lint-format}
+```{.tikz}
+%%| filename: lint-vs-format
+%%| alt: Fluxo do codigo fonte passando pelo formatador e pelo linter, com saidas distintas
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=3.1cm,minimum height=1.25cm,font=\small},
+  lb/.style={font=\scriptsize\itshape,align=center},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.4,-4.9) rectangle (13.2,2.9);
+
+  \node[bx,fill=manualgray!20] (fonte) at (0,0) {\textbf{fonte}\\como foi digitado};
+  \node[bx,fill=manualblue!20]  (fmt)   at (5.4,1.4) {\textbf{formatador}\\\texttt{ruff format}};
+  \node[bx,fill=manualred!20]   (lint)  at (5.4,-1.4) {\textbf{linter}\\\texttt{ruff check}};
+  \node[bx,fill=manualgreen!20] (canon) at (10.8,1.4) {layout canonico\\mesmo texto sempre};
+  \node[bx,fill=manualyellow!30](diag)  at (10.8,-1.4) {lista de\\diagnosticos};
+
+  \draw[->,>=stealth,thick] (fonte) -- (fmt);
+  \draw[->,>=stealth,thick] (fonte) -- (lint);
+  \draw[->,>=stealth,thick] (fmt) -- (canon);
+  \draw[->,>=stealth,thick] (lint) -- (diag);
+
+  \node[nt,anchor=south,text width=6.4cm] at (5.4,2.35) {reescreve o arquivo, nao muda o significado};
+  \node[nt,anchor=north,text width=6.4cm] at (5.4,-2.35) {le o arquivo, aponta o que pode estar errado};
+
+  \draw[->,>=stealth,dashed,manualgray] (diag.south) .. controls (7.0,-4.7) and (-1.0,-4.7) .. (fonte.south);
+  \node[lb,anchor=north,text width=6.4cm] at (5.4,-3.95) {\texttt{-{}-fix} devolve a correcao ao arquivo};
+\end{tikzpicture}
+```
+O formatador decide *como o código aparece*; o *linter* decide *o que no código merece atenção*.
+:::
+
+O **formatador** é determinístico e não opinável em tempo de uso: dado um arquivo, existe uma única saída possível. Ele não avalia se seu código é bom — reescreve o layout e devolve. O **linter** faz análise estática: procura import não usado, variável definida e nunca lida, argumento padrão mutável, comparação suspeita. Ele não é obrigado a saber consertar o que encontrou (embora frequentemente saiba).
+
+Consequência prática: formatador roda **sempre**, sem discussão e sem revisão; *linter* produz uma lista que alguém precisa ler e decidir.
+
+## Ruff: um binário no lugar de seis
+
+Até por volta de 2022, o conjunto padrão de um projeto Python era mais ou menos assim: `black` para formatar, `isort` para ordenar imports, `flake8` para lintar, `pyupgrade` para modernizar sintaxe, `pydocstyle` para docstrings, mais um punhado de plugins de `flake8`. Seis ferramentas, seis configurações, seis lugares para o CI quebrar.
+
+O **Ruff** — escrito em Rust por Charlie Marsh, o mesmo autor do `uv` de @sec-cap033 — reimplementa todas elas num único executável.
+
+::: {#fig-ruff-consolida}
+```{.tikz}
+%%| filename: ruff-consolida
+%%| alt: Seis ferramentas separadas substituidas por um unico binario
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=2.5cm,minimum height=0.75cm,font=\scriptsize},
+  gd/.style={draw,rounded corners,align=center,text width=3.4cm,minimum height=3.2cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.2,-3.6) rectangle (11.6,3.4);
+
+  \node[bx,fill=manualgray!20] (t1) at (0,2.4)  {\texttt{black}};
+  \node[bx,fill=manualgray!20] (t2) at (0,1.44) {\texttt{isort}};
+  \node[bx,fill=manualgray!20] (t3) at (0,0.48) {\texttt{flake8}};
+  \node[bx,fill=manualgray!20] (t4) at (0,-0.48){\texttt{pyupgrade}};
+  \node[bx,fill=manualgray!20] (t5) at (0,-1.44){\texttt{pydocstyle}};
+  \node[bx,fill=manualgray!20] (t6) at (0,-2.4) {\texttt{flake8-bugbear}};
+
+  \node[gd,fill=manualblue!20] (ruff) at (7.4,0) {\textbf{ruff}\\[2pt] \texttt{ruff format}\\\texttt{ruff check}\\[4pt] \scriptsize um binario\\\scriptsize uma configuracao};
+
+  \foreach \n in {t1,t2,t3,t4,t5,t6}{
+    \draw[->,>=stealth,manualgray] (\n.east) -- (ruff.west);
+  }
+
+  \node[nt,anchor=north,text width=4.2cm] at (0,-2.95) {seis processos Python,\\seis arquivos de config};
+  \node[nt,anchor=north,text width=4.2cm] at (7.4,-1.85) {968 regras disponiveis\\na versao 0.16};
+\end{tikzpicture}
+```
+O Ruff reimplementa em Rust as regras de dezenas de ferramentas do ecossistema, sob uma configuração única.
+:::
+
+O ganho de velocidade não é marginal. Rodando o *linter* sobre as 1.358 bibliotecas instaladas num ambiente virtual deste capítulo:
+
+```bash
+ruff check --statistics --no-cache .venv/Lib/site-packages
+```
+
+```text
+Found 8692 errors.
+[*] 4100 fixable with the `--fix` option (1069 hidden fixes can be enabled with the `--unsafe-fixes` option).
+
+real    0m0.497s
+```
+
+Meio segundo para 1.358 arquivos, incluindo a inicialização do interpretador. Um `flake8` equivalente leva dezenas de segundos. A diferença muda o comportamento de quem escreve código: uma checagem que custa 0,5 s roda a cada gravação de arquivo no editor; uma que custa 40 s só roda no CI, quando já é tarde.
+
+### Instalação
+
+```bash
+pip install ruff
+# ou, preferencialmente, como ferramenta global isolada:
+uv tool install ruff
+```
+
+As versões usadas neste capítulo: **Ruff 0.16.2**, **Black 26.5.1**, Python 3.13.15.
+
+## O formatador em ação
+
+Este é o arquivo `leitura.py` do coletor, escrito por alguém com pressa:
+
+```python
+import json
+from typing import List, Dict
+import os
+
+TEMPERATURA_MINIMA=-40.0
+temperaturaMaxima = 60.0
+
+def validar( leituras:List[Dict], estacao = 'onu-00043' ):
+    resultado = { 'estacao': estacao, 'validas': [], 'rejeitadas': [] }
+    for l in leituras :
+        if l['temp'] >= TEMPERATURA_MINIMA and l['temp'] <= temperaturaMaxima:
+            resultado['validas'].append( l )
+        else :
+            resultado['rejeitadas'].append(l)
+    return resultado
+
+def carregar(caminho):
+    with open(caminho) as f: return json.load(f)
+```
+
+Rodando o formatador em modo de inspeção, que mostra o que mudaria sem tocar no arquivo:
+
+```bash
+ruff format --diff leitura.py
+```
+
+```text
+--- leitura.py
++++ leitura.py
+@@ -2,17 +2,20 @@
+ from typing import List, Dict
+ import os
+
+-TEMPERATURA_MINIMA=-40.0
++TEMPERATURA_MINIMA = -40.0
+ temperaturaMaxima = 60.0
+
+-def validar( leituras:List[Dict], estacao = 'onu-00043' ):
+-    resultado = { 'estacao': estacao, 'validas': [], 'rejeitadas': [] }
+-    for l in leituras :
+-        if l['temp'] >= TEMPERATURA_MINIMA and l['temp'] <= temperaturaMaxima:
+-            resultado['validas'].append( l )
+-        else :
+-            resultado['rejeitadas'].append(l)
++
++def validar(leituras: List[Dict], estacao="onu-00043"):
++    resultado = {"estacao": estacao, "validas": [], "rejeitadas": []}
++    for l in leituras:
++        if l["temp"] >= TEMPERATURA_MINIMA and l["temp"] <= temperaturaMaxima:
++            resultado["validas"].append(l)
++        else:
++            resultado["rejeitadas"].append(l)
+     return resultado
+
++
+ def carregar(caminho):
+-    with open(caminho) as f: return json.load(f)
++    with open(caminho) as f:
++        return json.load(f)
+
+1 file would be reformatted
+```
+
+Sete decisões tomadas sem consultar ninguém: espaço em volta do `=` de atribuição no nível do módulo (mas **não** em volta do `=` de argumento padrão sem anotação), aspas duplas, remoção do espaço interno em parênteses e chaves, duas linhas em branco antes de cada `def` de topo, e a instrução colada no `with` movida para a linha seguinte.
+
+Repare no detalhe do `=`: em `estacao = 'onu-00043'` o formatador removeu os espaços, porque a PEP 8 pede `estacao="valor"` para argumento padrão **sem anotação de tipo**. Se houvesse anotação, a regra inverte: `estacao: str = "valor"`, com espaços. É exatamente o tipo de sutileza que ninguém deveria precisar decorar.
+
+### A vírgula mágica
+
+O único ponto em que o formatador aceita instrução do autor é a **vírgula final** (*magic trailing comma*). Considere:
+
+```python
+campos = ["estacao", "instante", "temperatura"]
+
+limites = [
+    "estacao",
+    "instante",
+    "temperatura",
+]
+```
+
+Os dois cabem numa linha só. Ainda assim, `ruff format` responde `1 file already formatted` e não junta o segundo. A regra é: **se você deixou uma vírgula depois do último elemento, o formatador entende que a explosão em várias linhas foi intencional e a preserva**. Remova a vírgula e o próximo `ruff format` colapsa tudo:
+
+```text
+limites = ["estacao", "instante", "temperatura"]
+```
+
+Isso dá ao autor um controle grosso mas suficiente sobre a verticalidade de listas de parâmetros, dicionários de configuração e chamadas longas — sem reabrir a negociação sobre onde quebrar.
+
+### Black ou Ruff?
+
+O `ruff format` foi construído para ser um substituto do Black com a mesma saída. E é, literalmente: formatando o mesmo `leitura.py` com as duas ferramentas e comparando os arquivos byte a byte,
+
+```bash
+black leitura_a.py && ruff format leitura_b.py && diff leitura_a.py leitura_b.py
+```
+
+o `diff` não imprime nada. Há divergências conhecidas em casos de borda — comentários em posições exóticas, algumas expressões com `lambda`, *docstrings* com indentação irregular — mas para código comum a compatibilidade é intencional e mantida.
+
+A escolha, então, é operacional: se o projeto já usa Black e ninguém está incomodado, não há urgência em trocar o formatador. Se o projeto vai adotar o Ruff como *linter* de qualquer maneira, usar `ruff format` elimina uma dependência e um arquivo de configuração.
+
+## O *linter* em ação
+
+Sem nenhuma configuração, no mesmo arquivo:
+
+```bash
+ruff check --output-format concise leitura.py
+```
+
+```text
+leitura.py:1:1: I001 [*] Import block is un-sorted or un-formatted
+leitura.py:2:1: UP035 `typing.List` is deprecated, use `list` instead
+leitura.py:2:1: UP035 `typing.Dict` is deprecated, use `dict` instead
+leitura.py:3:8: F401 [*] `os` imported but unused
+leitura.py:8:23: UP006 [*] Use `list` instead of `List` for type annotation
+leitura.py:8:28: UP006 [*] Use `dict` instead of `Dict` for type annotation
+Found 6 errors.
+[*] 4 fixable with the `--fix` option.
+```
+
+(O modo `--output-format concise` dá uma linha por diagnóstico. O padrão, `full`, imprime também o trecho de código anotado com a posição exata e a correção sugerida — mais legível no terminal, longo demais para uma página impressa. Todas as saídas deste capítulo usam `concise`.)
+
+Cada diagnóstico tem um **código de duas partes**: um prefixo de família e um número. O prefixo diz de qual ferramenta original a regra veio:
+
+| Prefixo | Origem | Exemplo do que pega |
+|---|---|---|
+| `E`, `W` | `pycodestyle` | espaçamento, dois comandos na mesma linha |
+| `F` | `pyflakes` | import não usado, nome indefinido |
+| `I` | `isort` | ordenação e agrupamento de imports |
+| `UP` | `pyupgrade` | sintaxe antiga para a versão-alvo |
+| `N` | `pep8-naming` | `camelCase` onde deveria ser `snake_case` |
+| `B` | `flake8-bugbear` | armadilhas reais, não estilo |
+| `SIM` | `flake8-simplify` | construção que tem forma mais curta |
+| `PERF` | `perflint` | padrão com custo desnecessário |
+| `S` | `bandit` | problema de segurança |
+| `D` | `pydocstyle` | formato de *docstring* |
+
+O `[*]` marca diagnósticos com correção automática disponível. Com a configuração do projeto que este capítulo monta mais adiante, o mesmo arquivo produz nove diagnósticos, e `--fix` resolve seis:
+
+```bash
+ruff check --fix --output-format concise leitura.py
+```
+
+```text
+leitura.py:4:1: N816 Variable `temperaturaMaxima` in global scope should not be mixedCase
+leitura.py:8:9: E741 Ambiguous variable name: `l`
+leitura.py:16:28: E701 Multiple statements on one line (colon)
+Found 9 errors (6 fixed, 3 remaining).
+```
+
+Os três que sobraram são justamente os que **exigem julgamento humano**: renomear uma variável global, escolher um nome melhor que `l`, e decidir como quebrar a linha do `with`. O Ruff não adivinha nome de variável, e essa recusa é uma qualidade.
+
+### As regras que valem mais que estilo
+
+A família `E` é cosmética e o formatador já resolve quase tudo dela. As famílias que pagam o investimento são outras. Considere `coleta.py`:
+
+```python
+def acumular(leitura, historico=[]):
+    historico.append(leitura)
+    return historico
+
+
+def dentro_da_faixa(t):
+    if t >= -40.0 and t <= 60.0:
+        return True
+    else:
+        return False
+
+
+def resumir(estacoes):
+    nomes = []
+    for e in estacoes:
+        nomes.append(e.upper())
+    return nomes
+```
+
+Esse arquivo passa incólume pelo formatador — está perfeitamente formatado. E, sem nenhuma configuração:
+
+```bash
+ruff check --output-format concise coleta.py
+```
+
+```text
+coleta.py:1:33: B006 Do not use mutable data structures for argument defaults
+coleta.py:7:5: SIM103 Return the condition `bool(t >= -40.0 and t <= 60.0)` directly
+Found 2 errors.
+No fixes available (2 hidden fixes can be enabled with the `--unsafe-fixes` option).
+```
+
+O `B006` é o mais importante da lista e não tem nada de cosmético: é o argumento padrão mutável de @sec-cap019, o *bug* que faz `acumular` acumular entre chamadas independentes. O `SIM103` aponta o `if` que devolve `True`/`False` em vez da própria condição. Nenhum dos dois é opinião sobre espaço em branco — são defeitos de código que sobreviveriam a qualquer revisão apressada.
+
+Ligando ainda a família `PERF`, aparece o terceiro:
+
+```text
+coleta.py:16:9: PERF401 Use a list comprehension to create a transformed list
+```
+
+O laço que deveria ser uma compreensão de lista (@sec-cap026).
+
+Repare no rodapé das duas saídas: `2 hidden fixes can be enabled with the --unsafe-fixes option`. O Ruff classifica cada correção automática como **segura** ou **insegura**, e só aplica as seguras por padrão. Uma correção é insegura quando pode mudar comportamento ou descartar algo que o autor quis dizer — trocar `historico=[]` por `historico=None` mais uma guarda no corpo é exatamente esse caso, porque quem escreveu o código *pode* estar contando com o acumulador compartilhado. `--unsafe-fixes` existe, mas o lugar dele é numa passagem manual com o diff aberto, nunca num gancho automático.
+
+## Configuração: tudo no `pyproject.toml`
+
+O Ruff lê `pyproject.toml` (a mesma configuração de projeto de @sec-cap032) ou um `ruff.toml` dedicado. Uma configuração inicial razoável:
+
+```toml
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+extend-select = ["E", "N", "SIM", "PERF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+```
+
+Ponto a ponto:
+
+- **`target-version`** informa a versão mínima de Python suportada. É o que autoriza o `UP` a sugerir `list[str]` em vez de `List[str]`, `X | None` em vez de `Optional[X]` e `match` onde couber. Com `target-version = "py38"` essas sugestões desaparecem, porque a sintaxe não existiria lá.
+- **`ignore = ["E501"]`** desliga a checagem de comprimento de linha — não porque linha longa seja boa, mas porque o **formatador já cuida disso**, e manter as duas ligadas produz reclamação em linhas que o formatador conscientemente decidiu não quebrar (URL em comentário, string longa).
+- **`quote-style`** é uma das poucas opções do formatador. Existem também `indent-style` e `docstring-code-format`; a lista é deliberadamente curta.
+
+### `extend-select`, não `select`
+
+Falta o item mais importante, e ele merece seção própria porque é o erro de configuração mais comum hoje.
+
+`select` **substitui** o conjunto padrão. `extend-select` **acrescenta** a ele. A diferença era pequena quando o padrão do Ruff eram umas poucas dezenas de regras; deixou de ser. Dá para medir, contando as regras efetivamente ativas em cada configuração:
+
+| Configuração | Regras ativas |
+|---|---|
+| padrão, sem configuração | 413 |
+| `extend-select = ["E", "N", "SIM", "PERF"]` | 455 |
+| `select = ["E", "F", "I", "UP", "B", "SIM", "N"]` | 193 |
+| `select = ["ALL"]` | 810 |
+
+A terceira linha é a armadilha. Aquele `select` de sete famílias **parece** generoso — é o que se vê em tutorial e em resposta de fórum — e na prática **desliga mais da metade do que vinha ligado de graça**: as famílias `RUF`, `FURB`, `PYI`, `DTZ`, `LOG` e `ASYNC` somem sem aviso nenhum. O Ruff não reclama: você pediu sete famílias, ele te deu sete famílias.
+
+O custo é fácil de demonstrar. Este arquivo tem um defeito clássico de fuso horário (@sec-cap056):
+
+```python
+import datetime
+
+agora = datetime.datetime.now()
+print(agora)
+```
+
+Sem configuração alguma:
+
+```text
+dtz.py:3:9: DTZ005 `datetime.datetime.now()` called without a `tz` argument
+Found 1 error.
+```
+
+Com o `select` de sete famílias:
+
+```text
+All checks passed!
+```
+
+Configurar o *linter* deixou o projeto **menos** protegido do que estava antes de existir configuração. No arquivo `leitura.py` as duas formas produzem a mesma lista de nove diagnósticos, o que torna a perda invisível justamente onde ela deveria doer.
+
+Regra prática: **comece sem configuração de regras, e use `extend-select` quando quiser mais.** `select` só quando você conscientemente quer um conjunto fechado e sabe o que está deixando de fora.
+
+Vale conferir o inventário antes de subir a barra:
+
+```bash
+ruff check --statistics leitura.py
+```
+
+```text
+2	UP006	[*] non-pep585-annotation
+2	UP035	[ ] deprecated-import
+1	E701 	[ ] multiple-statements-on-one-line-colon
+1	E741 	[ ] ambiguous-variable-name
+1	F401 	[*] unused-import
+1	I001 	[*] unsorted-imports
+1	N816 	[ ] mixed-case-variable-in-global-scope
+Found 9 errors.
+```
+
+Numa base de código existente, `--statistics` é o caminho para adotar o Ruff sem parar tudo: rode com `--select ALL` uma vez para ver o mapa completo, veja o que aparece em maior volume, e acrescente ao `extend-select` definitivo apenas as famílias que você está disposto a corrigir agora. `ALL` liga 810 das 968 regras que a versão 0.16 conhece — algumas contraditórias entre si, outras exigindo configuração adicional — e não é para ser mantido ligado em produção.
+
+### Suprimindo um diagnóstico específico
+
+Quando uma regra está certa em geral e errada naquele ponto, a supressão é por linha, com o código explícito:
+
+```python
+import json  # noqa: F401
+import csv
+```
+
+```text
+nq.py:1:1: I001 [*] Import block is un-sorted or un-formatted
+nq.py:2:8: F401 [*] `csv` imported but unused
+```
+
+O `json` deixou de ser reportado; o `csv`, na linha seguinte e sem marcação, continua. Duas regras de higiene: **nunca escrever `# noqa` sem o código** (isso desliga tudo naquela linha, inclusive erros futuros que você gostaria de ver), e preferir `per-file-ignores` no `pyproject.toml` quando a exceção vale para um arquivo inteiro — o `__init__.py` que reexporta nomes é o caso clássico:
+
+```toml
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["S101"]
+```
+
+## Onde isso roda
+
+Formatação automática só funciona se for automática. Três pontos de entrada, em ordem de proximidade com quem escreve:
+
+1. **No editor, ao salvar.** A extensão oficial `charliermarsh.ruff` no VS Code formata e linta a cada gravação. É onde o retorno é mais barato: o erro nunca chega a existir no histórico.
+2. **No `git commit`, via `pre-commit`.** Um gancho que roda `ruff check --fix` e `ruff format` antes de cada commit garante que nada mal formatado entra no repositório, mesmo vindo de quem não configurou o editor.
+3. **No CI, em modo de verificação.** Aqui o comando é diferente: em vez de corrigir, ele **falha**.
+
+```bash
+ruff check --output-format=github .
+ruff format --check .
+```
+
+```text
+1 file would be reformatted, 1 file already formatted
+```
+
+Com saída de status 1, o que derruba o *job*. O `--check` nunca escreve no disco — no CI, corrigir o arquivo automaticamente seria inútil (o resultado é descartado) e perigoso (esconderia o problema de quem abriu o PR). A configuração completa de `pre-commit` e do fluxo de integração contínua é assunto do Volume 16.
+
+Um último cuidado histórico: quando um projeto adota o formatador pela primeira vez, o commit que reformata tudo suja o `git blame` de todo mundo. A solução é registrar o *hash* desse commit num arquivo `.git-blame-ignore-revs` e apontar o Git para ele:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+O GitHub respeita esse arquivo automaticamente.
+
+## 🐍 Jeito Pythônico
+
+**Estilo não se discute em revisão de código — se automatiza.** A postura idiomática em Python hoje não é "conheço a PEP 8 de cor", é "meu repositório tem um formatador configurado e ninguém precisa conhecer a PEP 8 de cor". A PEP 8 continua sendo a referência do vocabulário (`snake_case`, `CapWords`, 4 espaços), mas a aplicação é trabalho de máquina.
+
+O antipadrão é o **projeto sem formatador com um guia de estilo em `CONTRIBUTING.md`**. Ele custa em três frentes: revisão de código gasta em vírgula, diffs poluídos que quebram o `git blame`, e o desgaste social de alguém ter de comentar "espaço a mais aqui" num PR de outra pessoa. Nenhuma delas aparece num benchmark, todas aparecem na velocidade da equipe.
+
+Segundo ponto: **`extend-select`, `ignore` mínimo, `# noqa` sempre com código.** O conselho antigo — "declare `select` explicitamente para não depender do padrão" — envelheceu mal: com 413 regras curadas no padrão do Ruff 0.16, um `select` escrito à mão quase sempre *reduz* a cobertura, e reduz em silêncio. E um `# noqa` pelado é uma dívida invisível: daqui a um ano ninguém sabe o que ele estava suprimindo, e ele estará escondendo um `F821` de verdade.
+
+Terceiro: **desligue `E501` se você usa formatador.** Manter as duas checagens de comprimento de linha ligadas é pedir para receber reclamação sobre linhas que o formatador decidiu, deliberadamente, não quebrar. Uma autoridade sobre layout, não duas.
+
+Quarto: **`target-version` acompanha o `requires-python` do `pyproject.toml`**. Elas não se sincronizam sozinhas em toda configuração, e um `target-version` desatualizado silencia justamente as sugestões de modernização (`UP`) que justificam metade do valor da ferramenta.
+
+Sobre a escolha Black *versus* Ruff: em 2026, para projeto novo, **Ruff para as duas funções**. Não porque o Black seja ruim — ele é a razão de tudo isso existir, e o `ruff format` é uma reimplementação do que ele estabeleceu — mas porque uma dependência a menos e uma configuração a menos são vantagens reais, e a saída é a mesma.
+
+## 🧪 Laboratório
+
+Você vai pegar um módulo bagunçado, colocá-lo sob Ruff e ver a diferença entre o que a máquina conserta e o que ela devolve para você resolver.
+
+**Passo 1 — ambiente limpo.**
+
+```bash
+mkdir lab-estilo && cd lab-estilo
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install ruff
+ruff --version
+```
+
+```text
+ruff 0.16.2
+```
+
+**Passo 2 — o arquivo a tratar.** Crie `coletor.py` com exatamente este conteúdo (a bagunça é proposital):
+
+```python
+import json
+from typing import List, Dict
+import os
+
+TEMPERATURA_MINIMA=-40.0
+temperaturaMaxima = 60.0
+
+def validar( leituras:List[Dict], estacao = 'onu-00043' ):
+    resultado = { 'estacao': estacao, 'validas': [], 'rejeitadas': [] }
+    for l in leituras :
+        if l['temp'] >= TEMPERATURA_MINIMA and l['temp'] <= temperaturaMaxima:
+            resultado['validas'].append( l )
+        else :
+            resultado['rejeitadas'].append(l)
+    return resultado
+
+def acumular(leitura, historico=[]):
+    historico.append(leitura)
+    return historico
+```
+
+**Passo 3 — diagnóstico antes de qualquer mudança**, sem configuração nenhuma:
+
+```bash
+ruff check --statistics coletor.py
+```
+
+```text
+2	F401 	[*] unused-import
+2	UP006	[*] non-pep585-annotation
+2	UP035	[ ] deprecated-import
+1	B006 	[ ] mutable-argument-default
+1	I001 	[*] unsorted-imports
+Found 8 errors.
+[*] 5 fixable with the `--fix` option (1 hidden fix can be enabled with the `--unsafe-fixes` option).
+```
+
+Oito diagnósticos com zero linhas de configuração — inclusive o `B006`, o defeito mais grave do arquivo. Repare no que **não** apareceu: `E741` (o nome `l`) e `N816` (o `temperaturaMaxima`). O conjunto padrão do Ruff é curado, não é uma família inteira: das regras `E` do `pycodestyle`, só duas estão ligadas.
+
+**Passo 4 — configurar o projeto.** Crie `pyproject.toml`:
+
+```toml
+[project]
+name = "lab-estilo"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+extend-select = ["E", "N", "SIM", "PERF"]
+ignore = ["E501"]
+```
+
+Rode `ruff check --statistics coletor.py` de novo:
+
+```text
+2	F401 	[*] unused-import
+2	UP006	[*] non-pep585-annotation
+2	UP035	[ ] deprecated-import
+1	B006 	[ ] mutable-argument-default
+1	E741 	[ ] ambiguous-variable-name
+1	I001 	[*] unsorted-imports
+1	N816 	[ ] mixed-case-variable-in-global-scope
+Found 10 errors.
+```
+
+Dez em vez de oito: `E741` e `N816` entraram. Agora faça o experimento que mostra por que `extend-select` importa — troque a linha por `select = ["E", "F", "I", "UP", "B", "SIM", "N"]` e rode outra vez. **O resultado é idêntico: os mesmos dez diagnósticos.** E, ainda assim, você acabou de desligar 262 regras (de 455 ativas para 193), incluindo as famílias `RUF`, `FURB`, `DTZ` e `LOG`. Nenhuma delas tinha achado nada *neste* arquivo, então a perda é completamente invisível aqui — e vai continuar invisível até o dia em que alguém escrever um `datetime.now()` sem fuso horário e o `DTZ005` não estiver mais lá para avisar. Desfaça: volte para `extend-select`.
+
+**Passo 5 — formatar e observar o que muda.**
+
+```bash
+ruff format --diff coletor.py    # inspecionar
+ruff format coletor.py           # aplicar
+```
+
+```text
+1 file reformatted
+```
+
+Abra o arquivo. Confirme: aspas duplas, `TEMPERATURA_MINIMA = -40.0` com espaços, `estacao="onu-00043"` sem espaços, duas linhas em branco antes de cada `def`.
+
+**Passo 6 — corrigir o que é automatizável.**
+
+```bash
+ruff check --fix --output-format concise coletor.py
+```
+
+```text
+coletor.py:3:1: N816 Variable `temperaturaMaxima` in global scope should not be mixedCase
+coletor.py:8:9: E741 Ambiguous variable name: `l`
+coletor.py:16:33: B006 Do not use mutable data structures for argument defaults
+Found 9 errors (6 fixed, 3 remaining).
+```
+
+Sobraram os três que exigem uma decisão sua. Note que o total mudou de `10` para `9`: o `--fix` aplica correções em rodadas sucessivas, e depois de remover os dois imports não usados o bloco restante já estava ordenado — o `I001` deixou de existir junto com as linhas que o causavam, em vez de ser "corrigido".
+
+**Passo 7 — resolver os três à mão.** Renomeie `temperaturaMaxima` para `TEMPERATURA_MAXIMA`, troque `l` por `leitura` (nas quatro ocorrências), e conserte o argumento padrão mutável:
+
+```python
+def acumular(leitura, historico=None):
+    if historico is None:
+        historico = []
+    historico.append(leitura)
+    return historico
+```
+
+**Passo 8 — o estado que o CI exigiria.**
+
+```bash
+ruff check coletor.py
+ruff format --check coletor.py
+```
+
+```text
+All checks passed!
+```
+
+```text
+unformatted: File would be reformatted
+  --> coletor.py:1:1
+   |
+   -
+1  | TEMPERATURA_MINIMA = -40.0
+--------------------------------------------------------------------------------
+7  |     for leitura in leituras:
+   -         if leitura["temp"] >= TEMPERATURA_MINIMA and leitura["temp"] <= TEMPERATURA_MAXIMA:
+8  +         if (
+9  +             leitura["temp"] >= TEMPERATURA_MINIMA
+10 +             and leitura["temp"] <= TEMPERATURA_MAXIMA
+11 +         ):
+```
+
+O *linter* passou, o formatador não. **Este é o passo mais instrutivo do laboratório**, e ele não estava planejado: ao trocar `l` por `leitura` você alongou a condição de 79 para 94 colunas, e ela deixou de caber no limite de 88. O formatador quer quebrá-la em parênteses.
+
+A lição é operacional: **toda edição manual pede uma passagem do formatador depois.** Rode `ruff format coletor.py` e confira o resultado:
+
+```python
+        if (
+            leitura["temp"] >= TEMPERATURA_MINIMA
+            and leitura["temp"] <= TEMPERATURA_MAXIMA
+        ):
+```
+
+Agora os dois comandos passam:
+
+```text
+All checks passed!
+1 file already formatted
+```
+
+Ambos com saída de status 0. Confirme com `echo $?` (ou `echo $LASTEXITCODE` no PowerShell) — é exatamente isso que o servidor de integração contínua vai verificar, e é o único critério que importa.
+
+**Passo 9 — o experimento que ensina a vírgula mágica.** Acrescente ao final do arquivo, deixando duas linhas em branco antes:
+
+```python
+CAMPOS = [
+    "estacao",
+    "instante",
+    "temperatura",
+]
+```
+
+Rode `ruff format coletor.py`: a lista não muda. Agora apague a vírgula depois de `"temperatura"` e rode de novo:
+
+```text
+CAMPOS = ["estacao", "instante", "temperatura"]
+```
+
+Colapsou. Você acabou de descobrir o único botão que o formatador te dá — e, de quebra, por que tanto código Python moderno tem vírgula sobrando no fim das listas.
+
+## Resumo
+
+- A **PEP 8** define o vocabulário comum de estilo — `snake_case` para funções e variáveis, `CapWords` para classes, `MAIUSCULAS` para constantes, 4 espaços de indentação — e a própria PEP abre com a cláusula de que consistência local vence consistência global.
+- **Formatador e *linter* são trabalhos diferentes**: o primeiro reescreve o layout de forma determinística e roda sem revisão; o segundo faz análise estática e produz diagnósticos que alguém precisa ler.
+- O **Ruff** substitui `black`, `isort`, `flake8`, `pyupgrade` e dezenas de plugins num único binário — 1.358 arquivos checados em meio segundo — e o `ruff format` produz saída byte a byte idêntica à do Black em código comum.
+- O valor real do *linter* não está na família `E` (que o formatador já resolve), mas em `B`, `SIM` e `PERF`: `B006` pega o argumento padrão mutável, um defeito de comportamento que passa por qualquer revisão apressada.
+- **Configuração no `pyproject.toml`** com `extend-select` (nunca `select`, que substitui as 413 regras curadas do padrão e reduz a cobertura em silêncio), `target-version` alinhado ao `requires-python` e `E501` desligado; `# noqa` sempre com o código da regra, e `per-file-ignores` quando a exceção vale para o arquivo inteiro.
+- Automatize nos três pontos — editor ao salvar, `pre-commit` no commit, `--check` no CI — e registre o commit de reformatação em `.git-blame-ignore-revs` para não destruir o `git blame`.
