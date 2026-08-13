@@ -1,3 +1,369 @@
 # Raspagem de dados responsável: HTML, seletores e limites éticos {#sec-cap079}
 
-*(em elaboracao)*
+O instituto meteorológico publica as leituras das estações numa página HTML. Não há API, não há CSV para baixar, e o dado que você precisa está numa tabela entre um cabeçalho e um rodapé.
+
+**Raspagem** (*scraping*) é extrair dado estruturado de um documento feito para olhos humanos. É uma técnica legítima e amplamente usada — jornalismo de dados, pesquisa acadêmica, monitoramento de preço, arquivamento — e é também a área deste manual em que a decisão técnica vem **depois** de uma decisão de responsabilidade.
+
+Este capítulo fecha o Volume 12 com as duas coisas na ordem certa: primeiro quando não raspar, depois como fazer bem quando for o caso. Todos os exemplos rodam sobre HTML local, sem tocar em site de terceiros.
+
+## Antes da primeira linha de código
+
+::: {#fig-antes-de-raspar}
+```{.tikz}
+%%| filename: antes-de-raspar
+%%| alt: Sequencia de verificacoes antes de raspar um site
+\begin{tikzpicture}[
+  q/.style={draw,rounded corners,align=center,text width=4.6cm,minimum height=1.15cm,font=\scriptsize},
+  s/.style={draw,rounded corners,align=center,text width=3.4cm,minimum height=0.9cm,font=\scriptsize},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-1.4,-7.6) rectangle (13.8,1.6);
+
+  \node[q,fill=manualblue!18]  (q1) at (3.4,0.8)  {\textbf{1.} existe API, CSV,\\ou despejo publico?};
+  \node[q,fill=manualblue!18]  (q2) at (3.4,-1.0) {\textbf{2.} o que dizem os termos\\de uso e o \texttt{robots.txt}?};
+  \node[q,fill=manualblue!18]  (q3) at (3.4,-2.8) {\textbf{3.} o dado e pessoal?\\(LGPD)};
+  \node[q,fill=manualblue!18]  (q4) at (3.4,-4.6) {\textbf{4.} meu volume prejudica\\o servico de outros?};
+  \node[q,fill=manualgreen!20] (ok) at (3.4,-6.4) {\textbf{raspar com cuidado}};
+
+  \node[s,fill=manualgreen!20] (a1) at (10.2,0.8)  {use isso: e mais\\estavel e mais rapido};
+  \node[s,fill=manualred!18]   (a2) at (10.2,-1.0) {proibido? nao raspe.\\peca autorizacao};
+  \node[s,fill=manualred!18]   (a3) at (10.2,-2.8) {base legal, minimizacao\\e prazo --- ou nao colete};
+  \node[s,fill=manualyellow!30](a4) at (10.2,-4.6) {reduza a taxa ate\\ser irrelevante};
+
+  \foreach \a/\b in {q1/q2,q2/q3,q3/q4,q4/ok}{ \draw[->,>=stealth,thick] (\a) -- (\b); }
+  \foreach \a/\b in {q1/a1,q2/a2,q3/a3,q4/a4}{ \draw[->,>=stealth,dashed,manualgray] (\a) -- (\b); }
+
+  \node[nt,anchor=north,text width=12.6cm] at (5.8,-7.0)
+    {a resposta certa para a pergunta 1 encerra o assunto na maioria dos casos};
+\end{tikzpicture}
+```
+Quatro perguntas antes da primeira linha de código — e a primeira resolve a maior parte dos casos.
+:::
+
+**1. Existe uma via oficial?** API, arquivo para baixar, portal de dados abertos, contato institucional. Uma API é mais rápida, mais estável, não quebra quando o site muda de layout, e não gera atrito com ninguém. É raro alguém procurar direito e não achar.
+
+**2. O que os termos de uso e o `robots.txt` dizem?** O `robots.txt` é uma convenção técnica, não uma lei; os termos de uso podem ser contrato. Ignorar os dois é assumir um risco que raramente compensa.
+
+**3. O dado é pessoal?** No Brasil, a LGPD se aplica a dado pessoal **mesmo que publicamente acessível**. "Estava na internet" não é base legal. Isso muda o cálculo por completo: exige finalidade declarada, minimização, prazo de retenção e, muitas vezes, simplesmente não coletar.
+
+**4. Meu volume prejudica o serviço?** Um laço sem pausa pode derrubar um site pequeno — e aí a raspagem deixou de ser leitura e virou um problema para terceiros.
+
+### Lendo o `robots.txt` com a biblioteca padrão
+
+```python
+import urllib.robotparser
+
+rp = urllib.robotparser.RobotFileParser()
+rp.set_url("https://exemplo.org/robots.txt")
+rp.read()
+rp.can_fetch("coletor/1.0", "https://exemplo.org/leituras")
+```
+
+Com um arquivo de exemplo:
+
+```text
+User-agent: *
+Disallow: /admin/
+Disallow: /busca
+Crawl-delay: 2
+
+User-agent: coletor-academico
+Disallow: /
+```
+
+```text
+  coletor/1.0          /leituras        -> True
+  coletor/1.0          /admin/painel    -> False
+  coletor/1.0          /busca?q=x       -> False
+  coletor-academico    /leituras        -> False
+  crawl_delay(*)      -> 2
+```
+
+Três coisas a notar: as regras são **por agente**, e a linha específica de `coletor-academico` proíbe tudo; `Crawl-delay: 2` pede dois segundos entre requisições, e `rp.crawl_delay()` devolve isso; e a verificação leva uma linha de código, o que remove qualquer desculpa para não fazê-la.
+
+## Analisando HTML
+
+```bash
+pip install beautifulsoup4 lxml
+```
+
+Versões usadas: **beautifulsoup4 4.15**, **lxml 6.1**.
+
+```python
+from bs4 import BeautifulSoup
+
+sopa = BeautifulSoup(HTML, "lxml")
+print("title :", sopa.title.string)
+print("h1    :", sopa.h1.get_text(strip=True))
+print("lang  :", sopa.html["lang"])
+```
+
+```text
+title : Estacoes -- pagina 1
+h1    : Leituras recentes
+lang  : pt-BR
+```
+
+O segundo argumento é o analisador, e a escolha tem consequência. `html.parser` vem na biblioteca padrão e não instala nada; `lxml` é mais rápido e mais tolerante com HTML quebrado. A diferença aparece em documento malformado:
+
+```python
+for nome in ("html.parser", "lxml"):
+    s = BeautifulSoup("<table><tr><td>x</td></tr></table>", nome)
+    print(f"  {nome:12} -> {s.decode()[:60]}")
+```
+
+```text
+  html.parser  -> <table><tr><td>x</td></tr></table>
+  lxml         -> <html><body><table><tr><td>x</td></tr></table></body></html>
+```
+
+O `lxml` **reconstruiu** a estrutura que faltava, exatamente como um navegador faria. Um seletor escrito olhando o navegador tem mais chance de funcionar com `lxml`. Sempre passe o analisador explicitamente — sem ele, o Beautiful Soup escolhe o melhor disponível e emite um aviso, o que faz o mesmo código se comportar diferente em máquinas diferentes.
+
+### Seletores CSS
+
+```python
+print("por id      :", sopa.select_one("#leituras")["class"])
+print("linhas      :", len(sopa.select("table#leituras tbody tr")))
+print("primeira est:", sopa.select_one("td.est").text)
+print("classe par  :", len(sopa.select("tr.par")))
+print("link prox   :", sopa.select_one("a.proxima")["href"])
+```
+
+```text
+por id      : ['dados', 'tabela']
+linhas      : 3
+primeira est: onu-00043
+classe par  : 2
+link prox   : /leituras?pagina=2
+```
+
+`select` devolve uma lista, `select_one` devolve o primeiro ou `None`. Repare que `["class"]` devolveu uma **lista** — atributos multivalorados são listas no Beautiful Soup, o que surpreende quem espera uma string.
+
+Beautiful Soup também tem a API `find`/`find_all`, mas os seletores CSS têm uma vantagem prática decisiva: são **os mesmos** que você testa no console do navegador com `document.querySelectorAll(...)`. Escrever o seletor no navegador e colar no Python encurta muito o ciclo.
+
+### Extraindo a tabela
+
+```python
+linhas = []
+for tr in sopa.select("table#leituras tbody tr"):
+    celulas = [td.get_text(strip=True) for td in tr.select("td")]
+    linhas.append(
+        {"estacao": celulas[0], "instante": celulas[1], "temperatura": float(celulas[2])}
+    )
+```
+
+```text
+{'estacao': 'onu-00043', 'instante': '2026-03-01T00:00', 'temperatura': -29.8}
+{'estacao': 'onu-00051', 'instante': '2026-03-01T06:00', 'temperatura': -30.1}
+{'estacao': 'onu-00107', 'instante': '2026-03-01T12:00', 'temperatura': -28.4}
+```
+
+## As três armadilhas do texto extraído
+
+### 1. `select_one` devolve `None`, e o erro aparece longe
+
+```python
+faltante = sopa.select_one("#nao-existe")
+print(faltante)
+faltante.text
+```
+
+```text
+None
+AttributeError: 'NoneType' object has no attribute 'text'
+```
+
+Não há exceção no seletor — só um `None` que viaja pelo código até estourar noutro lugar. Em raspagem isso é a regra, não a exceção: a página muda de layout e metade dos seletores para de casar. **Verifique antes de usar**, e trate a ausência como um caso previsto, com registro (@sec-cap060) dizendo qual seletor falhou.
+
+### 2. Espaço não quebra número — quebra comparação
+
+Esta célula tem um espaço rígido antes e um espaço comum depois:
+
+```python
+crua = sopa.select("td.temp")[2].text
+limpa = sopa.select("td.temp")[2].get_text(strip=True)
+```
+
+```text
+sem strip : '\xa0-28.4 '
+com strip : '-28.4'
+```
+
+E aqui está o resultado que contraria a intuição:
+
+```text
+float('\xa0-28.4 ')  -> -28.4
+int('\xa042')        -> 42
+```
+
+**O `float` aceita.** Ele trata espaço rígido como espaço em branco e converte sem reclamar. Quem espera que o dado sujo "quebre alto" fica tranquilo à toa — porque o estrago está do outro lado:
+
+```text
+' onu-00043\n' == 'onu-00043'          -> False
+' onu-00043\n' in {'onu-00043': 1}     -> False
+' onu-00043\n'.strip() == 'onu-00043'  -> True
+```
+
+O identificador não limpo **não bate** com o mesmo identificador limpo. Numa junção de dados, o resultado não é um erro: é uma tabela com metade das linhas faltando, e ninguém percebe. Use `get_text(strip=True)` sempre, e normalize (@sec-cap014) quando o texto tiver acento vindo de fontes diferentes.
+
+### 3. Caractere tipográfico **quebra** o número
+
+```text
+espaco comum + NBSP        '\xa0-28.4 '     -> -28.4
+sinal de menos U+2212      '-28.4'          -> ValueError
+traco figurativo U+2012    '-28.4'          -> ValueError
+virgula decimal            '-28,4'          -> ValueError
+```
+
+Os três últimos **parecem** idênticos ao primeiro na tela. HTML publicado por sistema de conteúdo está cheio de sinal de menos tipográfico (U+2212), traço figurativo e vírgula decimal — e cada um produz um `ValueError` cuja mensagem mostra dois textos visualmente iguais. Antes de converter, troque os candidatos conhecidos:
+
+```python
+def para_float(texto: str) -> float:
+    t = texto.strip().replace("−", "-").replace("‒", "-")
+    return float(t.replace(".", "").replace(",", ".") if "," in t else t)
+```
+
+## Antes de escrever um seletor
+
+Duas verificações economizam horas.
+
+**O dado pode estar em JSON dentro da própria página.** Muitos sites embutem `application/ld+json` ou um bloco de estado da aplicação:
+
+```python
+bruto = sopa.select_one('script[type="application/ld+json"]').string
+print(json.loads(bruto))
+```
+
+```text
+{'@type': 'Dataset', 'name': 'Leituras', 'temporalCoverage': '2026-03'}
+```
+
+JSON é estruturado, tipado e muito mais estável que a marcação ao redor — quando ele existe, é sempre a melhor fonte.
+
+**O HTML pode não conter o dado.** Em site que monta a página com JavaScript, o que o `httpx` recebe é um esqueleto vazio; o dado chega depois, por uma chamada `fetch`. O reflexo comum é partir para um navegador automatizado (`playwright`, `selenium`), que é lento e frágil. O reflexo certo é abrir a aba de rede do navegador e **procurar a chamada de API que a página faz** — quase sempre existe, devolve JSON, e você acabou de trocar raspagem por consumo de API (@sec-cap078).
+
+## O raspador que não incomoda
+
+```python
+import time
+import httpx
+
+with httpx.Client(
+    timeout=10,
+    headers={"User-Agent": "coletor-pesquisa/1.0 (contato: eu@exemplo.org)"},
+    follow_redirects=True,
+) as c:
+    for url in urls:
+        r = c.get(url)
+        r.raise_for_status()
+        processar(r.text)
+        time.sleep(atraso)     # respeite o Crawl-delay
+```
+
+Os itens que fazem a diferença:
+
+- **`User-Agent` honesto, com forma de contato.** Um administrador que vê tráfego estranho e tem um e-mail no log manda uma mensagem; sem isso, ele bloqueia a faixa de IP. E **não** se disfarce de navegador: fingir ser Chrome para contornar bloqueio é justamente o comportamento que gera resposta hostil.
+- **Pausa entre requisições**, respeitando `Crawl-delay`. Sequencial e devagar, não paralelo e rápido.
+- **Cache local.** Grave o HTML bruto em disco na primeira visita e trabalhe em cima do arquivo enquanto desenvolve o seletor. Você vai rodar o extrator cinquenta vezes; o site precisa ser visitado uma.
+- **Repetição só de erro temporário**, com recuo (@sec-cap078). Um **429** significa "você está indo rápido demais": desacelere, não repita imediatamente.
+- **Guarde o HTML original.** Quando a extração estiver errada daqui a um mês, o arquivo bruto é a única forma de descobrir o que mudou — e evita revisitar o site.
+- **Pare no primeiro sinal de bloqueio.** 403 sistemático, CAPTCHA ou aviso explícito são uma resposta. Contornar mecanismo de bloqueio muda a natureza do que você está fazendo.
+
+## 🐍 Jeito Pythônico
+
+**API antes de raspagem, JSON embutido antes de seletor, seletor antes de navegador automatizado.** Essa ordem de preferência é sobre estabilidade: cada degrau abaixo depende de mais detalhes que ninguém prometeu manter.
+
+**Passe o analisador explicitamente** — `BeautifulSoup(html, "lxml")`. Omitir faz a escolha depender do que está instalado, e o mesmo código se comporta diferente em máquinas diferentes.
+
+**`get_text(strip=True)` sempre.** O espaço não vai quebrar seu `float`; vai quebrar a comparação e a junção, silenciosamente, meses depois.
+
+**Trate `None` como resultado esperado.** Todo `select_one` pode devolver `None` quando o site mudar. Um raspador de produção verifica, registra qual seletor falhou, e falha alto — em vez de gravar `None` no banco.
+
+**Separe buscar de extrair.** `baixar(url) -> str` e `extrair(html) -> list[dict]` como funções distintas: a segunda é testável com um arquivo HTML fixo (@sec-cap070), sem rede, e é ela que vai quebrar quando o site mudar.
+
+**Guarde o bruto, versione o extrator.** O HTML original em disco é o que permite diagnosticar e reprocessar sem visitar o site de novo.
+
+**Identifique-se e vá devagar.** `User-Agent` com contato, pausa entre requisições, e parada no primeiro sinal de bloqueio. A diferença entre um raspador aceitável e um problema para terceiros é quase inteiramente essa.
+
+## 🧪 Laboratório
+
+::: {.callout-note}
+Todo o laboratório roda sobre HTML local. Não aponte nenhum passo para um site de terceiros.
+:::
+
+**Passo 1 — ambiente e página de teste.**
+
+```bash
+mkdir lab-raspagem && cd lab-raspagem
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install beautifulsoup4 lxml httpx pytest
+```
+
+Crie `pagina.html` com uma tabela de três linhas (estação, instante, temperatura), um link `a.proxima`, e um bloco `<script type="application/ld+json">`. Ponha **de propósito** um espaço rígido (`&nbsp;`) antes de um dos números.
+
+**Passo 2 — os dois analisadores.** Rode o mesmo fragmento malformado `<table><tr><td>x</td></tr></table>` com `html.parser` e com `lxml` e compare o `decode()`:
+
+```text
+  html.parser  -> <table><tr><td>x</td></tr></table>
+  lxml         -> <html><body><table><tr><td>x</td></tr></table></body></html>
+```
+
+**Passo 3 — seletores.** Extraia: o `title`, o `lang` do `<html>`, o número de linhas do `tbody`, o `href` do link `a.proxima`, e a lista de classes da tabela. Confirme que `["class"]` devolve **lista**, não string.
+
+**Passo 4 — a tabela em dicionários.** Escreva `extrair(html: str) -> list[dict]` que devolva os três registros com `temperatura` como `float`. Note que essa função **não faz rede** — é ela que você vai testar.
+
+**Passo 5 — o espaço que não quebra.** Compare `.text` com `.get_text(strip=True)` na célula com `&nbsp;`:
+
+```text
+sem strip : '\xa0-28.4 '
+com strip : '-28.4'
+```
+
+Agora rode `float()` nos dois. **Os dois funcionam.** Depois faça o teste que importa:
+
+```python
+' onu-00043\n' == 'onu-00043'
+' onu-00043\n' in {'onu-00043': 1}
+```
+
+```text
+False
+False
+```
+
+É aqui que o dado sujo estraga o resultado sem levantar exceção nenhuma.
+
+**Passo 6 — o traço que quebra.** Troque o `-` de uma temperatura pelo sinal de menos tipográfico `−` e rode `float()`:
+
+```text
+ValueError
+```
+
+Compare os dois textos na tela: são visualmente idênticos. Escreva `para_float` que normalize `−`, `‒` e vírgula decimal, e teste os quatro casos.
+
+**Passo 7 — o seletor que some.** Renomeie `id="leituras"` para `id="leituras-v2"` no HTML e rode seu extrator. Observe o `AttributeError: 'NoneType' object has no attribute...` e onde ele aparece. Agora acrescente a verificação explícita com uma exceção própria e mensagem dizendo **qual** seletor falhou. É essa mensagem que você vai ler daqui a seis meses.
+
+**Passo 8 — JSON embutido.** Extraia o bloco `application/ld+json` e carregue com `json.loads`. Compare com o trabalho do passo 4 — é a mesma informação, com tipos, sem seletor.
+
+**Passo 9 — `robots.txt`.** Monte o arquivo de exemplo do capítulo, carregue com `RobotFileParser.parse(texto.splitlines())` e verifique quatro combinações de agente e caminho:
+
+```text
+  coletor/1.0          /leituras        -> True
+  coletor/1.0          /admin/painel    -> False
+  coletor-academico    /leituras        -> False
+  crawl_delay(*)      -> 2
+```
+
+**Passo 10 — o raspador completo, sobre servidor local.** Reaproveite o servidor de `http.server` do @sec-cap078 para servir sua `pagina.html` em duas páginas encadeadas. Escreva `baixar(cliente, url) -> str` e reúna com o `extrair` do passo 4, com: `User-Agent` identificado, `timeout`, `time.sleep` entre páginas, e **cache em disco** (se o arquivo local existe, não baixe). Rode duas vezes e confirme que a segunda não faz requisição nenhuma. Por fim, escreva dois testes: um para `extrair` com HTML fixo, e um para `extrair` com o HTML do passo 7, verificando que a exceção certa é levantada.
+
+## Resumo
+
+- Antes do código, quatro perguntas: **existe API ou dado aberto** (a resposta que encerra a maioria dos casos), o que dizem **termos de uso e `robots.txt`**, se o dado é **pessoal** (LGPD se aplica mesmo a dado público), e se o **volume prejudica** o serviço.
+- `urllib.robotparser` verifica permissão em uma linha, por agente, e `crawl_delay()` devolve a pausa pedida.
+- **Passe o analisador explicitamente**: `lxml` reconstrói HTML malformado como um navegador faria; `html.parser` não instala nada. Seletores CSS (`select`/`select_one`) são os mesmos do console do navegador.
+- **`select_one` devolve `None`**, não exceção — e o erro aparece longe dali. Todo seletor de produção precisa de verificação e registro dizendo qual falhou.
+- **Espaço não quebra `float` nem `int`** — quebra **comparação de string e chave de dicionário**, silenciosamente, o que produz junção com linhas faltando. `get_text(strip=True)` sempre.
+- **Caractere tipográfico quebra**: sinal de menos U+2212, traço figurativo e vírgula decimal produzem `ValueError` com um texto visualmente idêntico ao válido.
+- Verifique se o dado está em **JSON embutido** (`application/ld+json`) antes de escrever seletor, e se a página é montada por JavaScript, procure a **chamada de API** na aba de rede em vez de partir para navegador automatizado.
+- Raspador aceitável: `User-Agent` com contato, pausa entre requisições, cache local do HTML bruto, repetição só de erro temporário, e **parada no primeiro sinal de bloqueio**.
