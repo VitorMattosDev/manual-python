@@ -209,19 +209,29 @@ O identificador não limpo **não bate** com o mesmo identificador limpo. Numa j
 ### 3. Caractere tipográfico **quebra** o número
 
 ```text
-espaco comum + NBSP        '\xa0-28.4 '     -> -28.4
-sinal de menos U+2212      '-28.4'          -> ValueError
-traco figurativo U+2012    '-28.4'          -> ValueError
-virgula decimal            '-28,4'          -> ValueError
+espaco comum + NBSP        '\xa0-28.4 '   -> -28.4
+sinal de menos U+2212      '−28.4'        -> ValueError
+traco figurativo U+2012    '\u201228.4'   -> ValueError
+virgula decimal            '-28,4'        -> ValueError
 ```
 
-Os três últimos **parecem** idênticos ao primeiro na tela. HTML publicado por sistema de conteúdo está cheio de sinal de menos tipográfico (U+2212), traço figurativo e vírgula decimal — e cada um produz um `ValueError` cuja mensagem mostra dois textos visualmente iguais. Antes de converter, troque os candidatos conhecidos:
+Os três últimos **parecem** idênticos ao primeiro na tela — a segunda linha mostra o caractere de verdade, e você não consegue distingui-lo de um hífen. A terceira aparece como escape porque a fonte deste livro sequer **tem** o glifo do traço figurativo: ele sumiria da página, que é a mesma classe de problema, um nível acima.
+
+HTML publicado por sistema de conteúdo está cheio de sinal de menos tipográfico (U+2212), traço figurativo e vírgula decimal. E a mensagem do erro não ajuda em nada:
+
+```text
+ValueError: could not convert string to float: '−28.4'
+```
+
+O `repr` imprime o caractere de volta, e ele continua parecendo um número perfeitamente válido. É o tipo de erro em que se perde meia hora relendo a mesma linha. Antes de converter, troque os candidatos conhecidos:
 
 ```python
 def para_float(texto: str) -> float:
-    t = texto.strip().replace("−", "-").replace("‒", "-")
+    t = texto.strip().replace("\u2212", "-").replace("\u2012", "-")
     return float(t.replace(".", "").replace(",", ".") if "," in t else t)
 ```
+
+Escrever `"\u2212"` em vez de colar o caractere é deliberado, e vale como regra: colado, ele fica indistinguível de `-` na revisão de código — e, se a fonte não tiver o glifo, some. O escape diz exatamente qual é o ponto de código e sobrevive a qualquer fonte. Para caractere ambíguo, invisível ou raro, escreva o escape.
 
 ## Antes de escrever um seletor
 
@@ -337,10 +347,10 @@ False
 **Passo 6 — o traço que quebra.** Troque o `-` de uma temperatura pelo sinal de menos tipográfico `−` e rode `float()`:
 
 ```text
-ValueError
+ValueError: could not convert string to float: '−28.4'
 ```
 
-Compare os dois textos na tela: são visualmente idênticos. Escreva `para_float` que normalize `−`, `‒` e vírgula decimal, e teste os quatro casos.
+Compare o texto da mensagem com `-28.4` na tela: são visualmente idênticos. Escreva `para_float` que normalize `\u2212`, `\u2012` e vírgula decimal, e teste os quatro casos — os quatro devem devolver `-28.4`.
 
 **Passo 7 — o seletor que some.** Renomeie `id="leituras"` para `id="leituras-v2"` no HTML e rode seu extrator. Observe o `AttributeError: 'NoneType' object has no attribute...` e onde ele aparece. Agora acrescente a verificação explícita com uma exceção própria e mensagem dizendo **qual** seletor falhou. É essa mensagem que você vai ler daqui a seis meses.
 

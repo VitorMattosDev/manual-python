@@ -114,23 +114,35 @@ c.sendall(b"LEITURA onu-00051\n")
 c.sendall(b"LEITURA onu-00107\n")
 ```
 
-O servidor faz **um** `recv`, esperando receber "uma mensagem". Rodando o mesmo programa três vezes seguidas:
+O servidor faz **um** `recv`, esperando receber "uma mensagem". Com o servidor ocioso, esperando no `accept`, dez execuções seguidas:
 
 ```text
---- execucao 1 ---
 [servidor] primeiro recv -> 18 bytes
 [servidor] conteudo: b'LEITURA onu-00043\n'
---- execucao 2 ---
-[servidor] primeiro recv -> 54 bytes
-[servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\nLEITURA onu-00107\n'
---- execucao 3 ---
-[servidor] primeiro recv -> 36 bytes
-[servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\n'
+   (10 execucoes: 18, 18, 18, 18, 18, 18, 18, 18, 18, 18)
 ```
 
-**Mesmo código, mesma máquina, três resultados diferentes**: 18, 54 e 36 bytes. O TCP garante que os bytes cheguem, na ordem, sem duplicação — e **não garante mais nada**. Ele pode juntar seus três envios num pacote só, ou partir um envio em dois. As fronteiras de `sendall` não existem do outro lado.
+Dezoito bytes, todas as vezes. Uma mensagem por `recv` — exatamente o que a intuição previa, e é **por isso** que o defeito é tão perigoso: ele passa no seu teste.
 
-Um código que testa a primeira mensagem e funciona na sua máquina vai falhar em produção, com latência diferente, e o defeito vai parecer aleatório porque **é** aleatório.
+Agora a única mudança é o servidor ter alguma coisa para fazer antes de chamar `recv` — dez milissegundos de trabalho, o que qualquer servidor real tem de sobra:
+
+```python
+conexao, endereco = s.accept()
+time.sleep(0.010)          # o servidor estava ocupado com outra coisa
+dados = conexao.recv(4096)
+```
+
+```text
+[servidor] primeiro recv -> 54 bytes
+[servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\nLEITURA onu-00107\n'
+   (10 execucoes: 54, 54, 54, 54, 54, 54, 54, 54, 54, 54)
+```
+
+**Mesmo código dos dois lados, e agora as três mensagens chegaram como uma só.** Basta que o cliente ganhe a corrida: os três envios se acumulam no buffer e o `recv` leva tudo junto. Bastam 0,2 ms de atraso do servidor para virar a chave — e se o cliente também pausar entre os envios, aparecem 36 no meio, uma terceira resposta para o mesmo código.
+
+O TCP garante que os bytes cheguem, na ordem, sem duplicação — e **não garante mais nada**. Ele pode juntar seus três envios num pacote só, ou partir um envio em dois. As fronteiras de `sendall` não existem do outro lado.
+
+Um código que testa a primeira mensagem e funciona na sua máquina vai falhar em produção, onde o servidor está ocupado — e o defeito vai parecer aleatório porque o número não depende do seu código, depende de quem chegou primeiro.
 
 A solução se chama **enquadramento** (*framing*): definir no protocolo onde termina cada mensagem, e acumular até ter uma inteira.
 
@@ -195,10 +207,18 @@ sendto devolveu 20 bytes enviados, sem erro
 Não havia servidor nenhum naquela porta. O `sendto` reportou sucesso. Compare com o TCP na mesma situação:
 
 ```text
-TimeoutError: timed out
+ConnectionRefusedError: [Errno 111] Connection refused
 ```
 
-O TCP tenta estabelecer conexão e falha de forma visível; o UDP joga o pacote na rede e não olha para trás.
+O TCP tenta estabelecer conexão e falha **na hora**, de forma explícita: a porta fechada responde com um pacote `RST`, e o `connect` levanta a exceção em milissegundos, sem esperar o tempo limite. O UDP joga o pacote na rede e não olha para trás.
+
+::: {.callout-note}
+## Se aqui deu tempo esgotado em vez de recusa
+
+`TimeoutError` no lugar de `ConnectionRefusedError` significa que alguém está **descartando** o pacote em silêncio em vez de recusá-lo — tipicamente um firewall, ou uma camada de rede virtualizada. No WSL2, por exemplo, o encaminhamento de `localhost` para o Windows engole a maior parte das portas de `127.0.0.1` e produz tempo esgotado; em `127.0.0.2` o mesmo teste volta a recusar corretamente.
+
+A distinção é útil em diagnóstico de verdade: **recusa imediata** é "chegou lá, não tem ninguém"; **tempo esgotado** é "não chegou resposta nenhuma", que é firewall, rota errada ou máquina fora do ar.
+:::
 
 **Quando usar cada um:** TCP quando perder um byte é inaceitável — transferência de arquivo, banco de dados, HTTP, o coletor de leituras deste manual. UDP quando o dado velho não vale nada e a latência é o que importa — voz, vídeo ao vivo, jogo, DNS, métricas de alta frequência em que perder uma amostra de mil é irrelevante. Se você precisa de confiabilidade **e** das características do UDP, o caminho é QUIC (a base do HTTP/3), não reimplementar TCP à mão.
 
@@ -266,15 +286,25 @@ OSError: [Errno 98] Address already in use
 
 Agora acrescente `s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)` **antes** do `bind` e repita. Sobe na hora. Guarde esse par de resultados.
 
-**Passo 4 — a demonstração do fluxo.** Faça o cliente enviar três linhas em três `sendall` e o servidor fazer **um** `recv(4096)`, imprimindo quantos bytes vieram. Rode **cinco vezes seguidas** e anote os números:
+**Passo 4 — a demonstração do fluxo.** Faça o cliente enviar três linhas em três `sendall` e o servidor fazer **um** `recv(4096)`, imprimindo quantos bytes vieram. Rode **dez vezes seguidas**:
 
 ```text
 [servidor] primeiro recv -> 18 bytes
-[servidor] primeiro recv -> 54 bytes
-[servidor] primeiro recv -> 36 bytes
+   (10 execucoes: 18, 18, 18, 18, 18, 18, 18, 18, 18, 18)
 ```
 
-Se todas as suas execuções derem o mesmo número, acrescente um `time.sleep(0.01)` entre os `sendall` do cliente e rode de novo — o ponto é ver o número **mudar**.
+Sempre 18. Guarde esse resultado: é o seu teste passando.
+
+Agora acrescente **um `time.sleep(0.010)` no servidor**, entre o `accept` e o `recv`, simulando um servidor que tinha outra coisa para fazer. Rode dez vezes de novo:
+
+```text
+[servidor] primeiro recv -> 54 bytes
+   (10 execucoes: 54, 54, 54, 54, 54, 54, 54, 54, 54, 54)
+```
+
+Sempre 54 — as três mensagens viraram uma. Você não tocou no cliente nem no protocolo; só deixou o servidor ocupado, que é a condição normal em produção. Experimente baixar a pausa para `0.0002`: ainda dá 54. Depois pause **também** o cliente entre os envios, e veja aparecer 36 na mistura.
+
+O número não é aleatório e não é seu — é de quem ganhou a corrida.
 
 **Passo 5 — enquadrar.** Corrija o servidor com o laço que acumula até ter três `\n`. Rode cinco vezes: agora as cinco dão o mesmo resultado. Depois reescreva usando `conexao.makefile("rb")` e `for linha in arquivo:` e compare o tamanho do código.
 
@@ -292,7 +322,13 @@ c.sendto(b"ninguem esta ouvindo", ("127.0.0.1", 9))
 sendto devolveu 20 bytes enviados, sem erro
 ```
 
-Agora faça um `connect` TCP na mesma porta e compare. Essa é a escolha entre os dois protocolos, em duas linhas.
+Agora faça um `connect` TCP na mesma porta e compare:
+
+```text
+ConnectionRefusedError: [Errno 111] Connection refused
+```
+
+Essa é a escolha entre os dois protocolos, em duas linhas. Se o seu TCP deu `TimeoutError` em vez de recusa, releia o aviso da seção de UDP e repita em `127.0.0.2` — você está atrás de uma camada que descarta o pacote em silêncio.
 
 **Passo 9 — vários clientes.** Com o servidor TCP bloqueante rodando, abra dois clientes ao mesmo tempo, o primeiro com um `time.sleep(10)` antes de enviar. O segundo fica esperando. Agora envolva o tratamento em `threading.Thread(target=atender, args=(conexao,))` e repita: os dois são atendidos juntos.
 
@@ -301,9 +337,9 @@ Agora faça um `connect` TCP na mesma porta e compare. Essa é a escolha entre o
 ## Resumo
 
 - Um servidor TCP faz `socket()`, `bind()`, `listen()`, `accept()`; o cliente faz `socket()` e `connect()`. **`accept()` devolve um socket novo** para aquela conexão, e o original segue escutando.
-- **TCP é um fluxo de bytes, não uma sequência de mensagens.** O mesmo programa rodado três vezes deu 18, 54 e 36 bytes no primeiro `recv` — o protocolo garante ordem e entrega, e nada sobre fronteiras. Todo protocolo precisa de **enquadramento**: delimitador, prefixo de tamanho ou conexão por mensagem.
+- **TCP é um fluxo de bytes, não uma sequência de mensagens.** Com o servidor ocioso, o primeiro `recv` deu 18 bytes nas dez execuções — o teste passa. Bastou pôr 10 ms de trabalho no servidor antes do `recv` para dar 54 nas dez, com as três mensagens grudadas. O protocolo garante ordem e entrega, e nada sobre fronteiras. Todo protocolo precisa de **enquadramento**: delimitador, prefixo de tamanho ou conexão por mensagem.
 - `recv` devolvendo `b""` é **fim de conexão**, e é a condição de parada do laço. `sendall` em vez de `send`, porque `send` pode enviar só parte.
-- **UDP preserva as fronteiras** (um `sendto` é um `recvfrom`) e não tem conexão nem garantia: `sendto` para uma porta sem ninguém escutando devolve sucesso, enquanto o `connect` TCP falha visivelmente.
+- **UDP preserva as fronteiras** (um `sendto` é um `recvfrom`) e não tem conexão nem garantia: `sendto` para uma porta sem ninguém escutando devolve sucesso, enquanto o `connect` TCP levanta `ConnectionRefusedError` na hora. Recusa imediata é "chegou, não tem ninguém"; tempo esgotado é firewall ou máquina fora do ar.
 - **`SO_REUSEADDR`** antes do `bind` evita o `Address already in use` do `TIME_WAIT` ao reiniciar; **`bind((host, 0))`** deixa o sistema escolher a porta, o que torna testes paralelizáveis.
 - **`with` e `settimeout` em todo socket.** Um evita vazar descritor, o outro evita pendurar o processo; nenhum dos dois problemas aparece em desenvolvimento.
 - Um servidor bloqueante atende um cliente por vez; as saídas são thread por conexão, `selectors`, ou `asyncio` (Volume 15). E, antes de escrever um protocolo novo sobre socket cru, verifique se HTTP ou um intermediário de mensagens já resolve.

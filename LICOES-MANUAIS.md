@@ -94,7 +94,8 @@ YAML de referência: ver `.github/workflows/publish.yml` deste repositório.
 - **`Invoke-WebRequest` sem `-UseBasicParsing` falha e parece site fora do ar.** No Windows PowerShell 5.1 ele tenta o motor do Internet Explorer para analisar a resposta; sem IE disponível, pede interação e a chamada morre com *"O Windows PowerShell está no modo NonInteractive"* — **sem** código HTTP. Num laço de checagem de URLs, o resultado é uma coluna inteira de erro que se lê como 404 e faz procurar defeito no deploy que está perfeito. Sempre `Invoke-WebRequest -Uri ... -Method Head -UseBasicParsing`.
 - **Checar o Pages logo após o `gh run watch` do publish dá 404 legítimo.** O `quarto-actions/publish` empurra para `gh-pages` e **outro** workflow (`pages-build-deployment`) faz o deploy. Entre um e outro, `gh api repos/<u>/<r>/pages -q '.status'` responde `building`. Esperar virar `built` (ou dar `gh run watch` no run de `pages-build-deployment`) antes de concluir qualquer coisa sobre a URL.
 - Write após heredoc exige Read antes ("File has not been read yet").
-- Ignorar sempre: `LF will be replaced by CRLF` e "Node.js 20 is deprecated".
+- **Caractere fora do latim-1 num bloco de código pode sumir do PDF sem erro nenhum.** A fonte mono do PDF não tem o glifo do traço figurativo (U+2012): ele virou **espaço em branco** na página, e o `.replace("‒", "-")` do cap079 saiu impresso como `.replace(" ", "-")` — código errado no livro, com build verde e zero aviso de *missing character*. O sinal de menos U+2212 desenha normalmente; o U+2012 não. Quando o assunto **é** o caractere, escrever o escape (`"\u2012"`), que sobrevive a qualquer fonte e ainda diz qual é o ponto de código. Conferência: extrair o texto da página com `pypdf` (glifo ausente sai como `�`) e, na dúvida, recortar a região com `fitz`/PyMuPDF e olhar o PNG — `grep` no `.qmd` não pega isso.
+- **Ignorar sempre:** `LF will be replaced by CRLF` e "Node.js 20 is deprecated".
 
 ## Processo
 

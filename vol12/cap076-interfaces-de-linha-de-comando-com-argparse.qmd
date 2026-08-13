@@ -338,6 +338,7 @@ O `pip` gera um executável no `bin` do ambiente virtual apontando para `app`. E
 Uma CLI é código como outro qualquer, e o @sec-cap070 vale inteiro aqui:
 
 ```python
+import pytest
 from typer.testing import CliRunner
 
 from cli_argparse import montar_parser
