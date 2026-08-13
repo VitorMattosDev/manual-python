@@ -1,3 +1,370 @@
 # subprocess: chamando programas externos com segurança {#sec-cap075}
 
-*(em elaboracao)*
+Nem tudo vale reescrever em Python. Converter vídeo é trabalho do `ffmpeg`, extrair texto de PDF é do `pdftotext`, e ler o histórico de um repositório é do `git`. O script de automação do @sec-cap074 mais cedo ou mais tarde precisa **chamar outro programa**, esperar ele terminar e olhar o que saiu.
+
+O módulo `subprocess` faz isso. E ele tem um parâmetro — `shell=True` — que aparece na primeira resposta de qualquer busca, resolve o problema imediato, e é a origem de uma das vulnerabilidades mais antigas e mais exploradas que existem. Este capítulo mostra a forma correta primeiro, e depois exatamente o que acontece quando se usa a forma errada, com a saída real.
+
+## `subprocess.run`: a interface única
+
+Existiram `os.system`, `os.popen`, `commands.getoutput` e as funções `subprocess.call`, `check_call`, `check_output`. Desde o Python 3.5 há **uma** função para aprender:
+
+```python
+import subprocess
+import sys
+
+r = subprocess.run(
+    [sys.executable, "-c", "print('temperatura: -29.8')"],
+    capture_output=True,
+    text=True,
+)
+print("tipo       :", type(r).__name__)
+print("returncode :", r.returncode)
+print("stdout     :", repr(r.stdout))
+print("stderr     :", repr(r.stderr))
+```
+
+```text
+tipo       : CompletedProcess
+returncode : 0
+stdout     : 'temperatura: -29.8\n'
+stderr     : ''
+```
+
+Três coisas na chamada, e todas importam:
+
+- **O comando é uma lista**, não uma string. `["git", "commit", "-m", "mensagem com espaco"]` — cada argumento é um item, e nada é interpretado por ninguém.
+- **`capture_output=True`** captura `stdout` e `stderr`. Sem ele, a saída do programa vai direto para o terminal e `r.stdout` fica `None`.
+- **`text=True`** decodifica os bytes para `str`. Sem ele, `r.stdout` é `bytes` — o que é o certo para saída binária (um PDF, um vídeo) e errado para texto.
+
+O retorno é um `CompletedProcess` com `args`, `returncode`, `stdout` e `stderr`.
+
+## Erros: três tipos, três mecanismos
+
+### O programa rodou e falhou
+
+```python
+r = subprocess.run(
+    [sys.executable, "-c", "import sys; print('erro no sensor', file=sys.stderr); sys.exit(3)"],
+    capture_output=True,
+    text=True,
+)
+print("returncode :", r.returncode)
+print("stderr     :", repr(r.stderr))
+```
+
+```text
+returncode : 3
+stderr     : 'erro no sensor\n'
+```
+
+**Nenhuma exceção foi levantada.** Este é o comportamento padrão e a fonte número um de script que engole falha: se você não olhar `returncode`, o programa quebrou e seu script seguiu adiante como se nada fosse.
+
+A correção é `check=True`:
+
+```python
+subprocess.run([...], capture_output=True, text=True, check=True)
+```
+
+```text
+CalledProcessError: Command '[...]' returned non-zero exit status 3.
+  returncode: 3
+```
+
+O `CalledProcessError` carrega `returncode`, `cmd`, `stdout` e `stderr` — então o `except` tem tudo para registrar o diagnóstico. **Use `check=True` por padrão** e trate a exceção; só omita quando um código diferente de zero for um resultado esperado (o `grep` que não achou nada devolve 1, e isso não é erro).
+
+### O programa não termina
+
+```python
+subprocess.run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=1.0)
+```
+
+```text
+TimeoutExpired: TimeoutExpired | timeout = 1.0
+```
+
+Sem `timeout`, um programa externo travado trava o seu script para sempre. Num serviço, isso é um processo pendurado que ninguém percebe até acabar a memória. **Toda chamada a programa externo em código de produção precisa de `timeout`.**
+
+### O programa não existe
+
+```python
+subprocess.run(["programa_que_nao_existe_123"], capture_output=True)
+```
+
+```text
+FileNotFoundError: O sistema nao pode encontrar o arquivo especificado
+```
+
+`FileNotFoundError`, não `CalledProcessError` — são coisas diferentes e frequentemente merecem tratamento diferente ("instale o ffmpeg" *versus* "a conversão falhou").
+
+## `shell=True`: o que realmente acontece
+
+Aqui está a parte que justifica o título do capítulo.
+
+::: {#fig-shell-vs-lista}
+```{.tikz}
+%%| filename: shell-vs-lista
+%%| alt: Comparacao entre passar uma string ao shell e passar uma lista de argumentos
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=4.4cm,minimum height=1.15cm,font=\scriptsize},
+  cd/.style={draw,rounded corners,align=left,text width=5.0cm,minimum height=1.0cm,font=\scriptsize\ttfamily},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-1.4,-6.6) rectangle (14.6,3.6);
+
+  \node[nt,font=\small\bfseries,manualred!70!black] at (2.6,3.2) {shell=True (inseguro)};
+  \node[nt,font=\small\bfseries,manualgreen!50!black] at (10.4,3.2) {lista de argumentos (seguro)};
+
+  \node[cd,fill=manualgray!20] (s1) at (2.6,2.2) {f"wc -l \{entrada\}"};
+  \node[bx,fill=manualred!20]  (s2) at (2.6,0.6) {\texttt{/bin/sh} interpreta\\a string inteira};
+  \node[bx,fill=manualred!25]  (s3) at (2.6,-1.2) {o \texttt{;} vira separador:\\\textbf{dois comandos}};
+  \node[bx,fill=manualred!30]  (s4) at (2.6,-3.0) {\texttt{wc -l relatorio.txt}\\\texttt{cat SEGREDO.txt}};
+
+  \node[cd,fill=manualgray!20]  (l1) at (10.4,2.2) {["wc", "-l", entrada]};
+  \node[bx,fill=manualgreen!20] (l2) at (10.4,0.6) {\texttt{execve} direto,\\sem interpretador};
+  \node[bx,fill=manualgreen!25] (l3) at (10.4,-1.2) {cada item vira\\um \texttt{argv} literal};
+  \node[bx,fill=manualgreen!30] (l4) at (10.4,-3.0) {\texttt{argv[2]} e um nome\\de arquivo com \texttt{;}\\dentro --- e so isso};
+
+  \foreach \a/\b in {s1/s2,s2/s3,s3/s4,l1/l2,l2/l3,l3/l4}{
+    \draw[->,>=stealth,thick] (\a) -- (\b);
+  }
+
+  \node[nt,anchor=north,text width=13.4cm] at (6.5,-4.0)
+    {a diferenca nao e de estilo: com \texttt{shell=True} o texto do usuario vira \textbf{codigo}; com lista, ele so pode ser \textbf{dado}};
+\end{tikzpicture}
+```
+Com `shell=True` a string do usuário atravessa um interpretador de comandos; com lista, ela nunca deixa de ser um argumento.
+:::
+
+O cenário: um script recebe o nome de um arquivo (de um formulário, de uma fila, de um argumento de linha de comando) e conta as linhas dele.
+
+```python
+entrada = "relatorio.txt; cat SEGREDO.txt"   # o que o usuario "digitou"
+
+r = subprocess.run(f"wc -l {entrada}", shell=True, capture_output=True, text=True, cwd=tmp)
+print(r.stdout)
+```
+
+```text
+2 relatorio.txt
+token=abc123
+```
+
+O conteúdo de `SEGREDO.txt` foi impresso. O `;` separou dois comandos, o shell executou os dois, e o script não tem a menor ideia de que isso aconteceu — `returncode` é 0 e tudo parece normal. Troque `cat` por qualquer outra coisa e a gravidade escala imediatamente.
+
+A mesma entrada, com lista:
+
+```python
+r = subprocess.run(["wc", "-l", entrada], capture_output=True, text=True, cwd=tmp)
+print("returncode:", r.returncode)
+print("stderr:", r.stderr.strip())
+```
+
+```text
+returncode: 1
+stderr: wc: 'relatorio.txt; cat SEGREDO.txt': No such file or directory
+```
+
+O `wc` recebeu **um único** argumento — um nome de arquivo esquisito que não existe — e falhou de forma limpa e diagnosticável. É exatamente o comportamento que se quer: entrada inválida vira erro, não vira execução.
+
+```python
+alvo = "arquivo importante; echo INVADIDO"
+subprocess.run([sys.executable, "-c", "import sys; print('recebi:', repr(sys.argv[1]))", alvo], ...)
+```
+
+```text
+recebi: 'arquivo importante; echo INVADIDO'
+```
+
+A string chegou inteira ao outro processo, com o `;` e tudo, como **dado**.
+
+::: {.callout-important}
+## A regra
+
+Nunca construa a string de um comando por interpolação com dados que você não controla — nem de formulário, nem de arquivo, nem de nome de arquivo em disco, nem de variável de ambiente.
+
+A lista de argumentos não é uma questão de estilo: ela é a fronteira que impede texto de virar código. E, mesmo com dados que você "controla", a lista é mais simples, porque você para de se preocupar com aspas, espaços e acentos no caminho.
+:::
+
+### E quando eu preciso mesmo do shell?
+
+Quase nunca. Os três motivos que as pessoas dão, e o que fazer:
+
+| "Preciso do shell para..." | A resposta |
+|---|---|
+| expandir `*.csv` | `Path.glob` (@sec-cap037) — e ele não engasga com espaço no nome |
+| encadear com `\|` | duas chamadas, ligando `stdout` de uma à `stdin` da outra |
+| usar `>` para redirecionar | `stdout=arquivo_aberto` |
+
+O único caso legítimo é executar uma linha de comando **que o próprio operador escreveu**, num contexto em que ele já tem acesso ao shell de qualquer maneira — e mesmo aí, `shlex.split` transforma a string numa lista sem envolver interpretador:
+
+```python
+import shlex
+
+print(shlex.split("git commit -m 'mensagem com espaco'"))
+print(shlex.quote("arquivo importante; rm -rf /"))
+```
+
+```text
+['git', 'commit', '-m', 'mensagem com espaco']
+"'arquivo importante; rm -rf /'"
+```
+
+`shlex.split` faz o que o shell faria com as aspas, sem executar nada. `shlex.quote` escapa uma string para uso seguro **se** você for obrigado a montar uma linha de shell — trate-o como último recurso, não como permissão para voltar ao `shell=True`.
+
+## Entrada, ambiente e diretório
+
+```python
+r = subprocess.run(
+    [sys.executable, "-c", "import sys; print(sum(float(l) for l in sys.stdin))"],
+    input="-29.8\n-30.1\n-28.4\n",
+    capture_output=True,
+    text=True,
+)
+```
+
+```text
+soma: -88.3
+```
+
+`input=` alimenta a entrada padrão do programa — é assim que se substitui um `echo ... |` sem shell nenhum.
+
+```python
+import os
+
+r = subprocess.run(
+    [sys.executable, "-c", "import os; print(os.environ.get('ESTACAO', '<ausente>'))"],
+    capture_output=True,
+    text=True,
+    env={**os.environ, "ESTACAO": "onu-00043"},
+)
+```
+
+```text
+com env : onu-00043
+sem env : <ausente>
+```
+
+Note o `{**os.environ, ...}`: passar `env={"ESTACAO": "..."}` puro **substitui o ambiente inteiro**, e o programa perde `PATH`, `HOME` e tudo mais — um erro que produz falhas bizarras. Para mudar o diretório de trabalho, `cwd=` é o parâmetro, e ele é muito melhor que um `os.chdir` que afeta o processo todo.
+
+## `Popen`: quando esperar não serve
+
+`run` é síncrono: ele espera o programa terminar e devolve tudo de uma vez. Para um processo que roda por dez minutos imprimindo progresso, você quer as linhas **enquanto elas saem**:
+
+```python
+proc = subprocess.Popen(
+    [sys.executable, "-u", "-c", "for i in range(3): print('linha', i, flush=True)"],
+    stdout=subprocess.PIPE,
+    text=True,
+)
+for linha in proc.stdout:
+    print("  recebi:", linha.rstrip())
+proc.wait()
+print("returncode:", proc.returncode)
+```
+
+```text
+  recebi: linha 0
+  recebi: linha 1
+  recebi: linha 2
+returncode: 0
+```
+
+Dois detalhes que fazem a diferença entre isso funcionar e travar: o `-u` (ou `flush=True`) do lado de lá, porque um programa que escreve num *pipe* usa buffer de bloco e não solta nada até encher; e o `proc.wait()` no fim, sem o qual você deixa um processo zumbi.
+
+E a armadilha clássica: **`proc.stdout.read()` com `stderr=PIPE` também cheio dá impasse.** O programa enche o buffer de `stderr`, bloqueia esperando alguém ler, e você está bloqueado lendo `stdout`. A saída é `proc.communicate()`, que lê os dois ao mesmo tempo — ou, mais simples, `stderr=subprocess.STDOUT` para juntar tudo num canal só.
+
+## Notas de portabilidade
+
+- **`shell=True` no Windows usa `cmd.exe`**, cuja sintaxe de citação é diferente da do `sh`. Um comando montado à mão que funciona no Linux pode se comportar de outra forma lá — mais um motivo para a lista.
+- **Programas embutidos do shell não são executáveis.** `dir` no Windows e `cd` em qualquer lugar não existem como arquivo; `subprocess.run(["cd", ".."])` dá `FileNotFoundError`. Mudança de diretório é `cwd=`.
+- **A codificação da saída** não é sempre UTF-8. `text=True` usa a codificação preferida da plataforma, que no Windows pode ser `cp1252`; quando você sabe o que o programa emite, seja explícito com `encoding="utf-8"` e considere `errors="replace"` para não perder a saída inteira por um byte inválido.
+
+## 🐍 Jeito Pythônico
+
+**Lista de argumentos, sempre. `shell=True` é a exceção que precisa de justificativa escrita.** Não é uma preferência estética: é a diferença entre a entrada do usuário ser dado ou ser código.
+
+**`check=True` e `timeout=` em toda chamada.** Sem o primeiro, seu script ignora falhas; sem o segundo, ele pendura para sempre. Os dois juntos custam duas palavras e cobrem os dois modos de falha mais comuns.
+
+**Antes de chamar um programa externo, pergunte se a biblioteca padrão resolve.** `curl` é `httpx` (@sec-cap078); `ls` e `find` são `pathlib`; `sed` e `awk` são `re`; `tar` e `zip` são `shutil` e `zipfile`; `wc -l` é `sum(1 for _ in f)`. Cada processo externo evitado é uma dependência de sistema a menos, um modo de falha a menos e um problema de portabilidade a menos.
+
+**Encapsule a chamada numa função.** `def contar_linhas(caminho: Path) -> int` que faz a validação, monta a lista, trata `CalledProcessError` e devolve um valor Python é testável e substituível; um `subprocess.run` espalhado por dez lugares não é nenhum dos dois.
+
+**Registre o comando e o código de saída.** Quando algo falhar em produção, o `stderr` do programa externo é o diagnóstico inteiro — e ele só existe se você tiver capturado e registrado (@sec-cap060).
+
+**Valide o que vai para o comando, mesmo com lista.** A lista impede injeção de shell, mas não impede que alguém passe `--output=/etc/passwd` para um programa que aceita esse argumento. Quando a entrada é um caminho, resolva e confirme que está dentro da raiz esperada; quando é uma escolha, valide contra uma lista fechada.
+
+## 🧪 Laboratório
+
+::: {.callout-warning}
+Os passos 4 e 5 executam um comando injetado de propósito. Rode-os **num diretório descartável** criado por `tempfile.mkdtemp`, como no roteiro, e nunca no seu diretório de trabalho.
+:::
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-subprocess && cd lab-subprocess
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+Não há dependência externa: `subprocess` e `shlex` são biblioteca padrão.
+
+**Passo 2 — o básico e os três erros.** Escreva um script que faça quatro chamadas usando `sys.executable` como programa externo: uma que imprime algo; uma que sai com código 3 **sem** `check=True`; a mesma **com** `check=True`, capturando `CalledProcessError` e imprimindo `e.returncode`; e uma com `time.sleep(30)` e `timeout=1.0`, capturando `TimeoutExpired`.
+
+```text
+returncode : 3
+levantou excecao? nao - sem check=True
+```
+
+Guarde essa linha: é o comportamento padrão, e é o que faz script engolir falha.
+
+**Passo 3 — o programa que não existe.** Chame `subprocess.run(["programa_que_nao_existe_123"])` e confirme que a exceção é `FileNotFoundError`, **não** `CalledProcessError`.
+
+**Passo 4 — a injeção, num diretório descartável.**
+
+```python
+import subprocess, tempfile
+from pathlib import Path
+
+tmp = Path(tempfile.mkdtemp(prefix="lab-injecao-"))
+(tmp / "relatorio.txt").write_text("linha 1\nlinha 2\n")
+(tmp / "SEGREDO.txt").write_text("token=abc123\n")
+
+entrada = "relatorio.txt; cat SEGREDO.txt"
+r = subprocess.run(f"wc -l {entrada}", shell=True, capture_output=True, text=True, cwd=tmp)
+print(r.stdout)
+```
+
+```text
+2 relatorio.txt
+token=abc123
+```
+
+O segredo vazou, e `r.returncode` é 0. (No Windows, use `type SEGREDO.txt` no lugar de `cat`; o mecanismo é o mesmo com `cmd.exe`.)
+
+**Passo 5 — a correção.** Troque para `["wc", "-l", entrada]`, sem `shell`:
+
+```text
+returncode: 1
+stderr: wc: 'relatorio.txt; cat SEGREDO.txt': No such file or directory
+```
+
+Erro limpo, nada executado. Apague o diretório com `shutil.rmtree(tmp)` — aqui é seguro, porque `tmp` veio de `mkdtemp` e não de concatenação.
+
+**Passo 6 — `shlex`.** Rode `shlex.split("git commit -m 'mensagem com espaco'")` e confirme que a mensagem ficou num item só. Depois `shlex.quote("arquivo importante; rm -rf /")` e observe as aspas que ele acrescentou.
+
+**Passo 7 — entrada e ambiente.** Faça uma chamada com `input=` alimentando três números pela entrada padrão. Depois duas chamadas lendo `os.environ["ESTACAO"]`: uma com `env={**os.environ, "ESTACAO": "onu-00043"}` e outra sem. Por fim, tente `env={"ESTACAO": "x"}` **sem** o `**os.environ` e veja o que quebra — é o erro que produz falhas incompreensíveis.
+
+**Passo 8 — saída em tempo real.** Escreva um programa que imprima cinco linhas com `time.sleep(0.5)` entre elas, e consuma com `Popen` iterando sobre `proc.stdout`. Depois **remova o `-u`** e rode de novo: as cinco linhas chegam todas juntas no fim. Essa é a razão pela qual "meu script não mostra o progresso".
+
+**Passo 9 — encapsular.** Transforme tudo numa função `contar_linhas(caminho: Path) -> int` que valida o caminho, chama `wc -l` com lista, `check=True` e `timeout=10`, converte a saída para `int` e levanta uma exceção própria em caso de falha. Escreva dois testes com `tmp_path` (@sec-cap070): um caminho válido e um inexistente. É essa função que o resto do programa deve chamar — nunca `subprocess.run` direto.
+
+## Resumo
+
+- **`subprocess.run` é a interface única** desde o 3.5; devolve um `CompletedProcess` com `args`, `returncode`, `stdout` e `stderr`. `capture_output=True` para capturar, `text=True` para decodificar.
+- Três falhas, três mecanismos: programa que retorna código diferente de zero **não levanta exceção** sem `check=True`; programa travado exige `timeout=`; programa inexistente dá `FileNotFoundError`, não `CalledProcessError`.
+- **`shell=True` faz a string do usuário atravessar um interpretador de comandos**, e um `;` no meio de um nome de arquivo vira um segundo comando executado com seus privilégios — sem erro e com `returncode` 0. Com lista de argumentos, a mesma entrada vira um nome de arquivo inválido e falha de forma limpa.
+- Os motivos alegados para precisar do shell têm resposta na biblioteca padrão: `Path.glob` para curinga, encadeamento de dois `Popen` para `|`, `stdout=arquivo` para `>`. Quando não houver saída, `shlex.split` converte a string em lista sem executar nada.
+- **`input=`** alimenta a entrada padrão; **`cwd=`** troca o diretório sem afetar o processo; e `env=` deve ser sempre `{**os.environ, ...}`, porque um dicionário puro apaga o ambiente inteiro.
+- **`Popen`** entrega saída em tempo real, desde que o outro lado não esteja com buffer (`-u` ou `flush=True`); ler dois canais à mão causa impasse, então use `communicate()` ou `stderr=subprocess.STDOUT`.
+- Antes de chamar um programa externo, verifique se a biblioteca padrão já faz — e encapsule a chamada numa função tipada e testável em vez de espalhar `subprocess.run` pelo código.
