@@ -1,3 +1,309 @@
 # Redes com sockets: TCP, UDP e o modelo cliente-servidor {#sec-cap077}
 
-*(em elaboracao)*
+As estações meteorológicas do manual sempre entregaram os dados por arquivo. Agora elas ficam no campo e precisam mandar leituras por rede, em tempo real, para um coletor central.
+
+O capítulo seguinte usa HTTP, que resolve isso com três linhas. Este capítulo é sobre a camada debaixo — o **socket** — por dois motivos. Primeiro, porque nem tudo é HTTP: telemetria de sensor, log remoto, jogo, streaming e a maioria dos protocolos industriais falam TCP ou UDP cru. Segundo, e mais importante, porque quase todo defeito difícil de rede em produção é uma propriedade do socket vazando através da abstração — e quem nunca viu a camada de baixo não reconhece o sintoma.
+
+## O modelo
+
+Um **socket** é um ponto de comunicação identificado por endereço IP e porta. O modelo cliente-servidor tem uma assimetria clara:
+
+::: {#fig-cliente-servidor}
+```{.tikz}
+%%| filename: cliente-servidor
+%%| alt: Sequencia de chamadas de socket num servidor e num cliente TCP
+\begin{tikzpicture}[
+  op/.style={draw,rounded corners,align=center,text width=3.0cm,minimum height=0.75cm,font=\scriptsize\ttfamily},
+  nt/.style={font=\scriptsize,align=center},
+  tt/.style={font=\small\bfseries,align=center}
+]
+  \path (-1.6,-6.4) rectangle (13.6,3.4);
+
+  \node[tt] at (1.8,3.0)  {servidor};
+  \node[tt] at (9.6,3.0)  {cliente};
+
+  \node[op,fill=manualblue!20] (s1) at (1.8,2.1)  {socket()};
+  \node[op,fill=manualblue!20] (s2) at (1.8,1.1)  {bind()};
+  \node[op,fill=manualblue!20] (s3) at (1.8,0.1)  {listen()};
+  \node[op,fill=manualyellow!30] (s4) at (1.8,-0.9) {accept()};
+  \node[op,fill=manualgreen!20] (s5) at (1.8,-2.4) {recv() / sendall()};
+  \node[op,fill=manualgray!25]  (s6) at (1.8,-3.9) {close()};
+
+  \node[op,fill=manualblue!20]  (c1) at (9.6,0.1)  {socket()};
+  \node[op,fill=manualyellow!30](c2) at (9.6,-0.9) {connect()};
+  \node[op,fill=manualgreen!20] (c3) at (9.6,-2.4) {sendall() / recv()};
+  \node[op,fill=manualgray!25]  (c4) at (9.6,-3.9) {close()};
+
+  \foreach \a/\b in {s1/s2,s2/s3,s3/s4,s4/s5,s5/s6,c1/c2,c2/c3,c3/c4}{
+    \draw[->,>=stealth] (\a) -- (\b);
+  }
+
+  \draw[<->,>=stealth,thick,manualred!70!black] (s4.east) -- (c2.west)
+    node[nt,midway,above]{aperto de mao};
+  \draw[<->,>=stealth,thick,manualgreen!50!black] (s5.east) -- (c3.west)
+    node[nt,midway,above]{fluxo de bytes};
+
+  \node[nt,anchor=north,text width=4.6cm] at (1.8,-4.4) {espera, e volta ao\\\texttt{accept()} para o proximo};
+  \node[nt,anchor=north,text width=4.6cm] at (9.6,-4.4) {sabe o endereco do\\servidor de antemao};
+
+  \node[nt,anchor=north,text width=12.4cm] at (6.0,-5.4)
+    {\texttt{accept()} devolve um socket \textbf{novo}, so daquela conexao --- o original continua escutando};
+\end{tikzpicture}
+```
+O servidor abre, amarra, escuta e aceita; o cliente abre e conecta. A partir daí os dois lados são simétricos.
+:::
+
+O servidor faz quatro chamadas antes de trocar um byte: `socket()` cria, `bind()` reserva o endereço e a porta, `listen()` põe em modo de escuta, e `accept()` **bloqueia** até alguém chegar. O cliente faz duas: `socket()` e `connect()`.
+
+O detalhe que mais confunde: `accept()` devolve um socket **novo**, dedicado àquela conexão. O socket original continua escutando para as próximas — é por isso que um servidor consegue atender vários clientes.
+
+## Um servidor TCP mínimo
+
+```python
+import socket
+
+HOST = "127.0.0.1"
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((HOST, 0))          # 0 = o sistema escolhe uma porta livre
+    s.listen(5)
+    while True:
+        conexao, endereco = s.accept()
+        with conexao:
+            dados = conexao.recv(1024)
+            conexao.sendall(b"OK -29.8\n")
+```
+
+E o cliente:
+
+```python
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as c:
+    c.settimeout(5)
+    c.connect((HOST, porta))
+    c.sendall(b"LEITURA onu-00043\n")
+    resposta = c.recv(1024)
+```
+
+```text
+[servidor] escutando em 127.0.0.1:49445
+[cliente 1] conectado, socket local 49446
+[servidor] conexao de 127.0.0.1:49446
+[servidor] recebi 18 bytes: b'LEITURA onu-00043\n'
+[cliente 1] resposta: b'OK -29.8\n'
+[servidor] conexao fechada
+```
+
+(As portas mudam a cada execução.) Cinco decisões nesse código merecem explicação:
+
+- **`AF_INET, SOCK_STREAM`** é "IPv4, TCP". `SOCK_DGRAM` seria UDP; `AF_INET6` seria IPv6.
+- **`SO_REUSEADDR`** permite reamarrar a porta imediatamente após o servidor cair. Sem ele, o `bind` falha com `Address already in use` por alguns minutos, por causa do estado `TIME_WAIT` do TCP — o motivo número um de "reiniciei o servidor e não sobe".
+- **`bind((HOST, 0))`** com porta 0 faz o sistema escolher uma porta livre, que se descobre com `getsockname()`. Em teste, é o que evita colisão de porta.
+- **`listen(5)`** é o tamanho da fila de conexões pendentes, não o número de clientes.
+- **`with`** em ambos os sockets (@sec-cap040) garante o `close()` mesmo com exceção. Socket vazado é descritor de arquivo vazado, e o processo acaba batendo no limite do sistema.
+
+E a diferença crucial entre dois métodos: **`send` pode enviar só parte dos dados** e devolve quantos bytes foram; **`sendall` insiste até acabar**. Use `sendall`, sempre.
+
+## TCP é um fluxo, não uma sequência de mensagens
+
+Este é o mal-entendido que produz mais defeito intermitente em código de rede, e ele é fácil de demonstrar. O cliente envia três mensagens, em três chamadas separadas:
+
+```python
+c.sendall(b"LEITURA onu-00043\n")
+c.sendall(b"LEITURA onu-00051\n")
+c.sendall(b"LEITURA onu-00107\n")
+```
+
+O servidor faz **um** `recv`, esperando receber "uma mensagem". Rodando o mesmo programa três vezes seguidas:
+
+```text
+--- execucao 1 ---
+[servidor] primeiro recv -> 18 bytes
+[servidor] conteudo: b'LEITURA onu-00043\n'
+--- execucao 2 ---
+[servidor] primeiro recv -> 54 bytes
+[servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\nLEITURA onu-00107\n'
+--- execucao 3 ---
+[servidor] primeiro recv -> 36 bytes
+[servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\n'
+```
+
+**Mesmo código, mesma máquina, três resultados diferentes**: 18, 54 e 36 bytes. O TCP garante que os bytes cheguem, na ordem, sem duplicação — e **não garante mais nada**. Ele pode juntar seus três envios num pacote só, ou partir um envio em dois. As fronteiras de `sendall` não existem do outro lado.
+
+Um código que testa a primeira mensagem e funciona na sua máquina vai falhar em produção, com latência diferente, e o defeito vai parecer aleatório porque **é** aleatório.
+
+A solução se chama **enquadramento** (*framing*): definir no protocolo onde termina cada mensagem, e acumular até ter uma inteira.
+
+```python
+buffer = b""
+while buffer.count(b"\n") < 3:
+    pedaco = conexao.recv(4096)
+    if not pedaco:          # conexao fechada pelo outro lado
+        break
+    buffer += pedaco
+linhas = buffer.split(b"\n")[:3]
+```
+
+```text
+[servidor] apos enquadrar -> 3 mensagens
+[servidor]   b'LEITURA onu-00043'
+[servidor]   b'LEITURA onu-00051'
+[servidor]   b'LEITURA onu-00107'
+```
+
+Os três resultados agora são idênticos, independente de como os bytes chegaram. As três formas usuais de enquadrar:
+
+| Estratégia | Como | Quem usa |
+|---|---|---|
+| **Delimitador** | uma linha por mensagem, `\n` no fim | SMTP, IRC, Redis |
+| **Prefixo de tamanho** | 4 bytes com o comprimento, depois o corpo | gRPC, muitos protocolos binários |
+| **Conexão por mensagem** | fecha depois de responder | HTTP/1.0 |
+
+Para linhas de texto, `conexao.makefile("rb")` transforma o socket num objeto de arquivo e você itera sobre linhas, o que resolve o enquadramento de graça. Para binário, o prefixo de tamanho é o padrão, com `struct` (@sec-cap064) para empacotar o inteiro.
+
+E o outro detalhe do trecho acima: **`recv` devolvendo `b""` significa que o outro lado fechou**. Não é erro, é o fim normal. Um laço `while True: recv()` sem essa verificação gira consumindo CPU para sempre.
+
+## UDP: datagramas
+
+```python
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+    s.bind((HOST, 0))
+    dados, remetente = s.recvfrom(4096)
+    s.sendto(b"OK", remetente)
+```
+
+```text
+[servidor] datagrama de 56833: b'LEITURA onu-00043' (17 bytes)
+[servidor] datagrama de 56833: b'LEITURA onu-00051' (17 bytes)
+[servidor] datagrama de 56833: b'LEITURA onu-00107' (17 bytes)
+```
+
+Três diferenças estruturais. Não há `listen` nem `accept`, porque **não há conexão**. Cada datagrama carrega o endereço do remetente, que vem no `recvfrom`. E — o ponto positivo do UDP — **as fronteiras são preservadas**: três `sendto` produziram exatamente três `recvfrom` de 17 bytes cada, sem enquadramento nenhum.
+
+O preço é não haver garantia. Nem de entrega, nem de ordem, nem de unicidade. E a demonstração mais direta disso:
+
+```python
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as c:
+    enviados = c.sendto(b"ninguem esta ouvindo", (HOST, 9))
+    print(f"sendto devolveu {enviados} bytes enviados, sem erro")
+```
+
+```text
+sendto devolveu 20 bytes enviados, sem erro
+```
+
+Não havia servidor nenhum naquela porta. O `sendto` reportou sucesso. Compare com o TCP na mesma situação:
+
+```text
+TimeoutError: timed out
+```
+
+O TCP tenta estabelecer conexão e falha de forma visível; o UDP joga o pacote na rede e não olha para trás.
+
+**Quando usar cada um:** TCP quando perder um byte é inaceitável — transferência de arquivo, banco de dados, HTTP, o coletor de leituras deste manual. UDP quando o dado velho não vale nada e a latência é o que importa — voz, vídeo ao vivo, jogo, DNS, métricas de alta frequência em que perder uma amostra de mil é irrelevante. Se você precisa de confiabilidade **e** das características do UDP, o caminho é QUIC (a base do HTTP/3), não reimplementar TCP à mão.
+
+## Bloqueio, tempo limite e concorrência
+
+Por padrão, socket é **bloqueante**: `accept`, `recv` e `connect` param a execução até acontecer alguma coisa. E, sem tempo limite, "até acontecer alguma coisa" pode ser para sempre — um cliente que abre a conexão e some deixa o servidor parado no `recv`.
+
+```python
+c.settimeout(5)     # levanta socket.timeout apos 5 segundos
+```
+
+**`settimeout` em todo socket de produção**, dos dois lados. É o mesmo conselho do `timeout=` do @sec-cap075, e pela mesma razão.
+
+Um servidor bloqueante atende **um cliente por vez**: enquanto está no `recv` do primeiro, o segundo espera na fila. As saídas, em ordem de complexidade:
+
+- **Uma thread por conexão** (tema do Volume 15): simples e suficiente até algumas centenas de conexões simultâneas.
+- **`selectors`**, na biblioteca padrão: um laço de eventos que vigia muitos sockets num processo só. É o que existia antes do `asyncio` e ainda é a ferramenta certa para um servidor pequeno sem dependências.
+- **`asyncio`** (Volume 15): `asyncio.start_server` e `open_connection` dão o mesmo modelo com sintaxe `async`, e é o caminho padrão hoje para milhares de conexões.
+
+Para servidores simples, a biblioteca padrão traz ainda `socketserver`, que embrulha o laço de `accept` e oferece variantes com thread e com processo.
+
+## O que quase sempre é melhor que socket cru
+
+Escrever um protocolo é escrever um formato, um enquadramento, um tratamento de erro, uma versão e uma segurança. Isso é muito trabalho para refazer.
+
+- **Precisa de requisição e resposta?** HTTP, com `httpx` — assunto do próximo capítulo. Você ganha status, cabeçalhos, cache, repetição, TLS e ferramentas de diagnóstico.
+- **Precisa de fila ou assinatura?** Um intermediário de mensagens (Redis, RabbitMQ, MQTT para sensores) resolve entrega, persistência e reconexão.
+- **Precisa de criptografia?** O módulo `ssl` embrulha um socket existente, e `ssl.create_default_context()` faz a verificação de certificado corretamente. **Nunca desligue a verificação** para "resolver" um erro de certificado.
+
+Socket cru se justifica quando o protocolo já existe e não é HTTP, quando o desempenho é crítico e cada camada custa, ou quando o objetivo é aprender — que é o caso deste capítulo.
+
+## 🐍 Jeito Pythônico
+
+**Nunca trate `recv` como se devolvesse uma mensagem.** Ele devolve *alguns* bytes: até `n`, talvez menos, talvez juntando envios diferentes. Todo protocolo sobre TCP precisa de enquadramento explícito, e `makefile("rb")` resolve o caso de linhas de texto sem escrever laço.
+
+**`sendall`, não `send`.** `send` devolve quantos bytes conseguiu enviar e não garante enviar tudo. É o mesmo defeito do lado do envio, e ele é ainda mais silencioso.
+
+**`with` em todo socket, `settimeout` em todo socket.** O primeiro evita vazar descritor; o segundo evita pendurar o processo. Os dois custam uma linha e cobrem os dois modos de falha que aparecem só em produção.
+
+**`recv` devolvendo `b""` é fim de conexão, não erro.** É a condição de parada do laço de leitura, e omiti-la produz laço infinito consumindo CPU.
+
+**`SO_REUSEADDR` no servidor.** Sem ele, reiniciar o serviço falha com `Address already in use` por causa do `TIME_WAIT`, e a reação típica — trocar a porta — mascara o problema.
+
+**Bytes na rede, `str` no seu código.** O socket fala `bytes`; a decodificação é sua e deve ser explícita, com codificação declarada no protocolo (@sec-cap014). Decodificar um pedaço que cortou um caractere multibyte ao meio levanta `UnicodeDecodeError` — mais uma razão para decodificar só depois de enquadrar.
+
+**Antes de escrever um protocolo, verifique se já existe um.** Socket cru é a camada certa para aprender e para falar protocolos que já existem; para inventar um novo, HTTP ou um intermediário de mensagens quase sempre ganham.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.** Nada a instalar: `socket`, `threading` e `selectors` são biblioteca padrão.
+
+```bash
+mkdir lab-sockets && cd lab-sockets
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+**Passo 2 — servidor de eco em dois terminais.** Escreva `servidor.py` que amarre em `127.0.0.1:9009`, aceite conexões em laço e devolva `b"OK " + dados`. Escreva `cliente.py` que conecte, envie uma linha e imprima a resposta. Rode o servidor num terminal e o cliente noutro.
+
+**Passo 3 — o `TIME_WAIT`.** Derrube o servidor com `Ctrl+C` e suba de novo imediatamente:
+
+```text
+OSError: [Errno 98] Address already in use
+```
+
+Agora acrescente `s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)` **antes** do `bind` e repita. Sobe na hora. Guarde esse par de resultados.
+
+**Passo 4 — a demonstração do fluxo.** Faça o cliente enviar três linhas em três `sendall` e o servidor fazer **um** `recv(4096)`, imprimindo quantos bytes vieram. Rode **cinco vezes seguidas** e anote os números:
+
+```text
+[servidor] primeiro recv -> 18 bytes
+[servidor] primeiro recv -> 54 bytes
+[servidor] primeiro recv -> 36 bytes
+```
+
+Se todas as suas execuções derem o mesmo número, acrescente um `time.sleep(0.01)` entre os `sendall` do cliente e rode de novo — o ponto é ver o número **mudar**.
+
+**Passo 5 — enquadrar.** Corrija o servidor com o laço que acumula até ter três `\n`. Rode cinco vezes: agora as cinco dão o mesmo resultado. Depois reescreva usando `conexao.makefile("rb")` e `for linha in arquivo:` e compare o tamanho do código.
+
+**Passo 6 — o fim da conexão.** Faça o servidor entrar num `while True: dados = conexao.recv(1024)` **sem** verificar `if not dados: break`. Conecte, envie algo, e mate o cliente. Observe o servidor girar. Acrescente a verificação e confirme a saída limpa.
+
+**Passo 7 — UDP.** Escreva a versão UDP com `SOCK_DGRAM`, `recvfrom` e `sendto`. Envie as mesmas três mensagens e confirme que chegam como **três** datagramas de 17 bytes, sem enquadramento nenhum.
+
+**Passo 8 — a diferença que define UDP.** Com o servidor desligado, rode:
+
+```python
+c.sendto(b"ninguem esta ouvindo", ("127.0.0.1", 9))
+```
+
+```text
+sendto devolveu 20 bytes enviados, sem erro
+```
+
+Agora faça um `connect` TCP na mesma porta e compare. Essa é a escolha entre os dois protocolos, em duas linhas.
+
+**Passo 9 — vários clientes.** Com o servidor TCP bloqueante rodando, abra dois clientes ao mesmo tempo, o primeiro com um `time.sleep(10)` antes de enviar. O segundo fica esperando. Agora envolva o tratamento em `threading.Thread(target=atender, args=(conexao,))` e repita: os dois são atendidos juntos.
+
+**Passo 10 — o teste automatizado.** Escreva um teste com `pytest` que suba o servidor numa thread com `bind(("127.0.0.1", 0))`, descubra a porta com `getsockname()[1]`, conecte um cliente e verifique a resposta. Porta 0 é o que torna o teste executável em paralelo e no CI, sem colisão.
+
+## Resumo
+
+- Um servidor TCP faz `socket()`, `bind()`, `listen()`, `accept()`; o cliente faz `socket()` e `connect()`. **`accept()` devolve um socket novo** para aquela conexão, e o original segue escutando.
+- **TCP é um fluxo de bytes, não uma sequência de mensagens.** O mesmo programa rodado três vezes deu 18, 54 e 36 bytes no primeiro `recv` — o protocolo garante ordem e entrega, e nada sobre fronteiras. Todo protocolo precisa de **enquadramento**: delimitador, prefixo de tamanho ou conexão por mensagem.
+- `recv` devolvendo `b""` é **fim de conexão**, e é a condição de parada do laço. `sendall` em vez de `send`, porque `send` pode enviar só parte.
+- **UDP preserva as fronteiras** (um `sendto` é um `recvfrom`) e não tem conexão nem garantia: `sendto` para uma porta sem ninguém escutando devolve sucesso, enquanto o `connect` TCP falha visivelmente.
+- **`SO_REUSEADDR`** antes do `bind` evita o `Address already in use` do `TIME_WAIT` ao reiniciar; **`bind((host, 0))`** deixa o sistema escolher a porta, o que torna testes paralelizáveis.
+- **`with` e `settimeout` em todo socket.** Um evita vazar descritor, o outro evita pendurar o processo; nenhum dos dois problemas aparece em desenvolvimento.
+- Um servidor bloqueante atende um cliente por vez; as saídas são thread por conexão, `selectors`, ou `asyncio` (Volume 15). E, antes de escrever um protocolo novo sobre socket cru, verifique se HTTP ou um intermediário de mensagens já resolve.
