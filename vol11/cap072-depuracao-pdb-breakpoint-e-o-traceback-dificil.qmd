@@ -1,3 +1,409 @@
 # Depuração: pdb, breakpoint e o traceback difícil {#sec-cap072}
 
-*(em elaboracao)*
+O coletor rodou a noite inteira e parou às 3h47 com um `ZeroDivisionError`. O traceback tem quarenta linhas, metade delas dentro de bibliotecas que você não escreveu, e a última linha diz `division by zero` numa função que você jurava não poder dividir por zero.
+
+A reação padrão é espalhar `print` pelo código, rodar de novo, olhar a saída, mover os `print` de lugar, rodar de novo. Funciona, e é lento: cada iteração custa uma execução inteira, e ao fim você tem um arquivo sujo de `print` que alguém vai commitar por acaso.
+
+Este capítulo é sobre as duas alternativas: **ler o traceback direito** — inclusive os difíceis, com exceções encadeadas e grupos — e **usar um depurador**, que mostra todo o estado de uma vez, sem alterar o código e sem rodar de novo.
+
+## O traceback, lido de trás para frente
+
+@sec-cap007 apresentou a anatomia básica. Aqui interessa a parte que costuma confundir.
+
+```text
+Traceback (most recent call last):
+  File ".../media.py", line 13, in <module>
+    print(media([None, None]))
+          ~~~~~^^^^^^^^^^^^^^
+  File ".../media.py", line 8, in media
+    return total / len(limpos)
+           ~~~~~~^~~~~~~~~~~~~
+ZeroDivisionError: division by zero
+```
+
+::: {#fig-anatomia-traceback}
+```{.tikz}
+%%| filename: anatomia-traceback
+%%| alt: Anatomia de um traceback com as partes rotuladas
+\begin{tikzpicture}[
+  ln/.style={font=\scriptsize\ttfamily,anchor=west},
+  lb/.style={font=\scriptsize,anchor=west,align=left},
+  st/.style={->,>=stealth,manualred!70!black}
+]
+  \path (-0.6,-4.0) rectangle (14.8,2.8);
+
+  \draw[fill=manualgray!12,draw=manualgray,rounded corners] (0,-2.1) rectangle (8.4,2.35);
+
+  \node[ln] at (0.2,2.0)  {Traceback (most recent call last):};
+  \node[ln] at (0.2,1.5)  {\ \ File ".../media.py", line 13, in <module>};
+  \node[ln] at (0.2,1.1)  {\ \ \ \ print(media([None, None]))};
+  \node[ln] at (0.2,0.7)  {\ \ \ \ \ \ \ \ \ \ \textcolor{manualgray}{\textasciitilde\textasciitilde\textasciitilde\textasciitilde\textasciitilde}\textcolor{manualred}{\textasciicircum\textasciicircum\textasciicircum\textasciicircum\textasciicircum\textasciicircum\textasciicircum\textasciicircum}};
+  \node[ln] at (0.2,0.1)  {\ \ File ".../media.py", line 8, in media};
+  \node[ln] at (0.2,-0.3) {\ \ \ \ return total / len(limpos)};
+  \node[ln] at (0.2,-0.7) {\ \ \ \ \ \ \ \ \ \ \ \textcolor{manualgray}{\textasciitilde\textasciitilde\textasciitilde\textasciitilde\textasciitilde\textasciitilde}\textcolor{manualred}{\textasciicircum}\textcolor{manualgray}{\textasciitilde\textasciitilde\textasciitilde\textasciitilde\textasciitilde\textasciitilde\textasciitilde}};
+  \node[ln] at (0.2,-1.5) {ZeroDivisionError: division by zero};
+
+  \draw[st] (9.0,1.5)  -- (8.5,1.5);
+  \node[lb,text width=5.4cm] at (9.1,1.5) {\textbf{quem chamou} --- topo da pilha,\\o ponto mais distante do erro};
+
+  \draw[st] (9.0,0.1) -- (8.5,0.1);
+  \node[lb,text width=5.4cm] at (9.1,0.1) {\textbf{onde estourou} --- ultimo quadro,\\quase sempre a linha que interessa};
+
+  \draw[st] (9.0,-0.7) -- (8.5,-0.7);
+  \node[lb,text width=5.4cm] at (9.1,-0.7) {\textbf{marcador de coluna} (3.11+):\\o trecho \textcolor{manualred}{vermelho} isola a culpada};
+
+  \draw[st] (9.0,-1.5) -- (8.5,-1.5);
+  \node[lb,text width=5.4cm] at (9.1,-1.5) {\textbf{tipo e mensagem} --- leia esta\\linha primeiro, sempre};
+
+  \node[lb,text width=13.8cm,anchor=north west] at (-0.4,-2.5)
+    {\textbf{most recent call last}: a leitura util e de baixo para cima, do erro em direcao a quem o causou.};
+\end{tikzpicture}
+```
+O traceback se lê de baixo para cima: o tipo do erro primeiro, depois o último quadro, e só então a cadeia de chamadas.
+:::
+
+Três hábitos que economizam tempo:
+
+1. **Leia a última linha primeiro.** O tipo e a mensagem definem o que procurar. `ZeroDivisionError` num cálculo de média significa lista vazia, e você já sabe metade da resposta.
+2. **Depois o último quadro `File`**, que é o mais próximo do erro. Os quadros acima só importam quando o problema é *como você chegou ali*.
+3. **Use os marcadores de coluna.** Desde o 3.11, os `~` e `^` abaixo da linha isolam a subexpressão culpada. Em `total / len(limpos)`, o `^` embaixo da barra diz que a divisão é o problema, não o `sum` nem o `len`.
+
+E um hábito a perder: **pular os quadros de biblioteca**. Quando o último quadro está dentro do `json` ou do `requests`, a linha que interessa é o último quadro **do seu código** — mas o erro em si costuma ser o argumento que você passou, visível ali.
+
+## Exceções encadeadas: as duas frases
+
+O traceback difícil tem duas partes separadas por uma frase em inglês, e as duas frases possíveis significam coisas diferentes.
+
+```python
+class ConfiguracaoInvalidaError(Exception):
+    pass
+
+
+def carregar(texto: str) -> dict:
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError as e:
+        raise ConfiguracaoInvalidaError("config ilegivel") from e
+```
+
+```text
+json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  ...
+  File ".../encadeada.py", line 12, in carregar
+    raise ConfiguracaoInvalidaError("config ilegivel") from e
+ConfiguracaoInvalidaError: config ilegivel
+```
+
+Agora a mesma função **sem** o `from e`:
+
+```text
+json.decoder.JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  ...
+ConfiguracaoInvalidaError: config ilegivel
+```
+
+| Frase | Atributo | O que significa |
+|---|---|---|
+| *the direct cause of* | `__cause__` | você escreveu `raise ... from e`: a tradução foi deliberada |
+| *During handling of* | `__context__` | o Python encadeou sozinho: houve uma exceção **enquanto** outra era tratada |
+
+A distinção importa na hora de diagnosticar. *Direct cause* diz "isto é a mesma falha, traduzida para o vocabulário da minha camada" — leia a de cima, que é a causa raiz. *During handling* frequentemente diz "**houve um segundo problema no meu tratador de erro**": o `except` que ia lidar com o primeiro problema quebrou. Nesse caso as duas exceções são independentes e as duas precisam de conserto.
+
+Daí a regra: ao converter uma exceção, **sempre `raise ... from e`**. Custa duas palavras e a diferença entre os dois tracebacks é a diferença entre um diagnóstico e um enigma. Quando a exceção original é ruído que você quer suprimir de propósito, `raise ... from None` limpa a cadeia.
+
+### Grupos de exceções (3.11+)
+
+Quando várias coisas falham em paralelo — dez estações consultadas de uma vez, três sem resposta — uma única exceção perde informação. `ExceptionGroup` carrega todas:
+
+```python
+def coletar(estacoes):
+    erros = []
+    for e in estacoes:
+        if e.startswith("x"):
+            erros.append(ConnectionError(f"sem resposta: {e}"))
+        elif e.startswith("y"):
+            erros.append(ValueError(f"leitura absurda: {e}"))
+    if erros:
+        raise ExceptionGroup("falhas na coleta", erros)
+    return "ok"
+```
+
+O traceback tem forma de árvore:
+
+```text
+  + Exception Group Traceback (most recent call last):
+  |   File ".../grupo.py", line 21, in <module>
+  |     coletar(["x1", "y2"])
+  |   File ".../grupo.py", line 9, in coletar
+  |     raise ExceptionGroup("falhas na coleta", erros)
+  | ExceptionGroup: falhas na coleta (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | ConnectionError: sem resposta: x1
+    +---------------- 2 ----------------
+    | ValueError: leitura absurda: y2
+    +------------------------------------
+```
+
+E o `except*` trata cada tipo separadamente, podendo entrar em **mais de um bloco**:
+
+```python
+try:
+    coletar(["x1", "y2", "x3"])
+except* ConnectionError as grupo:
+    print("rede:", [str(e) for e in grupo.exceptions])
+except* ValueError as grupo:
+    print("dados:", [str(e) for e in grupo.exceptions])
+```
+
+```text
+rede: ['sem resposta: x1', 'sem resposta: x3']
+dados: ['leitura absurda: y2']
+```
+
+Os dois blocos rodaram, cada um recebendo um subgrupo. É o oposto do `except` comum, em que o primeiro que casa vence e os demais são ignorados. Isso aparece na prática em `asyncio.TaskGroup` (Volume 15), que é onde a maioria das pessoas encontra `ExceptionGroup` pela primeira vez.
+
+## `breakpoint()` e o pdb
+
+A função embutida `breakpoint()` para a execução e abre o depurador ali:
+
+```python
+def media(valores):
+    limpos = [v for v in valores if v is not None]
+    breakpoint()
+    return sum(limpos) / len(limpos)
+```
+
+```text
+> .../bp.py(3)media()
+-> breakpoint()
+(Pdb)
+```
+
+A primeira linha diz onde você está: arquivo, linha, função. A segunda mostra a linha prestes a executar. Então:
+
+```text
+(Pdb) l
+  1  	def media(valores):
+  2  	    limpos = [v for v in valores if v is not None]
+  3  ->	    breakpoint()
+  4  	    return sum(limpos) / len(limpos)
+
+(Pdb) p limpos
+[-29.8, -30.1]
+(Pdb) p len(limpos)
+2
+(Pdb) pp valores
+[-29.8, None, -30.1]
+(Pdb) n
+> .../bp.py(4)media()
+-> return sum(limpos) / len(limpos)
+(Pdb) c
+-29.950000000000003
+```
+
+Você inspecionou três expressões, andou uma linha e soltou o programa — sem editar o arquivo e sem rodar de novo.
+
+### O vocabulário mínimo
+
+| Comando | Faz |
+|---|---|
+| `l` / `ll` | lista o código em volta / a função inteira |
+| `n` | próxima linha, **sem** entrar nas funções chamadas |
+| `s` | próxima linha, **entrando** na função chamada |
+| `c` | continua até o próximo ponto de parada |
+| `r` | roda até a função atual retornar |
+| `until N` | roda até passar da linha N |
+| `p expr` / `pp expr` | avalia e imprime / imprime formatado |
+| `w` | mostra a pilha de chamadas inteira |
+| `u` / `d` | sobe / desce um quadro na pilha |
+| `a` | mostra os argumentos da função atual |
+| `b arquivo:linha` | põe um ponto de parada |
+| `display expr` | reimprime `expr` a cada parada, quando mudar |
+| `interact` | abre um REPL com as variáveis do quadro atual |
+| `q` | sai |
+
+Dois pares valem a atenção. **`n` versus `s`** é a diferença entre "confio nessa função" e "o problema pode estar lá dentro" — usar `s` por reflexo leva você para dentro do `json` e do `socket` e desperdiça a sessão. **`u` e `d`** são o que torna o depurador melhor que `print`: você para no fundo da pilha e sobe até o quadro do *seu* código, com todas as variáveis locais de lá intactas.
+
+E um alerta prático: um nome de variável que colide com comando do pdb não é impresso. `l` é o comando de listagem, não sua variável `l`; use `p l` explicitamente.
+
+### Ligando e desligando sem editar
+
+A variável `PYTHONBREAKPOINT` controla o que `breakpoint()` faz:
+
+```bash
+PYTHONBREAKPOINT=0 python bp.py
+```
+
+```text
+-29.950000000000003
+```
+
+O programa rodou até o fim: `breakpoint()` virou uma operação vazia. É o que permite deixar um `breakpoint()` num script de diagnóstico e desligá-lo em produção sem tocar no código. E `PYTHONBREAKPOINT=ipdb.set_trace` troca o depurador padrão por outro — `ipdb`, `pudb`, ou o do seu editor.
+
+## Depuração *post mortem*
+
+O caso mais comum não é "quero parar aqui", é "**já quebrou, quero ver o estado no momento da falha**". Rodar de novo com `breakpoint()` no lugar certo é a solução ruim: o erro pode levar vinte minutos para reaparecer, ou não reaparecer.
+
+```bash
+python -m pdb -c continue media.py
+```
+
+O `-c continue` manda rodar normalmente; quando a exceção escapa, o pdb assume:
+
+```text
+ZeroDivisionError: division by zero
+Uncaught exception. Entering post mortem debugging
+> .../media.py(8)media()
+-> return total / len(limpos)
+(Pdb) p limpos
+[]
+(Pdb) p valores
+[None, None]
+```
+
+Em duas perguntas o diagnóstico está fechado: `valores` era `[None, None]`, `limpar` removeu tudo, `limpos` ficou vazia. Nenhum `print` foi escrito, nenhum arquivo foi alterado.
+
+Três variações do mesmo mecanismo:
+
+- **No REPL**, depois de uma exceção: `import pdb; pdb.pm()` abre o *post mortem* da última exceção.
+- **Nos testes**: `pytest --pdb` entra no depurador na primeira falha, com o estado do teste vivo.
+
+```text
+>>>>>>>>>>>>>>>>>> PDB post_mortem (IO-capturing turned off) >>>>>>>>>>>>>>>>>>
+> .../media.py(8)media()
+-> return total / len(limpos)
+(Pdb) p limpos
+[]
+(Pdb) p valores
+[None, None]
+```
+
+- **Em processo travado ou que morreu feio** (segmentation fault, laço infinito), o `faulthandler` da biblioteca padrão despeja a pilha de todas as threads. `python -X faulthandler script.py` liga, e `faulthandler.dump_traceback_later(60)` imprime a pilha se o programa passar de um minuto sem terminar — o diagnóstico padrão de travamento.
+
+### Anexar a um processo em execução (3.14+)
+
+Até o 3.13, olhar dentro de um processo Python já em execução exigia ferramenta externa. O Python 3.14 traz isso para a biblioteca padrão (PEP 768):
+
+```bash
+python -m pdb -p 12345
+```
+
+```text
+usage: python -m pdb [-h] [-c command] (-m module | -p pid | pyfile) [args ...]
+...
+You can also attach to a running Python process
+using the -p option with its PID.
+```
+
+É a resposta para "o processo está rodando há seis horas e travou, e eu não posso reiniciá-lo". A base é a função `sys.remote_exec`, também nova no 3.14.
+
+## `print`, `logging` ou depurador?
+
+Os três têm lugar, e o erro é usar um no papel do outro:
+
+- **Depurador** quando você não sabe onde está o problema. Ele mostra *todo* o estado, e você faz perguntas até entender. É o único que responde "e quanto vale essa outra variável?" sem rodar de novo.
+- **`logging`** (@sec-cap060) quando o problema é intermitente, está em produção, ou depende de tempo. Você não pode anexar um depurador a um erro que acontece uma vez por semana às 3h47 — mas pode ter registrado o suficiente para reconstruí-lo. Use `logger.exception()` dentro de um `except`: ele grava a mensagem **e o traceback completo**.
+- **`print`** para uma pergunta única, óbvia, num script de dez linhas. Legítimo — desde que saia antes do commit.
+
+E o módulo `traceback` para quando você quer o traceback como **dado**, não como saída: `traceback.format_exc()` devolve a string inteira, útil para mandar a uma ferramenta de monitoramento ou gravar num relatório:
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    1/0
+    ~^~
+ZeroDivisionError: division by zero
+```
+
+## 🐍 Jeito Pythônico
+
+**`breakpoint()`, nunca `import pdb; pdb.set_trace()`.** A função embutida existe desde o 3.7 (PEP 553), respeita `PYTHONBREAKPOINT`, e não deixa um import solto no topo do arquivo esperando para ser commitado.
+
+**`raise ... from e` sempre que traduzir uma exceção.** Sem ele, o traceback diz *During handling of*, que é a frase reservada para "algo quebrou dentro do tratador" — e você acabou de mentir sobre a natureza do problema para quem for diagnosticar.
+
+**Não engula exceção sem registrar.** Um `except Exception: pass` é uma sessão de depuração futura que não vai acontecer, porque a informação foi destruída. No mínimo `logger.exception("contexto")`, que grava mensagem e traceback.
+
+**Reproduza antes de depurar, e transforme a reprodução num teste.** Um defeito que você consegue reproduzir num teste (@sec-cap070) já está meio resolvido: o ciclo cai para segundos, `pytest --pdb` coloca você no ponto exato, e ao final o teste vira a garantia de que o defeito não volta. Depurar sem reprodução é adivinhar com ferramentas melhores.
+
+**Prefira `n` a `s`.** Entrar em toda função chamada leva a sessão para dentro da biblioteca padrão em três passos. Ande por cima; quando desconfiar de uma função específica, ponha um `b` nela.
+
+**Marcadores de coluna são de graça.** Em `a["x"] + b["y"]` com um `TypeError`, o `^` diz qual dos dois lados é o culpado. Muita gente ignora essas linhas achando que são decoração.
+
+## 🧪 Laboratório
+
+**Passo 1 — o alvo.** Crie `media.py`:
+
+```python
+def limpar(valores):
+    return [v for v in valores if v is not None]
+
+
+def media(valores):
+    limpos = limpar(valores)
+    total = sum(limpos)
+    return total / len(limpos)
+
+
+if __name__ == "__main__":
+    print(media([-29.8, None, -30.1, None]))
+    print(media([None, None]))
+```
+
+Rode com `python media.py` e leia o traceback **de baixo para cima**. Identifique: o tipo do erro, o último quadro do seu código, e o que o marcador `^` está apontando.
+
+**Passo 2 — *post mortem*, sem alterar o arquivo.**
+
+```bash
+python -m pdb -c continue media.py
+```
+
+No `(Pdb)`, responda a três perguntas: `p limpos`, `p valores`, `w`. O `w` mostra a pilha inteira; localize o quadro de `<module>` e o de `media`. Depois use `u` para subir até o chamador e `p` para inspecionar as variáveis **de lá**. Esse par — `u` mais `p` — é o que `print` não faz.
+
+**Passo 3 — `breakpoint()` e o passeio.** Ponha `breakpoint()` na primeira linha de `media` e rode `python media.py`. Pratique a diferença: com `n`, a chamada a `limpar` executa e você fica na linha seguinte; reinicie e use `s` na mesma linha para entrar dentro de `limpar`. Depois use `r` para voltar dali.
+
+**Passo 4 — desligar sem editar.** Deixe o `breakpoint()` onde está e rode:
+
+```bash
+PYTHONBREAKPOINT=0 python media.py
+```
+
+(No PowerShell: `$env:PYTHONBREAKPOINT=0; python media.py`.) O programa vai até o fim e falha no `ZeroDivisionError` normalmente — o `breakpoint()` virou nada.
+
+**Passo 5 — as duas frases do encadeamento.** Escreva uma função que faça `json.loads` de um texto quebrado e converta o erro para uma exceção sua, **sem** `from e`. Rode e confirme a frase *During handling of*. Acrescente o `from e` e rode de novo: a frase muda para *the direct cause of*. Guarde os dois tracebacks lado a lado — é a diferença que você vai procurar em código alheio.
+
+**Passo 6 — `raise ... from None`.** Na mesma função, troque para `from None` e observe: a exceção original **desaparece** do traceback. Útil quando o erro interno é ruído de implementação; perigoso quando não é.
+
+**Passo 7 — grupo de exceções.** Escreva a função `coletar` do capítulo e trate o resultado com `except*` em dois blocos. Confirme que **os dois** imprimem. Depois troque os `except*` por `except` comum e veja o que acontece: um `except ConnectionError` não captura um `ExceptionGroup` que contém `ConnectionError`.
+
+**Passo 8 — depurando um teste.** Escreva `tests/test_media.py` com um teste que chame `media([None, None])`, e rode:
+
+```bash
+pytest --pdb
+```
+
+```text
+>>>>>>>>>>>>>>>>>> PDB post_mortem (IO-capturing turned off) >>>>>>>>>>>>>>>>>>
+-> return total / len(limpos)
+(Pdb) p limpos
+[]
+```
+
+Você está dentro da falha, com o estado do teste vivo. Conserte `media` para levantar um `ValueError` claro quando `limpos` estiver vazia, ajuste o teste com `pytest.raises`, e confirme o verde. **O defeito virou teste** — que é o objetivo de toda sessão de depuração.
+
+## Resumo
+
+- Traceback se lê **de baixo para cima**: tipo e mensagem primeiro, depois o último quadro, e os marcadores de coluna `~^` (3.11+) isolam a subexpressão culpada.
+- As duas frases do encadeamento não são sinônimas: ***the direct cause of*** (`__cause__`) vem de `raise ... from e` e indica tradução deliberada; ***During handling of*** (`__context__`) é automática e frequentemente significa que **o tratador de erro também quebrou**.
+- **`ExceptionGroup` e `except*`** (3.11+) carregam várias falhas simultâneas, e mais de um bloco `except*` pode executar na mesma exceção — ao contrário do `except` comum.
+- **`breakpoint()`** é a forma correta de abrir o depurador, respeita `PYTHONBREAKPOINT=0` para desligar sem editar, e `PYTHONBREAKPOINT=ipdb.set_trace` troca a ferramenta.
+- Vocabulário mínimo do pdb: `l`, `n` (por cima) *versus* `s` (entrando), `c`, `r`, `p`/`pp`, `w`, e **`u`/`d` para andar na pilha** — este último é o que um `print` nunca dá.
+- **Depuração *post mortem*** evita reproduzir o erro: `python -m pdb -c continue script.py`, `pdb.pm()` no REPL, `pytest --pdb` nos testes, `faulthandler` para travamento. No 3.14, `python -m pdb -p PID` anexa a um processo em execução (PEP 768).
+- Depurador quando não se sabe onde está o problema; `logging` com `logger.exception()` quando é intermitente ou em produção; `print` só para pergunta única em script pequeno. E toda sessão de depuração deve terminar num teste.
