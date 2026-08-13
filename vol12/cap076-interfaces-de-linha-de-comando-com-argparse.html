@@ -82,7 +82,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link href="../site_libs/quarto-html/quarto-syntax-highlighting-e709978d94f8514e25d5a04fade5bbf4.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-6dcaff36cad1532e4970e4fe04e3b4de.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-0d1a33858dee5fffda5fba1ba10dfd22.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "sidebar",
   "copy-button": false,
@@ -2013,37 +2013,38 @@ Figura&nbsp;76.1: Os três geram interfaces equivalentes; diferem em quanto voc�
 <section id="testar-a-interface" class="level2" data-number="76.6">
 <h2 data-number="76.6" class="anchored" data-anchor-id="testar-a-interface"><span class="header-section-number">76.6</span> Testar a interface</h2>
 <p>Uma CLI é código como outro qualquer, e o <a href="../vol11/cap070-testes-com-pytest-fundamentos-assercoes-e.html" class="quarto-xref"><span>Capítulo 70</span></a> vale inteiro aqui:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> typer.testing <span class="im">import</span> CliRunner</span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> cli_argparse <span class="im">import</span> montar_parser</span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> cli_typer <span class="im">import</span> app</span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>runner <span class="op">=</span> CliRunner()</span>
-<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a></span>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb18"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pytest</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> typer.testing <span class="im">import</span> CliRunner</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> cli_argparse <span class="im">import</span> montar_parser</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> cli_typer <span class="im">import</span> app</span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>runner <span class="op">=</span> CliRunner()</span>
 <span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_argparse_padroes():</span>
-<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>    args <span class="op">=</span> montar_parser().parse_args([<span class="st">"entrada"</span>])</span>
-<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> args.formato <span class="op">==</span> <span class="st">"csv"</span></span>
-<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> args.aplicar <span class="kw">is</span> <span class="va">False</span></span>
-<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> args.verboso <span class="op">==</span> <span class="dv">0</span></span>
-<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_argparse_padroes():</span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>    args <span class="op">=</span> montar_parser().parse_args([<span class="st">"entrada"</span>])</span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> args.formato <span class="op">==</span> <span class="st">"csv"</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> args.aplicar <span class="kw">is</span> <span class="va">False</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> args.verboso <span class="op">==</span> <span class="dv">0</span></span>
 <span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_argparse_recusa_formato_invalido():</span>
-<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a>    <span class="cf">with</span> pytest.raises(<span class="pp">SystemExit</span>) <span class="im">as</span> info:</span>
-<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>        montar_parser().parse_args([<span class="st">"entrada"</span>, <span class="st">"--formato"</span>, <span class="st">"pdf"</span>])</span>
-<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> info.value.code <span class="op">==</span> <span class="dv">2</span></span>
-<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-16"><a href="#cb18-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-17"><a href="#cb18-17" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_argparse_recusa_formato_invalido():</span>
+<span id="cb18-18"><a href="#cb18-18" aria-hidden="true" tabindex="-1"></a>    <span class="cf">with</span> pytest.raises(<span class="pp">SystemExit</span>) <span class="im">as</span> info:</span>
+<span id="cb18-19"><a href="#cb18-19" aria-hidden="true" tabindex="-1"></a>        montar_parser().parse_args([<span class="st">"entrada"</span>, <span class="st">"--formato"</span>, <span class="st">"pdf"</span>])</span>
+<span id="cb18-20"><a href="#cb18-20" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> info.value.code <span class="op">==</span> <span class="dv">2</span></span>
 <span id="cb18-21"><a href="#cb18-21" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_typer_listar(tmp_path):</span>
-<span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a>    (tmp_path <span class="op">/</span> <span class="st">"a.csv"</span>).write_text(<span class="st">"x"</span>)</span>
-<span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a>    r <span class="op">=</span> runner.invoke(app, [<span class="st">"listar"</span>, <span class="bu">str</span>(tmp_path)])</span>
-<span id="cb18-25"><a href="#cb18-25" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> r.exit_code <span class="op">==</span> <span class="dv">0</span></span>
-<span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> <span class="st">"a.csv"</span> <span class="kw">in</span> r.stdout</span>
-<span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-22"><a href="#cb18-22" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-23"><a href="#cb18-23" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_typer_listar(tmp_path):</span>
+<span id="cb18-24"><a href="#cb18-24" aria-hidden="true" tabindex="-1"></a>    (tmp_path <span class="op">/</span> <span class="st">"a.csv"</span>).write_text(<span class="st">"x"</span>)</span>
+<span id="cb18-25"><a href="#cb18-25" aria-hidden="true" tabindex="-1"></a>    r <span class="op">=</span> runner.invoke(app, [<span class="st">"listar"</span>, <span class="bu">str</span>(tmp_path)])</span>
+<span id="cb18-26"><a href="#cb18-26" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> r.exit_code <span class="op">==</span> <span class="dv">0</span></span>
+<span id="cb18-27"><a href="#cb18-27" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> <span class="st">"a.csv"</span> <span class="kw">in</span> r.stdout</span>
 <span id="cb18-28"><a href="#cb18-28" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-29"><a href="#cb18-29" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_typer_raiz_inexistente():</span>
-<span id="cb18-30"><a href="#cb18-30" aria-hidden="true" tabindex="-1"></a>    r <span class="op">=</span> runner.invoke(app, [<span class="st">"consolidar"</span>, <span class="st">"nao_existe"</span>])</span>
-<span id="cb18-31"><a href="#cb18-31" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> r.exit_code <span class="op">==</span> <span class="dv">2</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb18-29"><a href="#cb18-29" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-30"><a href="#cb18-30" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> test_typer_raiz_inexistente():</span>
+<span id="cb18-31"><a href="#cb18-31" aria-hidden="true" tabindex="-1"></a>    r <span class="op">=</span> runner.invoke(app, [<span class="st">"consolidar"</span>, <span class="st">"nao_existe"</span>])</span>
+<span id="cb18-32"><a href="#cb18-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">assert</span> r.exit_code <span class="op">==</span> <span class="dv">2</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>....                                                                     [100%]
 4 passed in 0.16s</code></pre>
 <p>Dois idiomas a guardar. No <code>argparse</code>, um erro de uso chama <code>sys.exit(2)</code>, então o teste é <code>pytest.raises(SystemExit)</code> conferindo <code>info.value.code</code>. No Typer e no Click, o <code>CliRunner</code> <strong>não</strong> deixa o processo morrer: ele devolve um resultado com <code>exit_code</code>, <code>stdout</code> e <code>exception</code>, o que torna o teste bem mais direto.</p>

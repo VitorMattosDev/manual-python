@@ -82,7 +82,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link href="../site_libs/quarto-html/quarto-syntax-highlighting-e709978d94f8514e25d5a04fade5bbf4.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-6dcaff36cad1532e4970e4fe04e3b4de.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-0d1a33858dee5fffda5fba1ba10dfd22.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "sidebar",
   "copy-button": false,
@@ -1727,41 +1727,45 @@ int('\xa042')        -&gt; 42</code></pre>
 </section>
 <section id="caractere-tipográfico-quebra-o-número" class="level3" data-number="79.3.3">
 <h3 data-number="79.3.3" class="anchored" data-anchor-id="caractere-tipográfico-quebra-o-número"><span class="header-section-number">79.3.3</span> 3. Caractere tipográfico <strong>quebra</strong> o número</h3>
-<pre class="text"><code>espaco comum + NBSP        '\xa0-28.4 '     -&gt; -28.4
-sinal de menos U+2212      '-28.4'          -&gt; ValueError
-traco figurativo U+2012    '-28.4'          -&gt; ValueError
-virgula decimal            '-28,4'          -&gt; ValueError</code></pre>
-<p>Os três últimos <strong>parecem</strong> idênticos ao primeiro na tela. HTML publicado por sistema de conteúdo está cheio de sinal de menos tipográfico (U+2212), traço figurativo e vírgula decimal — e cada um produz um <code>ValueError</code> cuja mensagem mostra dois textos visualmente iguais. Antes de converter, troque os candidatos conhecidos:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> para_float(texto: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">float</span>:</span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>    t <span class="op">=</span> texto.strip().replace(<span class="st">"−"</span>, <span class="st">"-"</span>).replace(<span class="st">"‒"</span>, <span class="st">"-"</span>)</span>
-<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="bu">float</span>(t.replace(<span class="st">"."</span>, <span class="st">""</span>).replace(<span class="st">","</span>, <span class="st">"."</span>) <span class="cf">if</span> <span class="st">","</span> <span class="kw">in</span> t <span class="cf">else</span> t)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>espaco comum + NBSP        '\xa0-28.4 '   -&gt; -28.4
+sinal de menos U+2212      '−28.4'        -&gt; ValueError
+traco figurativo U+2012    '\u201228.4'   -&gt; ValueError
+virgula decimal            '-28,4'        -&gt; ValueError</code></pre>
+<p>Os três últimos <strong>parecem</strong> idênticos ao primeiro na tela — a segunda linha mostra o caractere de verdade, e você não consegue distingui-lo de um hífen. A terceira aparece como escape porque a fonte deste livro sequer <strong>tem</strong> o glifo do traço figurativo: ele sumiria da página, que é a mesma classe de problema, um nível acima.</p>
+<p>HTML publicado por sistema de conteúdo está cheio de sinal de menos tipográfico (U+2212), traço figurativo e vírgula decimal. E a mensagem do erro não ajuda em nada:</p>
+<pre class="text"><code>ValueError: could not convert string to float: '−28.4'</code></pre>
+<p>O <code>repr</code> imprime o caractere de volta, e ele continua parecendo um número perfeitamente válido. É o tipo de erro em que se perde meia hora relendo a mesma linha. Antes de converter, troque os candidatos conhecidos:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> para_float(texto: <span class="bu">str</span>) <span class="op">-&gt;</span> <span class="bu">float</span>:</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>    t <span class="op">=</span> texto.strip().replace(<span class="st">"</span><span class="ch">\u2212</span><span class="st">"</span>, <span class="st">"-"</span>).replace(<span class="st">"</span><span class="ch">\u2012</span><span class="st">"</span>, <span class="st">"-"</span>)</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> <span class="bu">float</span>(t.replace(<span class="st">"."</span>, <span class="st">""</span>).replace(<span class="st">","</span>, <span class="st">"."</span>) <span class="cf">if</span> <span class="st">","</span> <span class="kw">in</span> t <span class="cf">else</span> t)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Escrever <code>"\u2212"</code> em vez de colar o caractere é deliberado, e vale como regra: colado, ele fica indistinguível de <code>-</code> na revisão de código — e, se a fonte não tiver o glifo, some. O escape diz exatamente qual é o ponto de código e sobrevive a qualquer fonte. Para caractere ambíguo, invisível ou raro, escreva o escape.</p>
 </section>
 </section>
 <section id="antes-de-escrever-um-seletor" class="level2" data-number="79.4">
 <h2 data-number="79.4" class="anchored" data-anchor-id="antes-de-escrever-um-seletor"><span class="header-section-number">79.4</span> Antes de escrever um seletor</h2>
 <p>Duas verificações economizam horas.</p>
 <p><strong>O dado pode estar em JSON dentro da própria página.</strong> Muitos sites embutem <code>application/ld+json</code> ou um bloco de estado da aplicação:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>bruto <span class="op">=</span> sopa.select_one(<span class="st">'script[type="application/ld+json"]'</span>).string</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(json.loads(bruto))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb22"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>bruto <span class="op">=</span> sopa.select_one(<span class="st">'script[type="application/ld+json"]'</span>).string</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(json.loads(bruto))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>{'@type': 'Dataset', 'name': 'Leituras', 'temporalCoverage': '2026-03'}</code></pre>
 <p>JSON é estruturado, tipado e muito mais estável que a marcação ao redor — quando ele existe, é sempre a melhor fonte.</p>
 <p><strong>O HTML pode não conter o dado.</strong> Em site que monta a página com JavaScript, o que o <code>httpx</code> recebe é um esqueleto vazio; o dado chega depois, por uma chamada <code>fetch</code>. O reflexo comum é partir para um navegador automatizado (<code>playwright</code>, <code>selenium</code>), que é lento e frágil. O reflexo certo é abrir a aba de rede do navegador e <strong>procurar a chamada de API que a página faz</strong> — quase sempre existe, devolve JSON, e você acabou de trocar raspagem por consumo de API (<a href="cap078-requisicoes-http-com-requests-e-httpx.html" class="quarto-xref"><span>Capítulo 78</span></a>).</p>
 </section>
 <section id="o-raspador-que-não-incomoda" class="level2" data-number="79.5">
 <h2 data-number="79.5" class="anchored" data-anchor-id="o-raspador-que-não-incomoda"><span class="header-section-number">79.5</span> O raspador que não incomoda</h2>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> time</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> httpx</span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> httpx.Client(</span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>    timeout<span class="op">=</span><span class="dv">10</span>,</span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>    headers<span class="op">=</span>{<span class="st">"User-Agent"</span>: <span class="st">"coletor-pesquisa/1.0 (contato: eu@exemplo.org)"</span>},</span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    follow_redirects<span class="op">=</span><span class="va">True</span>,</span>
-<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>) <span class="im">as</span> c:</span>
-<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> url <span class="kw">in</span> urls:</span>
-<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>        r <span class="op">=</span> c.get(url)</span>
-<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a>        r.raise_for_status()</span>
-<span id="cb23-12"><a href="#cb23-12" aria-hidden="true" tabindex="-1"></a>        processar(r.text)</span>
-<span id="cb23-13"><a href="#cb23-13" aria-hidden="true" tabindex="-1"></a>        time.sleep(atraso)     <span class="co"># respeite o Crawl-delay</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb24"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> time</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> httpx</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> httpx.Client(</span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>    timeout<span class="op">=</span><span class="dv">10</span>,</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    headers<span class="op">=</span>{<span class="st">"User-Agent"</span>: <span class="st">"coletor-pesquisa/1.0 (contato: eu@exemplo.org)"</span>},</span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>    follow_redirects<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>) <span class="im">as</span> c:</span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> url <span class="kw">in</span> urls:</span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>        r <span class="op">=</span> c.get(url)</span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>        r.raise_for_status()</span>
+<span id="cb24-12"><a href="#cb24-12" aria-hidden="true" tabindex="-1"></a>        processar(r.text)</span>
+<span id="cb24-13"><a href="#cb24-13" aria-hidden="true" tabindex="-1"></a>        time.sleep(atraso)     <span class="co"># respeite o Crawl-delay</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Os itens que fazem a diferença:</p>
 <ul>
 <li><strong><code>User-Agent</code> honesto, com forma de contato.</strong> Um administrador que vê tráfego estranho e tem um e-mail no log manda uma mensagem; sem isso, ele bloqueia a faixa de IP. E <strong>não</strong> se disfarce de navegador: fingir ser Chrome para contornar bloqueio é justamente o comportamento que gera resposta hostil.</li>
@@ -1798,10 +1802,10 @@ Nota
 </div>
 </div>
 <p><strong>Passo 1 — ambiente e página de teste.</strong></p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb24"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> lab-raspagem <span class="kw">&amp;&amp;</span> <span class="bu">cd</span> lab-raspagem</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python3.13</span> <span class="at">-m</span> venv .venv</span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate        <span class="co"># Windows: .venv\Scripts\activate</span></span>
-<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> <span class="at">-m</span> pip install beautifulsoup4 lxml httpx pytest</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> lab-raspagem <span class="kw">&amp;&amp;</span> <span class="bu">cd</span> lab-raspagem</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python3.13</span> <span class="at">-m</span> venv .venv</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate        <span class="co"># Windows: .venv\Scripts\activate</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> <span class="at">-m</span> pip install beautifulsoup4 lxml httpx pytest</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <p>Crie <code>pagina.html</code> com uma tabela de três linhas (estação, instante, temperatura), um link <code>a.proxima</code>, e um bloco <code>&lt;script type="application/ld+json"&gt;</code>. Ponha <strong>de propósito</strong> um espaço rígido (<code>&amp;nbsp;</code>) antes de um dos números.</p>
 <p><strong>Passo 2 — os dois analisadores.</strong> Rode o mesmo fragmento malformado <code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code> com <code>html.parser</code> e com <code>lxml</code> e compare o <code>decode()</code>:</p>
 <pre class="text"><code>  html.parser  -&gt; &lt;table&gt;&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
@@ -1812,14 +1816,14 @@ Nota
 <pre class="text"><code>sem strip : '\xa0-28.4 '
 com strip : '-28.4'</code></pre>
 <p>Agora rode <code>float()</code> nos dois. <strong>Os dois funcionam.</strong> Depois faça o teste que importa:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co">' onu-00043</span><span class="ch">\n</span><span class="co">'</span> <span class="op">==</span> <span class="st">'onu-00043'</span></span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="co">' onu-00043</span><span class="ch">\n</span><span class="co">'</span> <span class="kw">in</span> {<span class="st">'onu-00043'</span>: <span class="dv">1</span>}</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb28"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">' onu-00043</span><span class="ch">\n</span><span class="co">'</span> <span class="op">==</span> <span class="st">'onu-00043'</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="co">' onu-00043</span><span class="ch">\n</span><span class="co">'</span> <span class="kw">in</span> {<span class="st">'onu-00043'</span>: <span class="dv">1</span>}</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>False
 False</code></pre>
 <p>É aqui que o dado sujo estraga o resultado sem levantar exceção nenhuma.</p>
 <p><strong>Passo 6 — o traço que quebra.</strong> Troque o <code>-</code> de uma temperatura pelo sinal de menos tipográfico <code>−</code> e rode <code>float()</code>:</p>
-<pre class="text"><code>ValueError</code></pre>
-<p>Compare os dois textos na tela: são visualmente idênticos. Escreva <code>para_float</code> que normalize <code>−</code>, <code>‒</code> e vírgula decimal, e teste os quatro casos.</p>
+<pre class="text"><code>ValueError: could not convert string to float: '−28.4'</code></pre>
+<p>Compare o texto da mensagem com <code>-28.4</code> na tela: são visualmente idênticos. Escreva <code>para_float</code> que normalize <code>\u2212</code>, <code>\u2012</code> e vírgula decimal, e teste os quatro casos — os quatro devem devolver <code>-28.4</code>.</p>
 <p><strong>Passo 7 — o seletor que some.</strong> Renomeie <code>id="leituras"</code> para <code>id="leituras-v2"</code> no HTML e rode seu extrator. Observe o <code>AttributeError: 'NoneType' object has no attribute...</code> e onde ele aparece. Agora acrescente a verificação explícita com uma exceção própria e mensagem dizendo <strong>qual</strong> seletor falhou. É essa mensagem que você vai ler daqui a seis meses.</p>
 <p><strong>Passo 8 — JSON embutido.</strong> Extraia o bloco <code>application/ld+json</code> e carregue com <code>json.loads</code>. Compare com o trabalho do passo 4 — é a mesma informação, com tipos, sem seletor.</p>
 <p><strong>Passo 9 — <code>robots.txt</code>.</strong> Monte o arquivo de exemplo do capítulo, carregue com <code>RobotFileParser.parse(texto.splitlines())</code> e verifique quatro combinações de agente e caminho:</p>

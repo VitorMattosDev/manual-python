@@ -82,7 +82,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <link href="../site_libs/quarto-html/quarto-syntax-highlighting-e709978d94f8514e25d5a04fade5bbf4.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-6dcaff36cad1532e4970e4fe04e3b4de.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-0d1a33858dee5fffda5fba1ba10dfd22.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "sidebar",
   "copy-button": false,
@@ -1648,26 +1648,29 @@ Figura&nbsp;77.1: O servidor abre, amarra, escuta e aceita; o cliente abre e con
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>c.sendall(<span class="st">b"LEITURA onu-00043</span><span class="ch">\n</span><span class="st">"</span>)</span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>c.sendall(<span class="st">b"LEITURA onu-00051</span><span class="ch">\n</span><span class="st">"</span>)</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>c.sendall(<span class="st">b"LEITURA onu-00107</span><span class="ch">\n</span><span class="st">"</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
-<p>O servidor faz <strong>um</strong> <code>recv</code>, esperando receber “uma mensagem”. Rodando o mesmo programa três vezes seguidas:</p>
-<pre class="text"><code>--- execucao 1 ---
-[servidor] primeiro recv -&gt; 18 bytes
+<p>O servidor faz <strong>um</strong> <code>recv</code>, esperando receber “uma mensagem”. Com o servidor ocioso, esperando no <code>accept</code>, dez execuções seguidas:</p>
+<pre class="text"><code>[servidor] primeiro recv -&gt; 18 bytes
 [servidor] conteudo: b'LEITURA onu-00043\n'
---- execucao 2 ---
-[servidor] primeiro recv -&gt; 54 bytes
+   (10 execucoes: 18, 18, 18, 18, 18, 18, 18, 18, 18, 18)</code></pre>
+<p>Dezoito bytes, todas as vezes. Uma mensagem por <code>recv</code> — exatamente o que a intuição previa, e é <strong>por isso</strong> que o defeito é tão perigoso: ele passa no seu teste.</p>
+<p>Agora a única mudança é o servidor ter alguma coisa para fazer antes de chamar <code>recv</code> — dez milissegundos de trabalho, o que qualquer servidor real tem de sobra:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>conexao, endereco <span class="op">=</span> s.accept()</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>time.sleep(<span class="fl">0.010</span>)          <span class="co"># o servidor estava ocupado com outra coisa</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>dados <span class="op">=</span> conexao.recv(<span class="dv">4096</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>[servidor] primeiro recv -&gt; 54 bytes
 [servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\nLEITURA onu-00107\n'
---- execucao 3 ---
-[servidor] primeiro recv -&gt; 36 bytes
-[servidor] conteudo: b'LEITURA onu-00043\nLEITURA onu-00051\n'</code></pre>
-<p><strong>Mesmo código, mesma máquina, três resultados diferentes</strong>: 18, 54 e 36 bytes. O TCP garante que os bytes cheguem, na ordem, sem duplicação — e <strong>não garante mais nada</strong>. Ele pode juntar seus três envios num pacote só, ou partir um envio em dois. As fronteiras de <code>sendall</code> não existem do outro lado.</p>
-<p>Um código que testa a primeira mensagem e funciona na sua máquina vai falhar em produção, com latência diferente, e o defeito vai parecer aleatório porque <strong>é</strong> aleatório.</p>
+   (10 execucoes: 54, 54, 54, 54, 54, 54, 54, 54, 54, 54)</code></pre>
+<p><strong>Mesmo código dos dois lados, e agora as três mensagens chegaram como uma só.</strong> Basta que o cliente ganhe a corrida: os três envios se acumulam no buffer e o <code>recv</code> leva tudo junto. Bastam 0,2 ms de atraso do servidor para virar a chave — e se o cliente também pausar entre os envios, aparecem 36 no meio, uma terceira resposta para o mesmo código.</p>
+<p>O TCP garante que os bytes cheguem, na ordem, sem duplicação — e <strong>não garante mais nada</strong>. Ele pode juntar seus três envios num pacote só, ou partir um envio em dois. As fronteiras de <code>sendall</code> não existem do outro lado.</p>
+<p>Um código que testa a primeira mensagem e funciona na sua máquina vai falhar em produção, onde o servidor está ocupado — e o defeito vai parecer aleatório porque o número não depende do seu código, depende de quem chegou primeiro.</p>
 <p>A solução se chama <strong>enquadramento</strong> (<em>framing</em>): definir no protocolo onde termina cada mensagem, e acumular até ter uma inteira.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="bu">buffer</span> <span class="op">=</span> <span class="st">b""</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> <span class="bu">buffer</span>.count(<span class="st">b"</span><span class="ch">\n</span><span class="st">"</span>) <span class="op">&lt;</span> <span class="dv">3</span>:</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    pedaco <span class="op">=</span> conexao.recv(<span class="dv">4096</span>)</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> pedaco:          <span class="co"># conexao fechada pelo outro lado</span></span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
-<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>    <span class="bu">buffer</span> <span class="op">+=</span> pedaco</span>
-<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>linhas <span class="op">=</span> <span class="bu">buffer</span>.split(<span class="st">b"</span><span class="ch">\n</span><span class="st">"</span>)[:<span class="dv">3</span>]</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="bu">buffer</span> <span class="op">=</span> <span class="st">b""</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="cf">while</span> <span class="bu">buffer</span>.count(<span class="st">b"</span><span class="ch">\n</span><span class="st">"</span>) <span class="op">&lt;</span> <span class="dv">3</span>:</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    pedaco <span class="op">=</span> conexao.recv(<span class="dv">4096</span>)</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="kw">not</span> pedaco:          <span class="co"># conexao fechada pelo outro lado</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>    <span class="bu">buffer</span> <span class="op">+=</span> pedaco</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>linhas <span class="op">=</span> <span class="bu">buffer</span>.split(<span class="st">b"</span><span class="ch">\n</span><span class="st">"</span>)[:<span class="dv">3</span>]</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>[servidor] apos enquadrar -&gt; 3 mensagens
 [servidor]   b'LEITURA onu-00043'
 [servidor]   b'LEITURA onu-00051'
@@ -1709,28 +1712,42 @@ Figura&nbsp;77.1: O servidor abre, amarra, escuta e aceita; o cliente abre e con
 </section>
 <section id="udp-datagramas" class="level2" data-number="77.4">
 <h2 data-number="77.4" class="anchored" data-anchor-id="udp-datagramas"><span class="header-section-number">77.4</span> UDP: datagramas</h2>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> socket.socket(socket.AF_INET, socket.SOCK_DGRAM) <span class="im">as</span> s:</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>    s.bind((HOST, <span class="dv">0</span>))</span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>    dados, remetente <span class="op">=</span> s.recvfrom(<span class="dv">4096</span>)</span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>    s.sendto(<span class="st">b"OK"</span>, remetente)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> socket.socket(socket.AF_INET, socket.SOCK_DGRAM) <span class="im">as</span> s:</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    s.bind((HOST, <span class="dv">0</span>))</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    dados, remetente <span class="op">=</span> s.recvfrom(<span class="dv">4096</span>)</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    s.sendto(<span class="st">b"OK"</span>, remetente)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>[servidor] datagrama de 56833: b'LEITURA onu-00043' (17 bytes)
 [servidor] datagrama de 56833: b'LEITURA onu-00051' (17 bytes)
 [servidor] datagrama de 56833: b'LEITURA onu-00107' (17 bytes)</code></pre>
 <p>Três diferenças estruturais. Não há <code>listen</code> nem <code>accept</code>, porque <strong>não há conexão</strong>. Cada datagrama carrega o endereço do remetente, que vem no <code>recvfrom</code>. E — o ponto positivo do UDP — <strong>as fronteiras são preservadas</strong>: três <code>sendto</code> produziram exatamente três <code>recvfrom</code> de 17 bytes cada, sem enquadramento nenhum.</p>
 <p>O preço é não haver garantia. Nem de entrega, nem de ordem, nem de unicidade. E a demonstração mais direta disso:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> socket.socket(socket.AF_INET, socket.SOCK_DGRAM) <span class="im">as</span> c:</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    enviados <span class="op">=</span> c.sendto(<span class="st">b"ninguem esta ouvindo"</span>, (HOST, <span class="dv">9</span>))</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"sendto devolveu </span><span class="sc">{</span>enviados<span class="sc">}</span><span class="ss"> bytes enviados, sem erro"</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="cf">with</span> socket.socket(socket.AF_INET, socket.SOCK_DGRAM) <span class="im">as</span> c:</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    enviados <span class="op">=</span> c.sendto(<span class="st">b"ninguem esta ouvindo"</span>, (HOST, <span class="dv">9</span>))</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="ss">f"sendto devolveu </span><span class="sc">{</span>enviados<span class="sc">}</span><span class="ss"> bytes enviados, sem erro"</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>sendto devolveu 20 bytes enviados, sem erro</code></pre>
 <p>Não havia servidor nenhum naquela porta. O <code>sendto</code> reportou sucesso. Compare com o TCP na mesma situação:</p>
-<pre class="text"><code>TimeoutError: timed out</code></pre>
-<p>O TCP tenta estabelecer conexão e falha de forma visível; o UDP joga o pacote na rede e não olha para trás.</p>
+<pre class="text"><code>ConnectionRefusedError: [Errno 111] Connection refused</code></pre>
+<p>O TCP tenta estabelecer conexão e falha <strong>na hora</strong>, de forma explícita: a porta fechada responde com um pacote <code>RST</code>, e o <code>connect</code> levanta a exceção em milissegundos, sem esperar o tempo limite. O UDP joga o pacote na rede e não olha para trás.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Nota</span>Se aqui deu tempo esgotado em vez de recusa
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><code>TimeoutError</code> no lugar de <code>ConnectionRefusedError</code> significa que alguém está <strong>descartando</strong> o pacote em silêncio em vez de recusá-lo — tipicamente um firewall, ou uma camada de rede virtualizada. No WSL2, por exemplo, o encaminhamento de <code>localhost</code> para o Windows engole a maior parte das portas de <code>127.0.0.1</code> e produz tempo esgotado; em <code>127.0.0.2</code> o mesmo teste volta a recusar corretamente.</p>
+<p>A distinção é útil em diagnóstico de verdade: <strong>recusa imediata</strong> é “chegou lá, não tem ninguém”; <strong>tempo esgotado</strong> é “não chegou resposta nenhuma”, que é firewall, rota errada ou máquina fora do ar.</p>
+</div>
+</div>
 <p><strong>Quando usar cada um:</strong> TCP quando perder um byte é inaceitável — transferência de arquivo, banco de dados, HTTP, o coletor de leituras deste manual. UDP quando o dado velho não vale nada e a latência é o que importa — voz, vídeo ao vivo, jogo, DNS, métricas de alta frequência em que perder uma amostra de mil é irrelevante. Se você precisa de confiabilidade <strong>e</strong> das características do UDP, o caminho é QUIC (a base do HTTP/3), não reimplementar TCP à mão.</p>
 </section>
 <section id="bloqueio-tempo-limite-e-concorrência" class="level2" data-number="77.5">
 <h2 data-number="77.5" class="anchored" data-anchor-id="bloqueio-tempo-limite-e-concorrência"><span class="header-section-number">77.5</span> Bloqueio, tempo limite e concorrência</h2>
 <p>Por padrão, socket é <strong>bloqueante</strong>: <code>accept</code>, <code>recv</code> e <code>connect</code> param a execução até acontecer alguma coisa. E, sem tempo limite, “até acontecer alguma coisa” pode ser para sempre — um cliente que abre a conexão e some deixa o servidor parado no <code>recv</code>.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>c.settimeout(<span class="dv">5</span>)     <span class="co"># levanta socket.timeout apos 5 segundos</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>c.settimeout(<span class="dv">5</span>)     <span class="co"># levanta socket.timeout apos 5 segundos</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <p><strong><code>settimeout</code> em todo socket de produção</strong>, dos dois lados. É o mesmo conselho do <code>timeout=</code> do <a href="cap075-subprocess-chamando-programas-externos-com.html" class="quarto-xref"><span>Capítulo 75</span></a>, e pela mesma razão.</p>
 <p>Um servidor bloqueante atende <strong>um cliente por vez</strong>: enquanto está no <code>recv</code> do primeiro, o segundo espera na fila. As saídas, em ordem de complexidade:</p>
 <ul>
@@ -1763,25 +1780,31 @@ Figura&nbsp;77.1: O servidor abre, amarra, escuta e aceita; o cliente abre e con
 <section id="laboratório" class="level2" data-number="77.8">
 <h2 data-number="77.8" class="anchored" data-anchor-id="laboratório"><span class="header-section-number">77.8</span> 🧪 Laboratório</h2>
 <p><strong>Passo 1 — ambiente.</strong> Nada a instalar: <code>socket</code>, <code>threading</code> e <code>selectors</code> são biblioteca padrão.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb14"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> lab-sockets <span class="kw">&amp;&amp;</span> <span class="bu">cd</span> lab-sockets</span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python3.13</span> <span class="at">-m</span> venv .venv</span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate        <span class="co"># Windows: .venv\Scripts\activate</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb16"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> lab-sockets <span class="kw">&amp;&amp;</span> <span class="bu">cd</span> lab-sockets</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python3.13</span> <span class="at">-m</span> venv .venv</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate        <span class="co"># Windows: .venv\Scripts\activate</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <p><strong>Passo 2 — servidor de eco em dois terminais.</strong> Escreva <code>servidor.py</code> que amarre em <code>127.0.0.1:9009</code>, aceite conexões em laço e devolva <code>b"OK " + dados</code>. Escreva <code>cliente.py</code> que conecte, envie uma linha e imprima a resposta. Rode o servidor num terminal e o cliente noutro.</p>
 <p><strong>Passo 3 — o <code>TIME_WAIT</code>.</strong> Derrube o servidor com <code>Ctrl+C</code> e suba de novo imediatamente:</p>
 <pre class="text"><code>OSError: [Errno 98] Address already in use</code></pre>
 <p>Agora acrescente <code>s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)</code> <strong>antes</strong> do <code>bind</code> e repita. Sobe na hora. Guarde esse par de resultados.</p>
-<p><strong>Passo 4 — a demonstração do fluxo.</strong> Faça o cliente enviar três linhas em três <code>sendall</code> e o servidor fazer <strong>um</strong> <code>recv(4096)</code>, imprimindo quantos bytes vieram. Rode <strong>cinco vezes seguidas</strong> e anote os números:</p>
+<p><strong>Passo 4 — a demonstração do fluxo.</strong> Faça o cliente enviar três linhas em três <code>sendall</code> e o servidor fazer <strong>um</strong> <code>recv(4096)</code>, imprimindo quantos bytes vieram. Rode <strong>dez vezes seguidas</strong>:</p>
 <pre class="text"><code>[servidor] primeiro recv -&gt; 18 bytes
-[servidor] primeiro recv -&gt; 54 bytes
-[servidor] primeiro recv -&gt; 36 bytes</code></pre>
-<p>Se todas as suas execuções derem o mesmo número, acrescente um <code>time.sleep(0.01)</code> entre os <code>sendall</code> do cliente e rode de novo — o ponto é ver o número <strong>mudar</strong>.</p>
+   (10 execucoes: 18, 18, 18, 18, 18, 18, 18, 18, 18, 18)</code></pre>
+<p>Sempre 18. Guarde esse resultado: é o seu teste passando.</p>
+<p>Agora acrescente <strong>um <code>time.sleep(0.010)</code> no servidor</strong>, entre o <code>accept</code> e o <code>recv</code>, simulando um servidor que tinha outra coisa para fazer. Rode dez vezes de novo:</p>
+<pre class="text"><code>[servidor] primeiro recv -&gt; 54 bytes
+   (10 execucoes: 54, 54, 54, 54, 54, 54, 54, 54, 54, 54)</code></pre>
+<p>Sempre 54 — as três mensagens viraram uma. Você não tocou no cliente nem no protocolo; só deixou o servidor ocupado, que é a condição normal em produção. Experimente baixar a pausa para <code>0.0002</code>: ainda dá 54. Depois pause <strong>também</strong> o cliente entre os envios, e veja aparecer 36 na mistura.</p>
+<p>O número não é aleatório e não é seu — é de quem ganhou a corrida.</p>
 <p><strong>Passo 5 — enquadrar.</strong> Corrija o servidor com o laço que acumula até ter três <code>\n</code>. Rode cinco vezes: agora as cinco dão o mesmo resultado. Depois reescreva usando <code>conexao.makefile("rb")</code> e <code>for linha in arquivo:</code> e compare o tamanho do código.</p>
 <p><strong>Passo 6 — o fim da conexão.</strong> Faça o servidor entrar num <code>while True: dados = conexao.recv(1024)</code> <strong>sem</strong> verificar <code>if not dados: break</code>. Conecte, envie algo, e mate o cliente. Observe o servidor girar. Acrescente a verificação e confirme a saída limpa.</p>
 <p><strong>Passo 7 — UDP.</strong> Escreva a versão UDP com <code>SOCK_DGRAM</code>, <code>recvfrom</code> e <code>sendto</code>. Envie as mesmas três mensagens e confirme que chegam como <strong>três</strong> datagramas de 17 bytes, sem enquadramento nenhum.</p>
 <p><strong>Passo 8 — a diferença que define UDP.</strong> Com o servidor desligado, rode:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>c.sendto(<span class="st">b"ninguem esta ouvindo"</span>, (<span class="st">"127.0.0.1"</span>, <span class="dv">9</span>))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb20"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>c.sendto(<span class="st">b"ninguem esta ouvindo"</span>, (<span class="st">"127.0.0.1"</span>, <span class="dv">9</span>))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
 <pre class="text"><code>sendto devolveu 20 bytes enviados, sem erro</code></pre>
-<p>Agora faça um <code>connect</code> TCP na mesma porta e compare. Essa é a escolha entre os dois protocolos, em duas linhas.</p>
+<p>Agora faça um <code>connect</code> TCP na mesma porta e compare:</p>
+<pre class="text"><code>ConnectionRefusedError: [Errno 111] Connection refused</code></pre>
+<p>Essa é a escolha entre os dois protocolos, em duas linhas. Se o seu TCP deu <code>TimeoutError</code> em vez de recusa, releia o aviso da seção de UDP e repita em <code>127.0.0.2</code> — você está atrás de uma camada que descarta o pacote em silêncio.</p>
 <p><strong>Passo 9 — vários clientes.</strong> Com o servidor TCP bloqueante rodando, abra dois clientes ao mesmo tempo, o primeiro com um <code>time.sleep(10)</code> antes de enviar. O segundo fica esperando. Agora envolva o tratamento em <code>threading.Thread(target=atender, args=(conexao,))</code> e repita: os dois são atendidos juntos.</p>
 <p><strong>Passo 10 — o teste automatizado.</strong> Escreva um teste com <code>pytest</code> que suba o servidor numa thread com <code>bind(("127.0.0.1", 0))</code>, descubra a porta com <code>getsockname()[1]</code>, conecte um cliente e verifique a resposta. Porta 0 é o que torna o teste executável em paralelo e no CI, sem colisão.</p>
 </section>
@@ -1789,9 +1812,9 @@ Figura&nbsp;77.1: O servidor abre, amarra, escuta e aceita; o cliente abre e con
 <h2 data-number="77.9" class="anchored" data-anchor-id="resumo"><span class="header-section-number">77.9</span> Resumo</h2>
 <ul>
 <li>Um servidor TCP faz <code>socket()</code>, <code>bind()</code>, <code>listen()</code>, <code>accept()</code>; o cliente faz <code>socket()</code> e <code>connect()</code>. <strong><code>accept()</code> devolve um socket novo</strong> para aquela conexão, e o original segue escutando.</li>
-<li><strong>TCP é um fluxo de bytes, não uma sequência de mensagens.</strong> O mesmo programa rodado três vezes deu 18, 54 e 36 bytes no primeiro <code>recv</code> — o protocolo garante ordem e entrega, e nada sobre fronteiras. Todo protocolo precisa de <strong>enquadramento</strong>: delimitador, prefixo de tamanho ou conexão por mensagem.</li>
+<li><strong>TCP é um fluxo de bytes, não uma sequência de mensagens.</strong> Com o servidor ocioso, o primeiro <code>recv</code> deu 18 bytes nas dez execuções — o teste passa. Bastou pôr 10 ms de trabalho no servidor antes do <code>recv</code> para dar 54 nas dez, com as três mensagens grudadas. O protocolo garante ordem e entrega, e nada sobre fronteiras. Todo protocolo precisa de <strong>enquadramento</strong>: delimitador, prefixo de tamanho ou conexão por mensagem.</li>
 <li><code>recv</code> devolvendo <code>b""</code> é <strong>fim de conexão</strong>, e é a condição de parada do laço. <code>sendall</code> em vez de <code>send</code>, porque <code>send</code> pode enviar só parte.</li>
-<li><strong>UDP preserva as fronteiras</strong> (um <code>sendto</code> é um <code>recvfrom</code>) e não tem conexão nem garantia: <code>sendto</code> para uma porta sem ninguém escutando devolve sucesso, enquanto o <code>connect</code> TCP falha visivelmente.</li>
+<li><strong>UDP preserva as fronteiras</strong> (um <code>sendto</code> é um <code>recvfrom</code>) e não tem conexão nem garantia: <code>sendto</code> para uma porta sem ninguém escutando devolve sucesso, enquanto o <code>connect</code> TCP levanta <code>ConnectionRefusedError</code> na hora. Recusa imediata é “chegou, não tem ninguém”; tempo esgotado é firewall ou máquina fora do ar.</li>
 <li><strong><code>SO_REUSEADDR</code></strong> antes do <code>bind</code> evita o <code>Address already in use</code> do <code>TIME_WAIT</code> ao reiniciar; <strong><code>bind((host, 0))</code></strong> deixa o sistema escolher a porta, o que torna testes paralelizáveis.</li>
 <li><strong><code>with</code> e <code>settimeout</code> em todo socket.</strong> Um evita vazar descritor, o outro evita pendurar o processo; nenhum dos dois problemas aparece em desenvolvimento.</li>
 <li>Um servidor bloqueante atende um cliente por vez; as saídas são thread por conexão, <code>selectors</code>, ou <code>asyncio</code> (Volume 15). E, antes de escrever um protocolo novo sobre socket cru, verifique se HTTP ou um intermediário de mensagens já resolve.</li>
