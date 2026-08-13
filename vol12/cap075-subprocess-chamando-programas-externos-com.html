@@ -26,6 +26,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -47,7 +82,7 @@ ul.task-list li input[type="checkbox"] {
 <link href="../site_libs/quarto-html/quarto-syntax-highlighting-e709978d94f8514e25d5a04fade5bbf4.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-0d1a33858dee5fffda5fba1ba10dfd22.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-6dcaff36cad1532e4970e4fe04e3b4de.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "sidebar",
   "copy-button": false,
@@ -934,8 +969,30 @@ ul.task-list li input[type="checkbox"] {
 </nav>
 <div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
 <!-- margin-sidebar -->
-    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar zindex-bottom">
-        
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">Índice</h2>
+   
+  <ul>
+  <li><a href="#subprocess.run-a-interface-única" id="toc-subprocess.run-a-interface-única" class="nav-link active" data-scroll-target="#subprocess.run-a-interface-única"><span class="header-section-number">75.1</span> <code>subprocess.run</code>: a interface única</a></li>
+  <li><a href="#erros-três-tipos-três-mecanismos" id="toc-erros-três-tipos-três-mecanismos" class="nav-link" data-scroll-target="#erros-três-tipos-três-mecanismos"><span class="header-section-number">75.2</span> Erros: três tipos, três mecanismos</a>
+  <ul class="collapse">
+  <li><a href="#o-programa-rodou-e-falhou" id="toc-o-programa-rodou-e-falhou" class="nav-link" data-scroll-target="#o-programa-rodou-e-falhou"><span class="header-section-number">75.2.1</span> O programa rodou e falhou</a></li>
+  <li><a href="#o-programa-não-termina" id="toc-o-programa-não-termina" class="nav-link" data-scroll-target="#o-programa-não-termina"><span class="header-section-number">75.2.2</span> O programa não termina</a></li>
+  <li><a href="#o-programa-não-existe" id="toc-o-programa-não-existe" class="nav-link" data-scroll-target="#o-programa-não-existe"><span class="header-section-number">75.2.3</span> O programa não existe</a></li>
+  </ul></li>
+  <li><a href="#shelltrue-o-que-realmente-acontece" id="toc-shelltrue-o-que-realmente-acontece" class="nav-link" data-scroll-target="#shelltrue-o-que-realmente-acontece"><span class="header-section-number">75.3</span> <code>shell=True</code>: o que realmente acontece</a>
+  <ul class="collapse">
+  <li><a href="#e-quando-eu-preciso-mesmo-do-shell" id="toc-e-quando-eu-preciso-mesmo-do-shell" class="nav-link" data-scroll-target="#e-quando-eu-preciso-mesmo-do-shell"><span class="header-section-number">75.3.1</span> E quando eu preciso mesmo do shell?</a></li>
+  </ul></li>
+  <li><a href="#entrada-ambiente-e-diretório" id="toc-entrada-ambiente-e-diretório" class="nav-link" data-scroll-target="#entrada-ambiente-e-diretório"><span class="header-section-number">75.4</span> Entrada, ambiente e diretório</a></li>
+  <li><a href="#popen-quando-esperar-não-serve" id="toc-popen-quando-esperar-não-serve" class="nav-link" data-scroll-target="#popen-quando-esperar-não-serve"><span class="header-section-number">75.5</span> <code>Popen</code>: quando esperar não serve</a></li>
+  <li><a href="#notas-de-portabilidade" id="toc-notas-de-portabilidade" class="nav-link" data-scroll-target="#notas-de-portabilidade"><span class="header-section-number">75.6</span> Notas de portabilidade</a></li>
+  <li><a href="#jeito-pythônico" id="toc-jeito-pythônico" class="nav-link" data-scroll-target="#jeito-pythônico"><span class="header-section-number">75.7</span> 🐍 Jeito Pythônico</a></li>
+  <li><a href="#laboratório" id="toc-laboratório" class="nav-link" data-scroll-target="#laboratório"><span class="header-section-number">75.8</span> 🧪 Laboratório</a></li>
+  <li><a href="#resumo" id="toc-resumo" class="nav-link" data-scroll-target="#resumo"><span class="header-section-number">75.9</span> Resumo</a></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/VitorMattosDev/manual-python/edit/main/vol12/cap075-subprocess-chamando-programas-externos-com.qmd" class="toc-action"><i class="bi bi-github"></i>Editar essa página</a></li><li><a href="https://github.com/VitorMattosDev/manual-python/issues/new" class="toc-action"><i class="bi empty"></i>Criar uma issue</a></li></ul></div></nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
@@ -959,9 +1016,900 @@ ul.task-list li input[type="checkbox"] {
 </header>
 
 
-<p><em>(em elaboracao)</em></p>
+<p>Nem tudo vale reescrever em Python. Converter vídeo é trabalho do <code>ffmpeg</code>, extrair texto de PDF é do <code>pdftotext</code>, e ler o histórico de um repositório é do <code>git</code>. O script de automação do <a href="cap074-scripts-de-automacao-arquivos-planilhas-e.html" class="quarto-xref"><span>Capítulo 74</span></a> mais cedo ou mais tarde precisa <strong>chamar outro programa</strong>, esperar ele terminar e olhar o que saiu.</p>
+<p>O módulo <code>subprocess</code> faz isso. E ele tem um parâmetro — <code>shell=True</code> — que aparece na primeira resposta de qualquer busca, resolve o problema imediato, e é a origem de uma das vulnerabilidades mais antigas e mais exploradas que existem. Este capítulo mostra a forma correta primeiro, e depois exatamente o que acontece quando se usa a forma errada, com a saída real.</p>
+<section id="subprocess.run-a-interface-única" class="level2" data-number="75.1">
+<h2 data-number="75.1" class="anchored" data-anchor-id="subprocess.run-a-interface-única"><span class="header-section-number">75.1</span> <code>subprocess.run</code>: a interface única</h2>
+<p>Existiram <code>os.system</code>, <code>os.popen</code>, <code>commands.getoutput</code> e as funções <code>subprocess.call</code>, <code>check_call</code>, <code>check_output</code>. Desde o Python 3.5 há <strong>uma</strong> função para aprender:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> subprocess</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run(</span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    [sys.executable, <span class="st">"-c"</span>, <span class="st">"print('temperatura: -29.8')"</span>],</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    capture_output<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    text<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"tipo       :"</span>, <span class="bu">type</span>(r).<span class="va">__name__</span>)</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"returncode :"</span>, r.returncode)</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"stdout     :"</span>, <span class="bu">repr</span>(r.stdout))</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"stderr     :"</span>, <span class="bu">repr</span>(r.stderr))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>tipo       : CompletedProcess
+returncode : 0
+stdout     : 'temperatura: -29.8\n'
+stderr     : ''</code></pre>
+<p>Três coisas na chamada, e todas importam:</p>
+<ul>
+<li><strong>O comando é uma lista</strong>, não uma string. <code>["git", "commit", "-m", "mensagem com espaco"]</code> — cada argumento é um item, e nada é interpretado por ninguém.</li>
+<li><strong><code>capture_output=True</code></strong> captura <code>stdout</code> e <code>stderr</code>. Sem ele, a saída do programa vai direto para o terminal e <code>r.stdout</code> fica <code>None</code>.</li>
+<li><strong><code>text=True</code></strong> decodifica os bytes para <code>str</code>. Sem ele, <code>r.stdout</code> é <code>bytes</code> — o que é o certo para saída binária (um PDF, um vídeo) e errado para texto.</li>
+</ul>
+<p>O retorno é um <code>CompletedProcess</code> com <code>args</code>, <code>returncode</code>, <code>stdout</code> e <code>stderr</code>.</p>
+</section>
+<section id="erros-três-tipos-três-mecanismos" class="level2" data-number="75.2">
+<h2 data-number="75.2" class="anchored" data-anchor-id="erros-três-tipos-três-mecanismos"><span class="header-section-number">75.2</span> Erros: três tipos, três mecanismos</h2>
+<section id="o-programa-rodou-e-falhou" class="level3" data-number="75.2.1">
+<h3 data-number="75.2.1" class="anchored" data-anchor-id="o-programa-rodou-e-falhou"><span class="header-section-number">75.2.1</span> O programa rodou e falhou</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run(</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    [sys.executable, <span class="st">"-c"</span>, <span class="st">"import sys; print('erro no sensor', file=sys.stderr); sys.exit(3)"</span>],</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    capture_output<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    text<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"returncode :"</span>, r.returncode)</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"stderr     :"</span>, <span class="bu">repr</span>(r.stderr))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>returncode : 3
+stderr     : 'erro no sensor\n'</code></pre>
+<p><strong>Nenhuma exceção foi levantada.</strong> Este é o comportamento padrão e a fonte número um de script que engole falha: se você não olhar <code>returncode</code>, o programa quebrou e seu script seguiu adiante como se nada fosse.</p>
+<p>A correção é <code>check=True</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>subprocess.run([...], capture_output<span class="op">=</span><span class="va">True</span>, text<span class="op">=</span><span class="va">True</span>, check<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>CalledProcessError: Command '[...]' returned non-zero exit status 3.
+  returncode: 3</code></pre>
+<p>O <code>CalledProcessError</code> carrega <code>returncode</code>, <code>cmd</code>, <code>stdout</code> e <code>stderr</code> — então o <code>except</code> tem tudo para registrar o diagnóstico. <strong>Use <code>check=True</code> por padrão</strong> e trate a exceção; só omita quando um código diferente de zero for um resultado esperado (o <code>grep</code> que não achou nada devolve 1, e isso não é erro).</p>
+</section>
+<section id="o-programa-não-termina" class="level3" data-number="75.2.2">
+<h3 data-number="75.2.2" class="anchored" data-anchor-id="o-programa-não-termina"><span class="header-section-number">75.2.2</span> O programa não termina</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>subprocess.run([sys.executable, <span class="st">"-c"</span>, <span class="st">"import time; time.sleep(30)"</span>], timeout<span class="op">=</span><span class="fl">1.0</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>TimeoutExpired: TimeoutExpired | timeout = 1.0</code></pre>
+<p>Sem <code>timeout</code>, um programa externo travado trava o seu script para sempre. Num serviço, isso é um processo pendurado que ninguém percebe até acabar a memória. <strong>Toda chamada a programa externo em código de produção precisa de <code>timeout</code>.</strong></p>
+</section>
+<section id="o-programa-não-existe" class="level3" data-number="75.2.3">
+<h3 data-number="75.2.3" class="anchored" data-anchor-id="o-programa-não-existe"><span class="header-section-number">75.2.3</span> O programa não existe</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>subprocess.run([<span class="st">"programa_que_nao_existe_123"</span>], capture_output<span class="op">=</span><span class="va">True</span>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>FileNotFoundError: O sistema nao pode encontrar o arquivo especificado</code></pre>
+<p><code>FileNotFoundError</code>, não <code>CalledProcessError</code> — são coisas diferentes e frequentemente merecem tratamento diferente (“instale o ffmpeg” <em>versus</em> “a conversão falhou”).</p>
+</section>
+</section>
+<section id="shelltrue-o-que-realmente-acontece" class="level2" data-number="75.3">
+<h2 data-number="75.3" class="anchored" data-anchor-id="shelltrue-o-que-realmente-acontece"><span class="header-section-number">75.3</span> <code>shell=True</code>: o que realmente acontece</h2>
+<p>Aqui está a parte que justifica o título do capítulo.</p>
+<div id="fig-shell-vs-lista" class="quarto-float quarto-figure quarto-figure-center anchored">
+<figure class="quarto-float quarto-float-fig figure">
+<div aria-describedby="fig-shell-vs-lista-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xlink="http://www.w3.org/1999/xlink" width="453.543093pt" height="289.134047pt" viewbox="-68.014948 -68.014941 453.543093 289.134047">
+<defs>
+<path id="tz_shell_vs_lista_g0-97" d="M3.682192-2.057285C3.682192-2.629141 3.221918-3.159153 1.966625-3.159153C1.562142-3.159153 .585803-3.159153 .585803-2.468742C.585803-2.161893 .808966-1.980573 1.066999-1.980573C1.373848-1.980573 1.555168-2.196762 1.555168-2.461768C1.555168-2.615193 1.492403-2.719801 1.471482-2.740722C1.457534-2.761644 1.45056-2.775592 1.45056-2.789539C1.45056-2.824408 1.896887-2.838356 1.945704-2.838356C2.433873-2.838356 2.796513-2.643088 2.796513-2.050311V-1.862017C2.454795-1.862017 .285928-1.834122 .285928-.801993C.285928-.153425 1.053051 .041843 1.750436 .041843C2.489664 .041843 2.817435-.292902 2.93599-.474222C2.93599-.174346 3.124284 0 3.696139 0H4.107597C4.2401 0 4.351681 0 4.351681-.195268S4.247073-.390535 4.100623-.390535C3.682192-.390535 3.682192-.446326 3.682192-.606725V-2.057285ZM2.796513-.955417C2.796513-.808966 2.796513-.606725 2.524533-.439352C2.259527-.278954 1.931756-.278954 1.889913-.278954C1.499377-.278954 1.164633-.495143 1.164633-.808966C1.164633-1.380822 2.099128-1.569116 2.796513-1.590037V-.955417Z"></path>
+<path id="tz_shell_vs_lista_g0-99" d="M3.731009-.795019C3.731009-.920548 3.612453-.920548 3.507846-.920548C3.347447-.920548 3.333499-.913574 3.284682-.808966C3.180075-.578829 2.956912-.313823 2.419925-.313823C1.297136-.313823 1.297136-1.290162 1.297136-1.57609C1.297136-2.099128 1.380822-2.803487 2.315318-2.803487C2.357161-2.803487 2.75467-2.796513 2.75467-2.768618C2.75467-2.75467 2.747696-2.747696 2.740722-2.740722C2.726775-2.719801 2.66401-2.615193 2.66401-2.461768C2.66401-2.175841 2.873225-1.980573 3.145205-1.980573C3.431133-1.980573 3.633375-2.175841 3.633375-2.468742C3.633375-3.138232 2.698879-3.159153 2.294396-3.159153C.739228-3.159153 .327771-2.196762 .327771-1.548194C.327771-.732254 .934496 .041843 2.252553 .041843C2.594271 .041843 2.949938-.013948 3.228892-.174346C3.626401-.411457 3.731009-.753176 3.731009-.795019Z"></path>
+<path id="tz_shell_vs_lista_g0-100" d="M2.84533-4.78406V-4.393524C3.256787-4.393524 3.312578-4.393524 3.312578-4.121544V-2.84533C2.880199-3.110336 2.489664-3.138232 2.259527-3.138232C1.011208-3.138232 .327771-2.426899 .327771-1.54122C.327771-.676463 .976339 .041843 2.168867 .041843C2.615193 .041843 2.984807-.097634 3.263761-.292902V.041843L4.616687 0V-.390535C4.20523-.390535 4.14944-.390535 4.14944-.662516V-4.839851L2.84533-4.78406ZM3.263761-.808966C3.103362-.578829 2.761644-.278954 2.252553-.278954C1.297136-.278954 1.297136-1.115816 1.297136-1.527273C1.297136-1.959651 1.297136-2.817435 2.343213-2.817435C2.929016-2.817435 3.242839-2.426899 3.263761-2.399004V-.808966Z"></path>
+<path id="tz_shell_vs_lista_g0-103" d="M1.659776-.620672C1.415691-.620672 1.318057-.620672 1.199502-.718306C1.129763-.774097 1.039103-.878705 1.039103-1.046077C1.039103-1.08792 1.039103-1.164633 1.08792-1.227397C1.45056-1.053051 1.855044-1.053051 2.001494-1.053051C3.180075-1.053051 3.528767-1.66675 3.528767-2.092154C3.528767-2.447821 3.312578-2.684932 3.249813-2.740722C3.361395-2.782565 3.521793-2.831382 3.668244-2.84533C3.654296-2.810461 3.647323-2.75467 3.647323-2.712827C3.647323-2.461768 3.856538-2.357161 3.996015-2.357161C4.156413-2.357161 4.351681-2.475716 4.351681-2.712827C4.351681-2.929016 4.177335-3.180075 3.828643-3.180075C3.542715-3.180075 3.228892-3.068493 3.019676-2.915068C2.608219-3.138232 2.168867-3.138232 2.001494-3.138232C.864757-3.138232 .481196-2.545455 .481196-2.099128C.481196-1.701619 .72528-1.478456 .850809-1.373848C.690411-1.17858 .627646-.976339 .627646-.760149C.627646-.502117 .72528-.27198 .9066-.09066C.662516-.034869 .278954 .139477 .278954 .502117C.278954 .920548 .767123 1.401743 2.252553 1.401743C3.535741 1.401743 4.226152 1.03213 4.226152 .481196C4.226152 .341719 4.20523-.160399 3.626401-.432379C3.20797-.620672 2.747696-.620672 2.036364-.620672H1.659776ZM2.001494-1.373848C1.311083-1.373848 1.311083-1.820174 1.311083-2.092154C1.311083-2.371108 1.311083-2.817435 2.001494-2.817435C2.698879-2.817435 2.698879-2.378082 2.698879-2.099128C2.698879-1.8132 2.698879-1.373848 2.001494-1.373848ZM2.461768 .132503C2.636115 .132503 3.542715 .132503 3.542715 .502117C3.542715 .732254 3.249813 1.080946 2.252553 1.080946C1.297136 1.080946 .962391 .753176 .962391 .495143C.962391 .132503 1.443587 .132503 1.534247 .132503H2.461768Z"></path>
+<path id="tz_shell_vs_lista_g0-105" d="M1.827148-4.274969C1.827148-4.609714 1.555168-4.846824 1.262267-4.846824C.927522-4.846824 .690411-4.574844 .690411-4.281943C.690411-3.947198 .962391-3.710087 1.255293-3.710087C1.590037-3.710087 1.827148-3.982067 1.827148-4.274969ZM.488169-3.082441V-2.691905C.885679-2.691905 .934496-2.691905 .934496-2.419925V-.390535H.467248V0C.481196 0 1.03213-.027895 1.345953-.027895C1.63188-.027895 1.910834-.020922 2.196762 0V-.390535H1.771357V-3.138232L.488169-3.082441Z"></path>
+<path id="tz_shell_vs_lista_g0-109" d="M6.750685-2.099128C6.750685-2.970859 6.171856-3.138232 5.558157-3.138232C4.888667-3.138232 4.463263-2.824408 4.233126-2.48269C4.05878-3.089415 3.459029-3.138232 3.082441-3.138232C2.245579-3.138232 1.84807-2.650062 1.708593-2.412951V-3.138232L.446326-3.082441V-2.691905C.857783-2.691905 .913574-2.691905 .913574-2.419925V-.390535H.446326V0C.4533 0 1.018182-.027895 1.352927-.027895C1.694645-.027895 2.259527 0 2.266501 0V-.390535H1.799253V-1.736488C1.799253-2.559402 2.545455-2.817435 2.942964-2.817435C3.256787-2.817435 3.38929-2.66401 3.38929-2.147945V-.390535H2.922042V0C2.929016 0 3.493898-.027895 3.828643-.027895C4.170361-.027895 4.735243 0 4.742217 0V-.390535H4.274969V-1.736488C4.274969-2.559402 5.021171-2.817435 5.41868-2.817435C5.732503-2.817435 5.865006-2.66401 5.865006-2.147945V-.390535H5.397758V0C5.404732 0 5.969614-.027895 6.304359-.027895C6.646077-.027895 7.210959 0 7.217933 0V-.390535H6.750685V-2.099128Z"></path>
+<path id="tz_shell_vs_lista_g0-110" d="M4.267995-2.099128C4.267995-2.956912 3.717061-3.138232 3.075467-3.138232C2.231631-3.138232 1.841096-2.636115 1.708593-2.412951V-3.138232L.446326-3.082441V-2.691905C.857783-2.691905 .913574-2.691905 .913574-2.419925V-.390535H.446326V0C.4533 0 1.018182-.027895 1.352927-.027895C1.694645-.027895 2.259527 0 2.266501 0V-.390535H1.799253V-1.736488C1.799253-2.545455 2.524533-2.817435 2.942964-2.817435C3.249813-2.817435 3.382316-2.657036 3.382316-2.154919V-.390535H2.915068V0C2.922042 0 3.486924-.027895 3.821669-.027895C4.163387-.027895 4.728269 0 4.735243 0V-.390535H4.267995V-2.099128Z"></path>
+<path id="tz_shell_vs_lista_g0-111" d="M4.226152-1.520299C4.226152-2.350187 3.619427-3.159153 2.252553-3.159153C.871731-3.159153 .278954-2.343213 .278954-1.520299C.278954-.704359 .899626 .041843 2.252553 .041843C3.612453 .041843 4.226152-.711333 4.226152-1.520299ZM2.252553-.313823C1.248319-.313823 1.248319-1.004234 1.248319-1.603985C1.248319-2.161893 1.248319-2.838356 2.252553-2.838356S3.256787-2.161893 3.256787-1.603985C3.256787-1.004234 3.256787-.313823 2.252553-.313823Z"></path>
+<path id="tz_shell_vs_lista_g0-115" d="M3.012702-2.93599C3.012702-3.075467 3.012702-3.159153 2.84533-3.159153C2.796513-3.159153 2.775592-3.159153 2.66401-3.103362C2.650062-3.096389 2.559402-3.054545 2.531507-3.054545C2.524533-3.054545 2.510585-3.054545 2.48269-3.068493C2.196762-3.159153 1.903861-3.159153 1.75741-3.159153C1.555168-3.159153 1.129763-3.159153 .781071-2.970859C.383562-2.747696 .327771-2.385056 .327771-2.224658C.327771-1.471482 1.248319-1.332005 1.736488-1.255293C2.161893-1.192528 2.670984-1.115816 2.670984-.753176C2.670984-.278954 1.980573-.278954 1.8132-.278954C1.150685-.278954 .9066-.578829 .774097-.955417C.732254-1.073973 .72528-1.08792 .550934-1.08792C.348692-1.08792 .327771-1.066999 .327771-.864757V-.18132C.327771-.041843 .327771 .041843 .488169 .041843C.550934 .041843 .564882 .041843 .711333-.048817C.753176-.069738 .864757-.132503 .9066-.160399C1.26924 .041843 1.645828 .041843 1.806227 .041843C2.036364 .041843 3.235866 .041843 3.235866-.990286C3.235866-1.311083 3.068493-1.534247 2.908095-1.66675C2.580324-1.93873 2.280448-1.987547 1.701619-2.078207C1.30411-2.140971 .892653-2.203736 .892653-2.48269C.892653-2.873225 1.590037-2.873225 1.736488-2.873225C2.524533-2.873225 2.552428-2.552428 2.57335-2.385056C2.587298-2.245579 2.629141-2.231631 2.789539-2.231631C2.991781-2.231631 3.012702-2.252553 3.012702-2.454795V-2.93599Z"></path>
+<path id="tz_shell_vs_lista_g1-34" d="M1.562142-3.996015C1.562142-4.233126 1.380822-4.344707 1.220423-4.344707C1.080946-4.344707 .885679-4.247073 .885679-4.002989L.990286-2.580324C.99726-2.440847 1.011208-2.280448 1.220423-2.280448C1.436613-2.280448 1.45056-2.447821 1.457534-2.552428L1.562142-3.996015ZM2.810461-4.002989C2.810461-4.247073 2.615193-4.344707 2.475716-4.344707C2.315318-4.344707 2.133998-4.233126 2.133998-3.996015L2.238605-2.580324C2.252553-2.433873 2.259527-2.280448 2.475716-2.280448C2.684932-2.280448 2.698879-2.440847 2.705853-2.57335L2.810461-4.002989Z"></path>
+<path id="tz_shell_vs_lista_g1-44" d="M1.980573-.013948C1.889913 .251059 1.72254 .425405 1.45056 .516065C1.387796 .536986 1.255293 .578829 1.255293 .732254C1.255293 .850809 1.366874 .969365 1.492403 .969365C1.729514 .969365 2.468742 .585803 2.468742-.216189C2.468742-.641594 2.189788-.941469 1.855044-.941469C1.555168-.941469 1.380822-.718306 1.380822-.467248C1.380822-.244085 1.54122 0 1.855044 0C1.924782 0 1.945704-.006974 1.980573-.013948Z"></path>
+<path id="tz_shell_vs_lista_g1-45" d="M2.949938-1.862017C3.02665-1.862017 3.29863-1.862017 3.29863-2.127024C3.29863-2.399004 3.033624-2.399004 2.949938-2.399004H.746202C.669489-2.399004 .397509-2.399004 .397509-2.133998C.397509-1.862017 .662516-1.862017 .746202-1.862017H2.949938Z"></path>
+<path id="tz_shell_vs_lista_g1-46" d="M2.322291-.467248C2.322291-.746202 2.099128-.941469 1.855044-.941469C1.57609-.941469 1.380822-.718306 1.380822-.474222C1.380822-.195268 1.603985 0 1.84807 0C2.127024 0 2.322291-.223163 2.322291-.467248Z"></path>
+<path id="tz_shell_vs_lista_g1-47" d="M3.228892-4.400498C3.277709-4.51208 3.284682-4.51208 3.284682-4.56787C3.284682-4.735243 3.145205-4.839851 3.019676-4.839851C2.84533-4.839851 2.789539-4.721295 2.75467-4.644583L.467248 .139477C.418431 .251059 .411457 .251059 .411457 .306849C.411457 .474222 .550934 .578829 .676463 .578829C.850809 .578829 .9066 .460274 .941469 .383562L3.228892-4.400498Z"></path>
+<path id="tz_shell_vs_lista_g1-50" d="M.502117-.4533C.411457-.376588 .369614-.341719 .369614-.230137C.369614 0 .571856 0 .676463 0H3.02665C3.256787 0 3.326526-.055791 3.326526-.299875V-.488169C3.326526-.620672 3.326526-.788045 3.061519-.788045S2.796513-.627646 2.796513-.460274H1.241345C1.750436-.892653 2.308344-1.325031 2.538481-1.527273C2.93599-1.889913 3.326526-2.343213 3.326526-2.963885C3.326526-3.7868 2.629141-4.33076 1.75741-4.33076C.934496-4.33076 .369614-3.793773 .369614-3.200996C.369614-2.901121 .606725-2.838356 .711333-2.838356C.857783-2.838356 1.046077-2.949938 1.046077-3.180075C1.046077-3.263761 1.011208-3.361395 .948443-3.417186C1.066999-3.675218 1.352927-3.870486 1.729514-3.870486C2.287422-3.870486 2.796513-3.549689 2.796513-2.963885C2.796513-2.447821 2.399004-2.036364 1.973599-1.680697L.502117-.4533Z"></path>
+<path id="tz_shell_vs_lista_g1-59" d="M2.322291-2.531507C2.322291-2.810461 2.099128-3.005729 1.855044-3.005729C1.57609-3.005729 1.380822-2.782565 1.380822-2.538481C1.380822-2.259527 1.603985-2.064259 1.84807-2.064259C2.127024-2.064259 2.322291-2.287422 2.322291-2.531507ZM1.862017 0C1.778331 .27198 1.603985 .432379 1.408717 .523039C1.366874 .54396 1.255293 .592777 1.255293 .732254C1.255293 .850809 1.3599 .969365 1.492403 .969365C1.659776 .969365 2.357161 .578829 2.357161-.230137C2.357161-.627646 2.182814-.941469 1.84807-.941469C1.57609-.941469 1.380822-.739228 1.380822-.467248C1.380822-.36264 1.436613-.013948 1.862017 0Z"></path>
+<path id="tz_shell_vs_lista_g1-61" d="M3.096389-2.39203C3.166127-2.39203 3.431133-2.39203 3.431133-2.657036C3.431133-2.929016 3.152179-2.929016 3.054545-2.929016H.641594C.54396-2.929016 .265006-2.929016 .265006-2.657036C.265006-2.39203 .530012-2.39203 .599751-2.39203H3.096389ZM3.054545-1.332005C3.152179-1.332005 3.431133-1.332005 3.431133-1.603985C3.431133-1.868991 3.166127-1.868991 3.096389-1.868991H.599751C.530012-1.868991 .265006-1.868991 .265006-1.603985C.265006-1.332005 .54396-1.332005 .641594-1.332005H3.054545Z"></path>
+<path id="tz_shell_vs_lista_g1-68" d="M.425405-4.261021C.306849-4.261021 .125529-4.261021 .125529-4.030884S.313823-3.800747 .425405-3.800747H.557908V-.460274H.425405C.313823-.460274 .125529-.460274 .125529-.230137S.306849 0 .425405 0H1.875965C2.803487 0 3.424159-.983313 3.424159-2.099128C3.424159-3.20797 2.824408-4.261021 1.875965-4.261021H.425405ZM1.08792-.460274V-3.800747H1.729514C2.510585-3.800747 2.894147-2.894147 2.894147-2.099128C2.894147-1.297136 2.496638-.460274 1.729514-.460274H1.08792Z"></path>
+<path id="tz_shell_vs_lista_g1-69" d="M1.192528-1.973599H2.071233C2.071233-1.72254 2.071233-1.583064 2.336239-1.583064S2.601245-1.750436 2.601245-1.882939V-2.524533C2.601245-2.657036 2.601245-2.824408 2.336239-2.824408S2.071233-2.684932 2.071233-2.433873H1.192528V-3.800747H2.859278V-3.445081C2.859278-3.312578 2.859278-3.145205 3.124284-3.145205S3.38929-3.312578 3.38929-3.445081V-3.961146C3.38929-4.198257 3.319552-4.261021 3.089415-4.261021H.474222C.36264-4.261021 .174346-4.261021 .174346-4.030884S.36264-3.800747 .474222-3.800747H.662516V-.460274H.474222C.36264-.460274 .174346-.460274 .174346-.230137S.36264 0 .474222 0H3.242839C3.472976 0 3.542715-.055791 3.542715-.299875V-.920548C3.542715-1.053051 3.542715-1.220423 3.277709-1.220423S3.012702-1.053051 3.012702-.920548V-.460274H1.192528V-1.973599Z"></path>
+<path id="tz_shell_vs_lista_g1-71" d="M3.166127-1.436613C3.319552-1.436613 3.493898-1.436613 3.493898-1.66675S3.305604-1.896887 3.194022-1.896887H2.343213C2.231631-1.896887 2.043337-1.896887 2.043337-1.66675S2.231631-1.436613 2.343213-1.436613H2.622167C2.552428-.822914 2.273474-.390535 1.855044-.390535C1.318057-.390535 .795019-1.115816 .795019-2.127024C.795019-3.159153 1.332005-3.870486 1.862017-3.870486C2.092154-3.870486 2.524533-3.717061 2.636115-2.977833C2.66401-2.775592 2.824408-2.775592 2.901121-2.775592C3.166127-2.775592 3.166127-2.942964 3.166127-3.075467V-4.030884C3.166127-4.135492 3.166127-4.33076 2.93599-4.33076C2.803487-4.33076 2.75467-4.281943 2.636115-4.044832C2.357161-4.261021 2.085181-4.33076 1.834122-4.33076C.990286-4.33076 .265006-3.38929 .265006-2.133998C.265006-.850809 .99726 .069738 1.834122 .069738C2.217684 .069738 2.496638-.125529 2.636115-.251059C2.636115 0 2.817435 0 2.901121 0C3.166127 0 3.166127-.167372 3.166127-.299875V-1.436613Z"></path>
+<path id="tz_shell_vs_lista_g1-79" d="M3.29863-2.127024C3.29863-4.142466 3.152179-4.33076 1.84807-4.33076C.550934-4.33076 .397509-4.142466 .397509-2.133998C.397509-.118555 .54396 .069738 1.84807 .069738C3.145205 .069738 3.29863-.118555 3.29863-2.127024ZM1.84807-.390535C1.255293-.390535 1.08792-.536986 1.011208-.857783C.927522-1.21345 .927522-1.785305 .927522-2.189788C.927522-2.657036 .927522-3.068493 1.004234-3.403238C1.094894-3.800747 1.332005-3.870486 1.84807-3.870486C2.426899-3.870486 2.615193-3.772852 2.705853-3.368369C2.768618-3.054545 2.768618-2.566376 2.768618-2.189788C2.768618-1.785305 2.768618-1.262267 2.698879-.913574C2.622167-.564882 2.489664-.390535 1.84807-.390535Z"></path>
+<path id="tz_shell_vs_lista_g1-82" d="M2.48269-2.12005C2.796513-2.308344 3.054545-2.66401 3.054545-3.082441C3.054545-3.682192 2.510585-4.261021 1.687671-4.261021H.446326C.341719-4.261021 .139477-4.261021 .139477-4.030884S.341719-3.800747 .446326-3.800747H.592777V-.460274H.446326C.341719-.460274 .139477-.460274 .139477-.230137S.341719 0 .446326 0H1.26924C1.373848 0 1.57609 0 1.57609-.230137S1.373848-.460274 1.26924-.460274H1.12279V-1.903861H1.645828C1.792279-1.903861 1.966625-1.903861 2.175841-1.72254C2.336239-1.590037 2.336239-1.429639 2.336239-1.150685C2.336239-.676463 2.336239-.432379 2.524533-.188294C2.684932 .027895 2.915068 .069738 3.047572 .069738C3.493898 .069738 3.682192-.36264 3.682192-.676463C3.682192-.913574 3.472976-.913574 3.417186-.913574S3.159153-.913574 3.152179-.690411C3.152179-.641594 3.138232-.390535 3.040598-.390535C2.866252-.390535 2.866252-.711333 2.866252-1.046077C2.866252-1.48543 2.866252-1.534247 2.810461-1.687671C2.740722-1.855044 2.629141-2.008468 2.48269-2.12005ZM1.603985-2.364134H1.12279V-3.800747H1.603985C2.231631-3.800747 2.524533-3.403238 2.524533-3.082441S2.231631-2.364134 1.603985-2.364134Z"></path>
+<path id="tz_shell_vs_lista_g1-83" d="M3.138232-4.030884C3.138232-4.135492 3.138232-4.33076 2.908095-4.33076C2.789539-4.33076 2.698879-4.281943 2.636115-4.037858C2.510585-4.128518 2.21071-4.33076 1.673724-4.33076C.913574-4.33076 .369614-3.793773 .369614-3.173101C.369614-2.775592 .599751-2.503611 .662516-2.440847C.948443-2.147945 1.150685-2.106102 1.66675-1.987547L1.945704-1.917808C2.357161-1.827148 2.440847-1.806227 2.608219-1.652802C2.726775-1.54122 2.831382-1.352927 2.831382-1.136737C2.831382-.767123 2.531507-.390535 2.008468-.390535C1.715567-.390535 .941469-.4533 .899626-1.143711C.892653-1.276214 .885679-1.415691 .63462-1.415691C.369614-1.415691 .369614-1.241345 .369614-1.115816V-.230137C.369614-.125529 .369614 .069738 .599751 .069738C.683437 .069738 .801993 .048817 .871731-.216189C1.199502 0 1.659776 .069738 2.001494 .069738C2.824408 .069738 3.326526-.550934 3.326526-1.171606C3.326526-1.464508 3.214944-1.771357 2.984807-2.015442C2.719801-2.287422 2.503611-2.336239 1.910834-2.475716C1.652802-2.531507 1.45056-2.580324 1.408717-2.587298C1.143711-2.66401 .864757-2.887173 .864757-3.214944C.864757-3.549689 1.192528-3.870486 1.673724-3.870486C2.475716-3.870486 2.57335-3.249813 2.608219-3.033624C2.643088-2.84533 2.803487-2.84533 2.873225-2.84533C3.138232-2.84533 3.138232-3.012702 3.138232-3.145205V-4.030884Z"></path>
+<path id="tz_shell_vs_lista_g1-84" d="M2.113076-3.800747H2.977833V-3.445081C2.977833-3.312578 2.977833-3.145205 3.242839-3.145205S3.507846-3.312578 3.507846-3.445081V-3.961146C3.507846-4.198257 3.438107-4.261021 3.20797-4.261021H.495143C.278954-4.261021 .188294-4.219178 .188294-3.961146V-3.445081C.188294-3.312578 .188294-3.145205 .4533-3.145205S.718306-3.312578 .718306-3.445081V-3.800747H1.583064V-.460274H1.248319C1.143711-.460274 .941469-.460274 .941469-.230137S1.150685 0 1.248319 0H2.447821C2.552428 0 2.75467 0 2.75467-.230137S2.545455-.460274 2.447821-.460274H2.113076V-3.800747Z"></path>
+<path id="tz_shell_vs_lista_g1-91" d="M3.110336-4.379577C3.214944-4.379577 3.410212-4.379577 3.410212-4.609714S3.214944-4.839851 3.110336-4.839851H1.827148C1.597011-4.839851 1.527273-4.78406 1.527273-4.539975V.278954C1.527273 .516065 1.597011 .578829 1.827148 .578829H3.110336C3.214944 .578829 3.410212 .578829 3.410212 .348692S3.214944 .118555 3.110336 .118555H2.057285V-4.379577H3.110336Z"></path>
+<path id="tz_shell_vs_lista_g1-93" d="M2.168867-4.539975C2.168867-4.777086 2.099128-4.839851 1.868991-4.839851H.585803C.481196-4.839851 .285928-4.839851 .285928-4.609714S.481196-4.379577 .585803-4.379577H1.638854V.118555H.585803C.481196 .118555 .285928 .118555 .285928 .348692S.481196 .578829 .585803 .578829H1.868991C2.099128 .578829 2.168867 .523039 2.168867 .278954V-4.539975Z"></path>
+<path id="tz_shell_vs_lista_g1-97" d="M3.005729-1.966625C3.005729-2.545455 2.552428-3.061519 1.597011-3.061519C1.26924-3.061519 .550934-3.061519 .550934-2.524533C.550934-2.336239 .683437-2.182814 .892653-2.182814C1.025156-2.182814 1.21345-2.266501 1.227397-2.517559C1.227397-2.57335 1.234371-2.580324 1.325031-2.594271C1.401743-2.601245 1.520299-2.601245 1.603985-2.601245C2.175841-2.601245 2.475716-2.343213 2.475716-1.959651C1.729514-1.959651 .369614-1.785305 .369614-.927522C.369614-.411457 .850809 .034869 1.555168 .034869C2.113076 .034869 2.461768-.174346 2.552428-.237111C2.698879-.020922 2.991781 0 3.326526 0C3.514819 0 3.696139 0 3.696139-.230137S3.500872-.460274 3.403238-.460274C3.138232-.460274 3.075467-.481196 3.005729-.509091V-1.966625ZM2.475716-.99726C2.475716-.850809 2.475716-.690411 2.203736-.557908C1.959651-.432379 1.687671-.425405 1.597011-.425405C1.185554-.425405 .899626-.669489 .899626-.927522C.899626-1.297136 1.66675-1.506351 2.475716-1.513325V-.99726Z"></path>
+<path id="tz_shell_vs_lista_g1-98" d="M1.192528-3.961146C1.192528-4.198257 1.12279-4.261021 .892653-4.261021H.376588C.265006-4.261021 .076712-4.261021 .076712-4.030884S.265006-3.800747 .376588-3.800747H.662516V-.299875C.662516-.174346 .662516 0 .927522 0S1.192528-.167372 1.192528-.292902C1.408717-.083686 1.680697 .034869 1.987547 .034869C2.761644 .034869 3.459029-.620672 3.459029-1.506351C3.459029-2.350187 2.838356-3.040598 2.057285-3.040598C1.729514-3.040598 1.443587-2.922042 1.192528-2.726775V-3.961146ZM1.192528-1.834122C1.192528-2.238605 1.603985-2.580324 2.02939-2.580324C2.517559-2.580324 2.929016-2.106102 2.929016-1.506351C2.929016-.871731 2.454795-.425405 1.966625-.425405C1.45056-.425405 1.192528-1.004234 1.192528-1.352927V-1.834122Z"></path>
+<path id="tz_shell_vs_lista_g1-99" d="M3.277709-.753176C3.277709-.9066 3.159153-.969365 3.012702-.969365C2.915068-.969365 2.817435-.969365 2.75467-.808966C2.629141-.502117 2.350187-.425405 2.099128-.425405C1.520299-.425405 1.03213-.899626 1.03213-1.506351C1.03213-1.862017 1.255293-2.601245 2.140971-2.601245C2.343213-2.601245 2.461768-2.587298 2.496638-2.580324C2.517559-2.57335 2.524533-2.566376 2.524533-2.503611C2.538481-2.30137 2.684932-2.182814 2.859278-2.182814C3.068493-2.182814 3.200996-2.336239 3.200996-2.524533C3.200996-3.061519 2.475716-3.061519 2.154919-3.061519C.913574-3.061519 .502117-2.099128 .502117-1.506351C.502117-.669489 1.171606 .034869 2.064259 .034869C3.054545 .034869 3.277709-.63462 3.277709-.753176Z"></path>
+<path id="tz_shell_vs_lista_g1-100" d="M3.033624-3.961146C3.033624-4.198257 2.963885-4.261021 2.733748-4.261021H2.217684C2.106102-4.261021 1.917808-4.261021 1.917808-4.030884S2.106102-3.800747 2.217684-3.800747H2.503611V-2.75467C2.182814-3.005729 1.889913-3.040598 1.701619-3.040598C.927522-3.040598 .237111-2.385056 .237111-1.499377C.237111-.648568 .871731 .034869 1.638854 .034869C2.008468 .034869 2.30137-.132503 2.503611-.327771C2.503611-.132503 2.503611 0 2.803487 0H3.319552C3.431133 0 3.619427 0 3.619427-.230137S3.431133-.460274 3.319552-.460274H3.033624V-3.961146ZM2.503611-1.373848C2.503611-.976339 2.182814-.425405 1.659776-.425405C1.192528-.425405 .767123-.885679 .767123-1.499377C.767123-2.12005 1.227397-2.580324 1.736488-2.580324C2.147945-2.580324 2.503611-2.224658 2.503611-1.841096V-1.373848Z"></path>
+<path id="tz_shell_vs_lista_g1-101" d="M2.977833-1.311083C3.110336-1.311083 3.277709-1.311083 3.277709-1.57609C3.277709-2.412951 2.803487-3.061519 1.903861-3.061519C1.046077-3.061519 .369614-2.364134 .369614-1.513325C.369614-.683437 1.066999 .034869 2.015442 .034869C2.970859 .034869 3.277709-.578829 3.277709-.753176C3.277709-.9066 3.159153-.969365 3.012702-.969365C2.894147-.969365 2.824408-.962391 2.75467-.808966C2.615193-.495143 2.273474-.425405 2.050311-.425405C1.54122-.425405 1.03213-.760149 .920548-1.311083H2.977833ZM.927522-1.764384C1.03213-2.252553 1.443587-2.601245 1.903861-2.601245C2.531507-2.601245 2.691905-2.113076 2.733748-1.764384H.927522Z"></path>
+<path id="tz_shell_vs_lista_g1-102" d="M1.806227-2.545455H2.636115C2.740722-2.545455 2.93599-2.545455 2.93599-2.775592S2.740722-3.005729 2.636115-3.005729H1.806227V-3.326526C1.806227-3.765878 2.140971-3.835616 2.433873-3.835616C2.454795-3.612453 2.636115-3.514819 2.761644-3.514819C2.908095-3.514819 3.089415-3.626401 3.089415-3.849564C3.089415-4.29589 2.503611-4.29589 2.39203-4.29589C1.855044-4.29589 1.276214-4.002989 1.276214-3.347447V-3.005729H.606725C.502117-3.005729 .299875-3.005729 .299875-2.775592S.495143-2.545455 .599751-2.545455H1.276214V-.460274H.599751C.502117-.460274 .292902-.460274 .292902-.230137S.502117 0 .599751 0H2.48269C2.580324 0 2.789539 0 2.789539-.230137S2.580324-.460274 2.48269-.460274H1.806227V-2.545455Z"></path>
+<path id="tz_shell_vs_lista_g1-103" d="M1.011208-.962391C1.129763-.892653 1.3599-.795019 1.638854-.795019C2.315318-.795019 2.831382-1.311083 2.831382-1.917808C2.831382-2.161893 2.740722-2.378082 2.657036-2.510585C2.796513-2.587298 2.873225-2.594271 2.991781-2.608219C3.033624-2.440847 3.159153-2.364134 3.291656-2.364134C3.459029-2.364134 3.591532-2.496638 3.591532-2.66401C3.591532-2.880199 3.417186-3.075467 3.061519-3.075467C2.873225-3.075467 2.57335-3.019676 2.329265-2.838356C2.266501-2.880199 2.001494-3.040598 1.645828-3.040598C.969365-3.040598 .4533-2.524533 .4533-1.917808C.4533-1.694645 .530012-1.45056 .676463-1.26924C.620672-1.17858 .536986-.990286 .536986-.795019C.536986-.592777 .620672-.397509 .704359-.292902C.411457-.125529 .209215 .216189 .209215 .557908C.209215 1.171606 .962391 1.590037 1.84807 1.590037S3.486924 1.171606 3.486924 .557908C3.486924-.048817 2.956912-.411457 2.21071-.439352C2.001494-.446326 1.48543-.432379 1.283188-.460274C.976339-.460274 .976339-.788045 .976339-.795019C.976339-.878705 .99726-.927522 1.011208-.962391ZM1.638854-1.248319C1.290162-1.248319 .983313-1.54122 .983313-1.917808S1.290162-2.587298 1.638854-2.587298C2.001494-2.587298 2.30137-2.287422 2.30137-1.917808C2.30137-1.555168 2.008468-1.248319 1.638854-1.248319ZM1.652802-.006974C2.266501-.006974 3.047572-.006974 3.047572 .557908C3.047572 .843836 2.545455 1.136737 1.84807 1.136737C1.143711 1.136737 .648568 .836862 .648568 .557908C.648568 .285928 .899626 0 1.26924-.006974H1.652802Z"></path>
+<path id="tz_shell_vs_lista_g1-104" d="M3.033624-2.02939C3.033624-2.726775 2.684932-3.040598 2.113076-3.040598C1.597011-3.040598 1.262267-2.761644 1.192528-2.691905V-3.961146C1.192528-4.198257 1.12279-4.261021 .892653-4.261021H.376588C.265006-4.261021 .076712-4.261021 .076712-4.030884S.265006-3.800747 .376588-3.800747H.662516V-.460274H.376588C.265006-.460274 .076712-.460274 .076712-.230137S.265006 0 .376588 0H1.478456C1.590037 0 1.778331 0 1.778331-.230137S1.590037-.460274 1.478456-.460274H1.192528V-1.659776C1.192528-2.329265 1.729514-2.580324 2.078207-2.580324C2.399004-2.580324 2.503611-2.426899 2.503611-2.015442V-.460274H2.273474C2.168867-.460274 1.973599-.460274 1.973599-.230137S2.168867 0 2.273474 0H3.319552C3.431133 0 3.619427 0 3.619427-.230137S3.431133-.460274 3.319552-.460274H3.033624V-2.02939Z"></path>
+<path id="tz_shell_vs_lista_g1-105" d="M2.203736-3.891407C2.203736-4.100623 2.036364-4.267995 1.827148-4.267995S1.45056-4.100623 1.45056-3.891407S1.617933-3.514819 1.827148-3.514819S2.203736-3.682192 2.203736-3.891407ZM.913574-3.005729C.808966-3.005729 .606725-3.005729 .606725-2.775592S.81594-2.545455 .913574-2.545455H1.673724V-.460274H.857783C.753176-.460274 .550934-.460274 .550934-.230137S.760149 0 .857783 0H2.908095C3.005729 0 3.214944 0 3.214944-.230137S3.005729-.460274 2.908095-.460274H2.203736V-2.705853C2.203736-2.942964 2.133998-3.005729 1.903861-3.005729H.913574Z"></path>
+<path id="tz_shell_vs_lista_g1-108" d="M2.113076-3.961146C2.113076-4.198257 2.043337-4.261021 1.8132-4.261021H.711333C.606725-4.261021 .404483-4.261021 .404483-4.030884S.613699-3.800747 .711333-3.800747H1.583064V-.460274H.711333C.606725-.460274 .404483-.460274 .404483-.230137S.613699 0 .711333 0H2.984807C3.089415 0 3.291656 0 3.291656-.230137S3.082441-.460274 2.984807-.460274H2.113076V-3.961146Z"></path>
+<path id="tz_shell_vs_lista_g1-110" d="M3.033624-2.02939C3.033624-2.726775 2.684932-3.040598 2.113076-3.040598C1.597011-3.040598 1.262267-2.761644 1.192528-2.691905C1.192528-2.901121 1.171606-3.005729 .892653-3.005729H.376588C.265006-3.005729 .076712-3.005729 .076712-2.775592S.265006-2.545455 .376588-2.545455H.662516V-.460274H.376588C.265006-.460274 .076712-.460274 .076712-.230137S.265006 0 .376588 0H1.478456C1.590037 0 1.778331 0 1.778331-.230137S1.590037-.460274 1.478456-.460274H1.192528V-1.659776C1.192528-2.329265 1.729514-2.580324 2.078207-2.580324C2.399004-2.580324 2.503611-2.426899 2.503611-2.015442V-.460274H2.273474C2.168867-.460274 1.973599-.460274 1.973599-.230137S2.168867 0 2.273474 0H3.319552C3.431133 0 3.619427 0 3.619427-.230137S3.431133-.460274 3.319552-.460274H3.033624V-2.02939Z"></path>
+<path id="tz_shell_vs_lista_g1-111" d="M3.312578-1.506351C3.312578-2.357161 2.657036-3.061519 1.84807-3.061519S.383562-2.357161 .383562-1.506351C.383562-.63462 1.053051 .034869 1.84807 .034869S3.312578-.63462 3.312578-1.506351ZM1.84807-.425405C1.345953-.425405 .913574-.920548 .913574-1.555168C.913574-2.161893 1.352927-2.601245 1.84807-2.601245S2.782565-2.161893 2.782565-1.555168C2.782565-.920548 2.350187-.425405 1.84807-.425405Z"></path>
+<path id="tz_shell_vs_lista_g1-114" d="M1.57609-1.276214C1.57609-2.036364 2.12005-2.580324 2.796513-2.580324C2.810461-2.308344 3.005729-2.252553 3.11731-2.252553C3.291656-2.252553 3.438107-2.378082 3.438107-2.580324C3.438107-2.75467 3.312578-3.040598 2.768618-3.040598C2.127024-3.040598 1.750436-2.670984 1.57609-2.496638V-2.705853C1.57609-2.942964 1.506351-3.005729 1.276214-3.005729H.516065C.418431-3.005729 .209215-3.005729 .209215-2.775592S.418431-2.545455 .516065-2.545455H1.046077V-.460274H.516065C.418431-.460274 .209215-.460274 .209215-.230137S.418431 0 .516065 0H2.315318C2.426899 0 2.615193 0 2.615193-.230137S2.426899-.460274 2.315318-.460274H1.57609V-1.276214Z"></path>
+<path id="tz_shell_vs_lista_g1-115" d="M3.019676-2.761644C3.019676-2.866252 3.019676-3.061519 2.789539-3.061519C2.629141-3.061519 2.594271-2.977833 2.57335-2.93599C2.287422-3.061519 2.008468-3.061519 1.84807-3.061519C.662516-3.061519 .509091-2.475716 .509091-2.231631C.509091-1.583064 1.241345-1.471482 1.855044-1.373848C2.231631-1.311083 2.768618-1.227397 2.768618-.885679C2.768618-.63462 2.503611-.425405 1.896887-.425405C1.464508-.425405 1.185554-.571856 1.039103-.990286C1.004234-1.101868 .976339-1.185554 .774097-1.185554C.509091-1.185554 .509091-1.011208 .509091-.885679V-.265006C.509091-.160399 .509091 .034869 .739228 .034869C.808966 .034869 .934496 .013948 1.004234-.195268C1.3599 .034869 1.750436 .034869 1.889913 .034869C3.075467 .034869 3.228892-.620672 3.228892-.878705C3.228892-1.046077 3.173101-1.297136 2.908095-1.499377C2.629141-1.708593 2.357161-1.750436 1.868991-1.834122C1.39477-1.910834 .969365-1.980573 .969365-2.231631C.969365-2.371108 1.136737-2.601245 1.834122-2.601245C2.461768-2.601245 2.48269-2.378082 2.489664-2.252553C2.503611-2.02939 2.677958-2.02939 2.75467-2.02939C3.019676-2.02939 3.019676-2.196762 3.019676-2.329265V-2.761644Z"></path>
+<path id="tz_shell_vs_lista_g1-116" d="M1.590037-2.545455H2.705853C2.810461-2.545455 3.005729-2.545455 3.005729-2.775592S2.810461-3.005729 2.705853-3.005729H1.590037V-3.563636C1.590037-3.696139 1.590037-3.863512 1.325031-3.863512S1.060025-3.689166 1.060025-3.563636V-3.005729H.481196C.376588-3.005729 .174346-3.005729 .174346-2.775592S.369614-2.545455 .474222-2.545455H1.060025V-.955417C1.060025-.202242 1.590037 .034869 2.078207 .034869C2.705853 .034869 3.166127-.404483 3.166127-.9066C3.166127-1.143711 2.963885-1.143711 2.901121-1.143711C2.719801-1.143711 2.643088-1.073973 2.636115-.899626C2.622167-.613699 2.371108-.425405 2.106102-.425405C1.590037-.425405 1.590037-.808966 1.590037-.969365V-2.545455Z"></path>
+<path id="tz_shell_vs_lista_g1-117" d="M3.033624-2.705853C3.033624-2.942964 2.963885-3.005729 2.733748-3.005729H2.217684C2.106102-3.005729 1.917808-3.005729 1.917808-2.775592S2.106102-2.545455 2.217684-2.545455H2.503611V-1.080946C2.503611-.530012 1.994521-.425405 1.729514-.425405C1.192528-.425405 1.192528-.627646 1.192528-.829888V-2.705853C1.192528-2.942964 1.12279-3.005729 .892653-3.005729H.376588C.265006-3.005729 .076712-3.005729 .076712-2.775592S.265006-2.545455 .376588-2.545455H.662516V-.808966C.662516-.167372 1.101868 .034869 1.687671 .034869C2.057285 .034869 2.322291-.069738 2.496638-.202242C2.531507 0 2.698879 0 2.803487 0H3.319552C3.431133 0 3.619427 0 3.619427-.230137S3.431133-.460274 3.319552-.460274H3.033624V-2.705853Z"></path>
+<path id="tz_shell_vs_lista_g1-118" d="M3.033624-2.545455H3.221918C3.326526-2.545455 3.521793-2.545455 3.521793-2.775592S3.326526-3.005729 3.221918-3.005729H2.412951C2.30137-3.005729 2.113076-3.005729 2.113076-2.775592S2.30137-2.545455 2.412951-2.545455H2.57335L1.84807-.397509L1.12279-2.545455H1.283188C1.39477-2.545455 1.583064-2.545455 1.583064-2.775592S1.39477-3.005729 1.283188-3.005729H.474222C.369614-3.005729 .174346-3.005729 .174346-2.775592S.369614-2.545455 .474222-2.545455H.662516L1.443587-.230137C1.534247 .034869 1.701619 .034869 1.84807 .034869S2.161893 .034869 2.252553-.230137L3.033624-2.545455Z"></path>
+<path id="tz_shell_vs_lista_g1-119" d="M3.228892-2.545455C3.38929-2.545455 3.584558-2.545455 3.584558-2.775592S3.375342-3.005729 3.277709-3.005729H2.454795C2.350187-3.005729 2.154919-3.005729 2.154919-2.775592S2.350187-2.545455 2.454795-2.545455H2.782565L2.461768-.557908H2.454795C2.433873-.732254 2.329265-1.094894 2.259527-1.318057C2.154919-1.694645 2.12005-1.806227 1.862017-1.806227C1.597011-1.806227 1.569116-1.687671 1.464508-1.332005C1.290162-.732254 1.276214-.662516 1.255293-.550934H1.248319L.913574-2.545455H1.241345C1.345953-2.545455 1.54122-2.545455 1.54122-2.775592S1.345953-3.005729 1.241345-3.005729H.418431C.313823-3.005729 .111582-3.005729 .111582-2.775592S.306849-2.545455 .467248-2.545455L.878705-.244085C.927522 .020922 1.060025 .034869 1.227397 .034869C1.527273 .034869 1.555168-.048817 1.659776-.418431C1.834122-1.025156 1.841096-1.108842 1.855044-1.241345H1.862017C1.868991-1.157659 1.917808-.927522 2.064259-.418431C2.161893-.069738 2.189788 .034869 2.48269 .034869C2.608219 .034869 2.768618 .034869 2.817435-.237111L3.228892-2.545455Z"></path>
+<path id="tz_shell_vs_lista_g1-120" d="M2.043337-1.548194L2.817435-2.545455H3.075467C3.173101-2.545455 3.382316-2.545455 3.382316-2.775592S3.173101-3.005729 3.075467-3.005729H2.266501C2.161893-3.005729 1.966625-3.005729 1.966625-2.775592S2.154919-2.545455 2.294396-2.545455L1.827148-1.917808L1.352927-2.545455C1.471482-2.545455 1.66675-2.545455 1.66675-2.775592S1.471482-3.005729 1.366874-3.005729H.557908C.460274-3.005729 .251059-3.005729 .251059-2.775592S.460274-2.545455 .557908-2.545455H.822914L1.617933-1.548194L.774097-.460274H.516065C.411457-.460274 .209215-.460274 .209215-.230137S.418431 0 .516065 0H1.318057C1.422665 0 1.624907 0 1.624907-.230137S1.429639-.460274 1.276214-.460274L1.827148-1.255293L2.399004-.460274C2.252553-.460274 2.064259-.460274 2.064259-.230137S2.259527 0 2.364134 0H3.173101C3.270735 0 3.47995 0 3.47995-.230137S3.270735-.460274 3.173101-.460274H2.908095L2.043337-1.548194Z"></path>
+<path id="tz_shell_vs_lista_g2-40" d="M3.523786 2.098132C3.523786 2.044334 3.496887 2.017435 3.38929 1.909838C2.214695 .806974 1.891905-.789041 1.891905-2.241594C1.891905-3.738979 2.241594-5.299128 3.353425-6.375093C3.514819-6.527522 3.523786-6.536488 3.523786-6.590286C3.523786-6.697883 3.425156-6.724782 3.344458-6.724782C3.156164-6.724782 2.680946-6.276463 2.582316-6.177833C1.685679-5.334994 .986301-3.945205 .986301-2.241594C.986301-.080697 2.080199 1.23736 2.546451 1.676712C2.618182 1.739477 3.147198 2.241594 3.344458 2.241594C3.380324 2.241594 3.523786 2.241594 3.523786 2.098132Z"></path>
+<path id="tz_shell_vs_lista_g2-41" d="M3.129265-2.241594C3.129265-4.402491 2.035367-5.720548 1.569116-6.1599C1.497385-6.222665 .968369-6.724782 .771108-6.724782C.708344-6.724782 .591781-6.706849 .591781-6.58132C.591781-6.527522 .627646-6.491656 .71731-6.401993C1.811208-5.34396 2.223661-3.918306 2.223661-2.241594C2.223661-.744209 1.873973 .81594 .762142 1.891905C.600747 2.044334 .591781 2.0533 .591781 2.098132C.591781 2.223661 .699377 2.241594 .771108 2.241594C.959402 2.241594 1.43462 1.793275 1.53325 1.694645C2.429888 .851806 3.129265-.537983 3.129265-2.241594Z"></path>
+<path id="tz_shell_vs_lista_g2-61" d="M7.244832-2.99477C7.370361-2.99477 7.648319-2.99477 7.648319-3.281694S7.370361-3.568618 7.253798-3.568618H.986301C.869738-3.568618 .591781-3.568618 .591781-3.281694S.878705-2.99477 .995268-2.99477H7.244832ZM7.253798-.91457C7.370361-.91457 7.648319-.91457 7.648319-1.201494S7.361395-1.488418 7.244832-1.488418H.995268C.878705-1.488418 .591781-1.488418 .591781-1.201494S.869738-.91457 .986301-.91457H7.253798Z"></path>
+<path id="tz_shell_vs_lista_g2-84" d="M6.787547-6.043337H.582814L.385554-3.864508H.842839C.932503-4.859776 1.0132-5.603985 2.331258-5.603985H3.039601V-.439352H1.667746V0C2.062267-.026899 3.227895-.026899 3.694147-.026899S5.317061-.026899 5.711582 0V-.439352H4.339726V-5.603985H5.04807C6.366127-5.603985 6.437858-4.841843 6.527522-3.864508H6.984807L6.787547-6.043337Z"></path>
+<path id="tz_shell_vs_lista_g2-97" d="M4.339726-2.67198C4.339726-3.461021 3.694147-4.061768 2.313325-4.061768C1.802242-4.061768 .654545-4.043836 .654545-3.218929C.654545-2.815442 .959402-2.627148 1.23736-2.627148C1.542217-2.627148 1.820174-2.842341 1.820174-3.209963C1.820174-3.469988 1.667746-3.622416 1.640847-3.649315C1.730511-3.667248 1.945704-3.703113 2.27746-3.703113C2.923039-3.703113 3.29066-3.380324 3.29066-2.67198V-2.385056C1.802242-2.385056 .29589-1.999502 .29589-1.004234C.29589-.116563 1.416687 .053798 2.062267 .053798C2.743711 .053798 3.209963-.242092 3.452055-.663512C3.452055-.430386 3.452055 0 4.411457 0H4.850809C5.021171 0 5.1467 0 5.1467-.224159C5.1467-.439352 5.003238-.439352 4.913574-.439352C4.339726-.448319 4.339726-.537983 4.339726-.753176V-2.67198ZM3.29066-1.246326C3.29066-.304857 2.25056-.304857 2.214695-.304857C1.75741-.304857 1.380822-.600747 1.380822-1.004234C1.380822-1.300125 1.542217-1.999502 3.29066-2.080199V-1.246326Z"></path>
+<path id="tz_shell_vs_lista_g2-100" d="M3.299626-6.150934V-5.711582C3.837609-5.711582 3.90934-5.711582 3.90934-5.361893V-3.631382C3.514819-3.918306 3.0934-4.034869 2.663014-4.034869C1.201494-4.034869 .349689-3.147198 .349689-1.990535C.349689-.798007 1.192528 .053798 2.555417 .053798C3.120299 .053798 3.568618-.161395 3.855542-.394521V.053798L5.514321 0V-.439352C4.976339-.439352 4.904608-.439352 4.904608-.789041V-6.222665L3.299626-6.150934ZM3.855542-.977335C3.658281-.663512 3.227895-.304857 2.654047-.304857C1.542217-.304857 1.542217-1.380822 1.542217-1.972603C1.542217-2.492653 1.551183-2.878207 1.784309-3.209963C2.017435-3.568618 2.447821-3.676214 2.761644-3.676214C3.209963-3.676214 3.577584-3.478954 3.855542-3.129265V-.977335Z"></path>
+<path id="tz_shell_vs_lista_g2-101" d="M4.267995-1.927771C4.456289-1.927771 4.563885-1.927771 4.563885-2.178829C4.563885-2.37609 4.545953-3.165131 3.963138-3.649315C3.559651-3.981071 3.021669-4.061768 2.582316-4.061768C1.049066-4.061768 .29589-3.0934 .29589-2.017435C.29589-.842839 1.183562 .053798 2.707846 .053798C4.187298 .053798 4.563885-.896638 4.563885-1.0401C4.563885-1.219427 4.384558-1.219427 4.33076-1.219427C4.169365-1.219427 4.151432-1.165629 4.097634-1.0401C3.891407-.573848 3.344458-.331756 2.779577-.331756C1.506351-.331756 1.488418-1.488418 1.488418-1.927771H4.267995ZM1.488418-2.25056C1.506351-2.663014 1.551183-3.703113 2.582316-3.703113C3.631382-3.703113 3.667248-2.609215 3.685181-2.25056H1.488418Z"></path>
+<path id="tz_shell_vs_lista_g2-103" d="M1.936737-.762142C1.649813-.762142 1.524284-.762142 1.371856-.878705C1.23736-.995268 1.165629-1.147696 1.165629-1.327024S1.228394-1.596015 1.23736-1.604981C1.569116-1.43462 1.963636-1.371856 2.358157-1.371856C3.730012-1.371856 4.196264-2.116065 4.196264-2.698879C4.196264-3.066501 4.025903-3.362391 3.837609-3.550685C4.079701-3.676214 4.259029-3.694147 4.375592-3.71208C4.366625-3.676214 4.348692-3.622416 4.348692-3.532752C4.348692-3.29066 4.536986-3.129265 4.752179-3.129265C4.94944-3.129265 5.155666-3.272727 5.155666-3.541719C5.155666-3.774844 4.976339-4.088667 4.563885-4.088667C4.124533-4.088667 3.747945-3.873474 3.577584-3.747945C3.200996-3.972105 2.788543-4.034869 2.358157-4.034869C.986301-4.034869 .52005-3.29066 .52005-2.707846C.52005-2.214695 .824907-1.891905 .986301-1.75741C.798007-1.551183 .690411-1.246326 .690411-.977335C.690411-.591781 .878705-.286924 1.066999-.116563C.385554 .071731 .29589 .457285 .29589 .654545C.29589 1.192528 .91457 1.802242 2.645081 1.802242C4.214197 1.802242 5.003238 1.309091 5.003238 .627646C5.003238 .313823 4.886675-.242092 4.267995-.529016C3.747945-.762142 3.272727-.762142 2.385056-.762142H1.936737ZM2.358157-1.730511C1.551183-1.730511 1.551183-2.304359 1.551183-2.698879C1.551183-3.102366 1.551183-3.676214 2.358157-3.676214S3.165131-3.102366 3.165131-2.707846C3.165131-2.304359 3.165131-1.730511 2.358157-1.730511ZM2.887173 .125529C3.165131 .125529 4.20523 .125529 4.20523 .663512C4.20523 .950436 3.873474 1.443587 2.654047 1.443587C1.470486 1.443587 1.093898 .995268 1.093898 .645579C1.093898 .125529 1.667746 .125529 1.802242 .125529H2.887173Z"></path>
+<path id="tz_shell_vs_lista_g2-104" d="M5.039103-2.734745C5.039103-3.801743 4.393524-4.034869 3.61345-4.034869C2.761644-4.034869 2.286426-3.550685 2.0533-3.183064V-6.222665L.448319-6.150934V-5.711582C.986301-5.711582 1.058032-5.711582 1.058032-5.361893V-.439352H.448319V0C1.111831-.026899 1.219427-.026899 1.578082-.026899C1.945704-.026899 2.035367-.026899 2.716812 0V-.439352H2.107098V-2.27746C2.107098-3.281694 2.932005-3.676214 3.469988-3.676214C3.81071-3.676214 3.990037-3.48792 3.990037-2.815442V-.439352H3.380324V0C4.043836-.026899 4.151432-.026899 4.510087-.026899C4.877709-.026899 4.967372-.026899 5.648817 0V-.439352H5.039103V-2.734745Z"></path>
+<path id="tz_shell_vs_lista_g2-105" d="M2.15193-5.523288C2.15193-5.989539 1.775342-6.231631 1.452553-6.231631C1.0401-6.231631 .744209-5.881943 .744209-5.532254C.744209-5.155666 1.049066-4.82391 1.452553-4.82391C1.793275-4.82391 2.15193-5.092902 2.15193-5.523288ZM.493151-3.963138V-3.523786C1.0132-3.523786 1.075965-3.523786 1.075965-3.174097V-.439352H.466252V0C1.066999-.017933 1.183562-.026899 1.560149-.026899C1.999502-.026899 2.116065-.017933 2.618182 0V-.439352H2.071233V-4.034869L.493151-3.963138Z"></path>
+<path id="tz_shell_vs_lista_g2-108" d="M2.071233-6.222665L.466252-6.150934V-5.711582C1.004234-5.711582 1.075965-5.711582 1.075965-5.361893V-.439352H.466252V0C1.075965-.026899 1.183562-.026899 1.569116-.026899C1.963636-.026899 2.196762-.017933 2.680946 0V-.439352H2.071233V-6.222665Z"></path>
+<path id="tz_shell_vs_lista_g2-109" d="M7.989041-2.734745C7.989041-3.792777 7.352428-4.034869 6.563387-4.034869C5.630884-4.034869 5.173599-3.469988 5.003238-3.19203C4.805978-3.999004 4.016936-4.034869 3.622416-4.034869C2.510585-4.034869 2.071233-3.227895 2.008468-3.0934H1.999502V-4.034869L.448319-3.963138V-3.523786C.986301-3.523786 1.058032-3.523786 1.058032-3.174097V-.439352H.448319V0C1.111831-.026899 1.219427-.026899 1.578082-.026899C1.945704-.026899 2.035367-.026899 2.716812 0V-.439352H2.107098V-2.27746C2.107098-3.272727 2.932005-3.676214 3.469988-3.676214C3.81071-3.676214 3.999004-3.496887 3.999004-2.815442V-.439352H3.38929V0C4.052802-.026899 4.160399-.026899 4.519054-.026899C4.886675-.026899 4.976339-.026899 5.657783 0V-.439352H5.04807V-2.27746C5.04807-3.272727 5.872976-3.676214 6.410959-3.676214C6.751681-3.676214 6.939975-3.496887 6.939975-2.815442V-.439352H6.330262V0C6.993773-.026899 7.10137-.026899 7.460025-.026899C7.827646-.026899 7.91731-.026899 8.598755 0V-.439352H7.989041V-2.734745Z"></path>
+<path id="tz_shell_vs_lista_g2-110" d="M5.039103-2.734745C5.039103-3.801743 4.393524-4.034869 3.61345-4.034869C2.510585-4.034869 2.071233-3.227895 2.008468-3.0934H1.999502V-4.034869L.448319-3.963138V-3.523786C.986301-3.523786 1.058032-3.523786 1.058032-3.174097V-.439352H.448319V0C1.111831-.026899 1.219427-.026899 1.578082-.026899C1.945704-.026899 2.035367-.026899 2.716812 0V-.439352H2.107098V-2.27746C2.107098-3.281694 2.932005-3.676214 3.469988-3.676214C3.81071-3.676214 3.990037-3.48792 3.990037-2.815442V-.439352H3.380324V0C4.043836-.026899 4.151432-.026899 4.510087-.026899C4.877709-.026899 4.967372-.026899 5.648817 0V-.439352H5.039103V-2.734745Z"></path>
+<path id="tz_shell_vs_lista_g2-111" d="M5.003238-1.95467C5.003238-3.129265 4.178331-4.061768 2.654047-4.061768C1.075965-4.061768 .29589-3.084433 .29589-1.95467C.29589-.842839 1.102864 .053798 2.645081 .053798C4.250062 .053798 5.003238-.887671 5.003238-1.95467ZM2.654047-.331756C1.488418-.331756 1.488418-1.273225 1.488418-2.0533C1.488418-2.806476 1.488418-3.703113 2.645081-3.703113C3.81071-3.703113 3.81071-2.806476 3.81071-2.0533C3.81071-1.282192 3.81071-.331756 2.654047-.331756Z"></path>
+<path id="tz_shell_vs_lista_g2-114" d="M1.972603-1.95467C1.972603-2.609215 2.214695-3.649315 3.084433-3.676214C2.985803-3.577584 2.940971-3.425156 2.940971-3.281694C2.940971-2.887173 3.254795-2.707846 3.505853-2.707846C3.792777-2.707846 4.079701-2.905106 4.079701-3.281694C4.079701-3.738979 3.61345-4.034869 3.084433-4.034869C2.456787-4.034869 2.071233-3.577584 1.873973-3.057534H1.865006V-4.034869L.367621-3.963138V-3.523786C.905604-3.523786 .977335-3.523786 .977335-3.174097V-.439352H.367621V0C1.031133-.026899 1.084932-.026899 1.515318-.026899C1.739477-.026899 2.259527-.026899 2.734745 0V-.439352H1.972603V-1.95467Z"></path>
+<path id="tz_shell_vs_lista_g2-115" d="M3.559651-3.801743C3.559651-3.963138 3.559651-4.061768 3.380324-4.061768C3.29066-4.061768 3.147198-3.990037 2.985803-3.900374C2.698879-4.025903 2.349191-4.061768 2.0533-4.061768C1.775342-4.061768 .349689-4.061768 .349689-2.878207C.349689-1.936737 1.524284-1.739477 1.838107-1.685679C2.57335-1.560149 3.165131-1.461519 3.165131-.950436C3.165131-.304857 2.322291-.304857 2.125031-.304857C1.667746-.304857 1.084932-.42142 .824907-1.246326C.780075-1.398755 .771108-1.425654 .582814-1.425654C.349689-1.425654 .349689-1.371856 .349689-1.156663V-.206227C.349689-.044832 .349689 .053798 .529016 .053798C.591781 .053798 .609714 .053798 .806974-.071731L1.049066-.224159C1.470486 .053798 1.945704 .053798 2.125031 .053798C2.394022 .053798 3.828643 .053798 3.828643-1.255293C3.828643-1.712578 3.568618-1.999502 3.407223-2.133998C3.003736-2.47472 2.716812-2.519552 2.008468-2.636115C1.578082-2.707846 1.0132-2.797509 1.0132-3.200996C1.0132-3.738979 1.847073-3.738979 2.044334-3.738979C3.048568-3.738979 3.084433-3.209963 3.102366-2.96787C3.111333-2.842341 3.236862-2.842341 3.326526-2.842341C3.550685-2.842341 3.559651-2.887173 3.559651-3.102366V-3.801743Z"></path>
+<path id="tz_shell_vs_lista_g2-116" d="M1.999502-3.541719H3.353425V-3.981071H1.999502V-5.693649H1.542217C1.53325-4.850809 1.111831-3.927273 .19726-3.900374V-3.541719H.950436V-1.102864C.950436-.080697 1.838107 .053798 2.394022 .053798C3.0934 .053798 3.523786-.448319 3.523786-1.102864V-1.578082H3.066501V-1.129763C3.066501-.493151 2.743711-.331756 2.519552-.331756C1.999502-.331756 1.999502-.869738 1.999502-1.084932V-3.541719Z"></path>
+<path id="tz_shell_vs_lista_g2-117" d="M3.380324-3.963138V-3.523786C3.918306-3.523786 3.990037-3.523786 3.990037-3.174097V-1.470486C3.990037-.753176 3.523786-.304857 2.833375-.304857S2.107098-.502117 2.107098-.977335V-4.034869L.448319-3.963138V-3.523786C.986301-3.523786 1.058032-3.523786 1.058032-3.174097V-1.102864C1.058032-.125529 1.829141 .053798 2.698879 .053798C2.976837 .053798 3.58655 .053798 4.043836-.61868V.053798L5.648817 0V-.439352C5.110834-.439352 5.039103-.439352 5.039103-.789041V-4.034869L3.380324-3.963138Z"></path>
+<path id="tz_shell_vs_lista_g3-102" d="M2.308344-4.226152C2.308344-4.365629 2.308344-4.574844 2.524533-4.770112C2.733748-4.951432 2.998755-5.014197 3.270735-5.035118C3.368369-5.042092 3.417186-5.042092 3.417186-5.132752C3.417186-5.230386 3.347447-5.230386 3.242839-5.230386C2.496638-5.230386 1.771357-4.916563 1.764384-4.351681V-2.712827C1.764384-2.531507 1.764384-2.308344 1.534247-2.106102C1.366874-1.973599 1.143711-1.862017 .795019-1.841096C.711333-1.834122 .655542-1.834122 .655542-1.743462S.718306-1.652802 .774097-1.645828C1.603985-1.590037 1.75741-1.108842 1.764384-.913574V.72528C1.764384 .913574 1.764384 1.227397 2.133998 1.464508C2.524533 1.715567 3.068493 1.743462 3.242839 1.743462C3.347447 1.743462 3.417186 1.743462 3.417186 1.645828C3.417186 1.555168 3.354421 1.548194 3.29863 1.548194C2.643088 1.513325 2.378082 1.199502 2.322291 .941469C2.308344 .871731 2.308344 .822914 2.308344 .72528V-.739228C2.308344-.941469 2.308344-1.192528 2.127024-1.380822C2.02939-1.471482 1.868991-1.638854 1.478456-1.743462C1.75741-1.820174 2.224658-2.008468 2.30137-2.48269C2.308344-2.524533 2.308344-2.538481 2.308344-2.761644V-4.226152Z"></path>
+<path id="tz_shell_vs_lista_g3-103" d="M2.308344-.774097C2.308344-.955417 2.308344-1.17858 2.538481-1.380822C2.705853-1.513325 2.929016-1.624907 3.277709-1.645828C3.361395-1.652802 3.417186-1.652802 3.417186-1.743462S3.354421-1.834122 3.29863-1.841096C2.468742-1.896887 2.315318-2.378082 2.308344-2.57335V-4.212204C2.308344-4.400498 2.308344-4.714321 1.93873-4.951432C1.548194-5.202491 1.004234-5.230386 .829888-5.230386C.732254-5.230386 .655542-5.230386 .655542-5.132752C.655542-5.042092 .718306-5.035118 .774097-5.035118C1.429639-5.000249 1.694645-4.686426 1.750436-4.428394C1.764384-4.358655 1.764384-4.309838 1.764384-4.212204V-2.747696C1.764384-2.545455 1.764384-2.294396 1.945704-2.106102C2.043337-2.015442 2.203736-1.84807 2.594271-1.743462C2.315318-1.66675 1.84807-1.478456 1.771357-1.004234C1.764384-.962391 1.764384-.948443 1.764384-.72528V.739228C1.764384 .878705 1.764384 1.08792 1.548194 1.283188C1.338979 1.464508 1.073973 1.527273 .801993 1.548194C.704359 1.555168 .655542 1.555168 .655542 1.645828C.655542 1.743462 .732254 1.743462 .829888 1.743462C1.57609 1.743462 2.30137 1.429639 2.308344 .864757V-.774097Z"></path>
+<path id="tz_shell_vs_lista_g4-44" d="M1.415691-.111582C1.415691 .083686 1.415691 .669489 .871731 1.164633C.843836 1.192528 .822914 1.21345 .822914 1.248319C.822914 1.290162 .871731 1.352927 .920548 1.352927C1.011208 1.352927 1.610959 .801993 1.610959-.041843C1.610959-.460274 1.45056-.801993 1.12279-.801993C.878705-.801993 .72528-.613699 .72528-.397509C.72528-.230137 .836862 0 1.129763 0C1.30411 0 1.408717-.104608 1.415691-.111582Z"></path>
+<path id="tz_shell_vs_lista_g4-58" d="M1.527273-2.601245C1.527273-2.84533 1.332005-3.005729 1.129763-3.005729C.885679-3.005729 .72528-2.810461 .72528-2.608219C.72528-2.364134 .920548-2.203736 1.12279-2.203736C1.366874-2.203736 1.527273-2.399004 1.527273-2.601245ZM1.527273-.397509C1.527273-.641594 1.332005-.801993 1.129763-.801993C.885679-.801993 .72528-.606725 .72528-.404483C.72528-.160399 .920548 0 1.12279 0C1.366874 0 1.527273-.195268 1.527273-.397509Z"></path>
+<path id="tz_shell_vs_lista_g4-59" d="M1.527273-2.601245C1.527273-2.84533 1.332005-3.005729 1.129763-3.005729C.885679-3.005729 .72528-2.810461 .72528-2.608219C.72528-2.364134 .920548-2.203736 1.12279-2.203736C1.366874-2.203736 1.527273-2.399004 1.527273-2.601245ZM1.352927-.062765C1.345953 .432379 1.17858 .822914 .871731 1.164633C.829888 1.206476 .822914 1.220423 .822914 1.248319C.822914 1.290162 .871731 1.352927 .920548 1.352927C1.011208 1.352927 1.548194 .788045 1.548194-.055791C1.548194-.292902 1.513325-.801993 1.12279-.801993C.857783-.801993 .72528-.592777 .72528-.404483C.72528-.209215 .850809 0 1.129763 0C1.248319 0 1.325031-.048817 1.352927-.062765Z"></path>
+<path id="tz_shell_vs_lista_g4-97" d="M3.110336-1.868991C3.110336-2.238605 3.110336-2.503611 2.789539-2.761644C2.503611-2.998755 2.168867-3.110336 1.75741-3.110336C1.094894-3.110336 .627646-2.859278 .627646-2.433873C.627646-2.21071 .781071-2.092154 .962391-2.092154C1.150685-2.092154 1.290162-2.231631 1.290162-2.419925C1.290162-2.538481 1.234371-2.684932 1.046077-2.740722C1.297136-2.915068 1.701619-2.915068 1.743462-2.915068C2.133998-2.915068 2.559402-2.657036 2.559402-2.071233V-1.855044C2.175841-1.841096 1.715567-1.820174 1.206476-1.63188C.578829-1.401743 .383562-1.018182 .383562-.704359C.383562-.104608 1.108842 .069738 1.603985 .069738C2.161893 .069738 2.489664-.244085 2.636115-.516065C2.66401-.230137 2.852304 .034869 3.173101 .034869C3.187049 .034869 3.863512 .034869 3.863512-.627646V-1.011208H3.626401V-.63462C3.626401-.564882 3.626401-.230137 3.368369-.230137S3.110336-.557908 3.110336-.648568V-1.868991ZM2.559402-.983313C2.559402-.313823 1.973599-.125529 1.659776-.125529C1.30411-.125529 .969365-.36264 .969365-.704359C.969365-1.08792 1.30411-1.624907 2.559402-1.673724V-.983313Z"></path>
+<path id="tz_shell_vs_lista_g4-99" d="M2.712827-2.782565C2.587298-2.726775 2.517559-2.615193 2.517559-2.475716C2.517559-2.287422 2.650062-2.147945 2.84533-2.147945C3.033624-2.147945 3.180075-2.266501 3.180075-2.489664C3.180075-3.110336 2.21071-3.110336 2.015442-3.110336C.969365-3.110336 .320797-2.308344 .320797-1.506351C.320797-.627646 1.066999 .069738 1.980573 .069738C3.019676 .069738 3.263761-.753176 3.263761-.836862S3.173101-.920548 3.145205-.920548C3.054545-.920548 3.047572-.899626 3.012702-.801993C2.859278-.369614 2.489664-.153425 2.064259-.153425C1.583064-.153425 .955417-.509091 .955417-1.513325C.955417-2.399004 1.387796-2.887173 2.036364-2.887173C2.127024-2.887173 2.461768-2.887173 2.712827-2.782565Z"></path>
+<path id="tz_shell_vs_lista_g4-100" d="M2.48269-4.763138V-4.51208C2.949938-4.51208 3.005729-4.463263 3.005729-4.121544V-2.677958C2.747696-2.929016 2.412951-3.075467 2.02939-3.075467C1.101868-3.075467 .320797-2.378082 .320797-1.499377C.320797-.627646 1.060025 .069738 1.945704 .069738C2.517559 .069738 2.859278-.237111 2.977833-.36264V.069738L4.051806 0V-.251059C3.584558-.251059 3.528767-.299875 3.528767-.641594V-4.839851L2.48269-4.763138ZM2.977833-.732254C2.796513-.404483 2.440847-.125529 1.987547-.125529C1.597011-.125529 1.318057-.355666 1.17858-.557908C1.039103-.767123 .955417-1.046077 .955417-1.492403C.955417-1.652802 .955417-2.175841 1.241345-2.503611C1.520299-2.817435 1.862017-2.880199 2.064259-2.880199C2.399004-2.880199 2.698879-2.726775 2.894147-2.475716C2.977833-2.364134 2.977833-2.357161 2.977833-2.224658V-.732254Z"></path>
+<path id="tz_shell_vs_lista_g4-101" d="M3.068493-1.590037C3.214944-1.590037 3.263761-1.590037 3.263761-1.743462C3.263761-2.357161 2.922042-3.110336 1.882939-3.110336C.969365-3.110336 .27198-2.385056 .27198-1.527273C.27198-.641594 1.046077 .069738 1.973599 .069738C2.915068 .069738 3.263761-.683437 3.263761-.836862C3.263761-.864757 3.249813-.934496 3.145205-.934496C3.054545-.934496 3.040598-.892653 3.019676-.822914C2.803487-.258032 2.273474-.153425 2.022416-.153425C1.694645-.153425 1.380822-.299875 1.171606-.564882C.913574-.892653 .9066-1.318057 .9066-1.590037H3.068493ZM.913574-1.771357C.990286-2.75467 1.617933-2.915068 1.882939-2.915068C2.740722-2.915068 2.768618-1.945704 2.775592-1.771357H.913574Z"></path>
+<path id="tz_shell_vs_lista_g4-102" d="M1.436613-2.75467H2.308344V-3.005729H1.408717V-3.7868C1.408717-4.42142 1.785305-4.714321 2.085181-4.714321C2.147945-4.714321 2.217684-4.700374 2.287422-4.679452C2.189788-4.623661 2.133998-4.51208 2.133998-4.400498C2.133998-4.212204 2.266501-4.079701 2.454795-4.079701S2.775592-4.212204 2.775592-4.400498C2.775592-4.700374 2.475716-4.909589 2.092154-4.909589C1.54122-4.909589 .913574-4.519054 .913574-3.7868V-3.005729H.313823V-2.75467H.913574V-.550934C.913574-.251059 .843836-.251059 .390535-.251059V0C.425405 0 .899626-.027895 1.185554-.027895C1.48543-.027895 1.792279-.013948 2.092154 0V-.251059H1.952677C1.436613-.251059 1.436613-.327771 1.436613-.564882V-2.75467Z"></path>
+<path id="tz_shell_vs_lista_g4-103" d="M1.004234-1.241345C1.108842-1.17858 1.3599-1.025156 1.764384-1.025156C2.48269-1.025156 3.005729-1.506351 3.005729-2.050311C3.005729-2.322291 2.880199-2.538481 2.712827-2.719801C3.02665-2.942964 3.29863-2.949938 3.417186-2.949938C3.38929-2.922042 3.354421-2.894147 3.354421-2.782565C3.354421-2.643088 3.459029-2.559402 3.577584-2.559402C3.675218-2.559402 3.800747-2.629141 3.800747-2.789539S3.668244-3.145205 3.38929-3.145205C3.284682-3.145205 2.908095-3.124284 2.580324-2.824408C2.371108-2.977833 2.078207-3.075467 1.771357-3.075467C1.053051-3.075467 .530012-2.594271 .530012-2.050311C.530012-1.778331 .669489-1.527273 .864757-1.345953C.808966-1.283188 .655542-1.053051 .655542-.781071C.655542-.690411 .676463-.36264 .948443-.160399C.63462-.055791 .27198 .174346 .27198 .536986C.27198 1.046077 1.039103 1.429639 1.980573 1.429639C2.866252 1.429639 3.689166 1.080946 3.689166 .523039C3.689166 .313823 3.605479-.062765 3.221918-.27198C2.810461-.488169 2.399004-.488169 1.72254-.488169C1.569116-.488169 1.318057-.488169 1.262267-.495143C1.039103-.54396 .913574-.753176 .913574-.955417C.913574-1.129763 .962391-1.185554 1.004234-1.241345ZM1.771357-1.234371C1.08792-1.234371 1.08792-1.903861 1.08792-2.050311C1.08792-2.161893 1.08792-2.440847 1.227397-2.622167C1.325031-2.740722 1.513325-2.866252 1.764384-2.866252C2.447821-2.866252 2.447821-2.196762 2.447821-2.050311C2.447821-1.93873 2.447821-1.659776 2.308344-1.478456C2.21071-1.3599 2.022416-1.234371 1.771357-1.234371ZM1.771357-.020922C2.39203-.020922 3.263761-.020922 3.263761 .530012C3.263761 .899626 2.712827 1.220423 1.980573 1.220423S.697385 .892653 .697385 .530012C.697385 .285928 .920548-.013948 1.366874-.020922H1.771357Z"></path>
+<path id="tz_shell_vs_lista_g4-105" d="M1.471482-4.302864C1.471482-4.505106 1.30411-4.700374 1.066999-4.700374C.857783-4.700374 .669489-4.533001 .669489-4.302864C.669489-4.051806 .871731-3.898381 1.066999-3.898381C1.290162-3.898381 1.471482-4.072727 1.471482-4.302864ZM.411457-2.998755V-2.747696C.850809-2.747696 .913574-2.705853 .913574-2.364134V-.550934C.913574-.251059 .843836-.251059 .390535-.251059V0C.404483 0 .892653-.027895 1.171606-.027895C1.415691-.027895 1.66675-.020922 1.910834 0V-.251059C1.506351-.251059 1.436613-.251059 1.436613-.54396V-3.075467L.411457-2.998755Z"></path>
+<path id="tz_shell_vs_lista_g4-108" d="M1.436613-4.839851L.390535-4.763138V-4.51208C.857783-4.51208 .913574-4.463263 .913574-4.121544V-.550934C.913574-.251059 .843836-.251059 .390535-.251059V0C.404483 0 .892653-.027895 1.171606-.027895C1.436613-.027895 1.694645-.020922 1.959651 0V-.251059C1.506351-.251059 1.436613-.251059 1.436613-.550934V-4.839851Z"></path>
+<path id="tz_shell_vs_lista_g4-109" d="M5.732503-2.113076C5.732503-2.719801 5.432628-3.075467 4.686426-3.075467C4.135492-3.075467 3.758904-2.775592 3.57061-2.426899C3.431133-2.922042 3.054545-3.075467 2.545455-3.075467C1.973599-3.075467 1.603985-2.761644 1.408717-2.399004H1.401743V-3.075467L.376588-2.998755V-2.747696C.843836-2.747696 .899626-2.698879 .899626-2.357161V-.550934C.899626-.251059 .829888-.251059 .376588-.251059V0C.390535 0 .878705-.027895 1.171606-.027895C1.429639-.027895 1.910834-.006974 1.973599 0V-.251059C1.520299-.251059 1.45056-.251059 1.45056-.550934V-1.806227C1.45056-2.538481 2.02939-2.880199 2.489664-2.880199C2.977833-2.880199 3.040598-2.496638 3.040598-2.140971V-.550934C3.040598-.251059 2.970859-.251059 2.517559-.251059V0C2.531507 0 3.019676-.027895 3.312578-.027895C3.57061-.027895 4.051806-.006974 4.11457 0V-.251059C3.66127-.251059 3.591532-.251059 3.591532-.550934V-1.806227C3.591532-2.538481 4.170361-2.880199 4.630635-2.880199C5.118804-2.880199 5.181569-2.496638 5.181569-2.140971V-.550934C5.181569-.251059 5.111831-.251059 4.658531-.251059V0C4.672478 0 5.160648-.027895 5.453549-.027895C5.711582-.027895 6.192777-.006974 6.255542 0V-.251059C5.802242-.251059 5.732503-.251059 5.732503-.550934V-2.113076Z"></path>
+<path id="tz_shell_vs_lista_g4-110" d="M3.591532-2.113076C3.591532-2.719801 3.291656-3.075467 2.545455-3.075467C1.973599-3.075467 1.603985-2.761644 1.408717-2.399004H1.401743V-3.075467L.376588-2.998755V-2.747696C.843836-2.747696 .899626-2.698879 .899626-2.357161V-.550934C.899626-.251059 .829888-.251059 .376588-.251059V0C.390535 0 .878705-.027895 1.171606-.027895C1.429639-.027895 1.910834-.006974 1.973599 0V-.251059C1.520299-.251059 1.45056-.251059 1.45056-.550934V-1.806227C1.45056-2.538481 2.02939-2.880199 2.489664-2.880199C2.977833-2.880199 3.040598-2.496638 3.040598-2.140971V-.550934C3.040598-.251059 2.970859-.251059 2.517559-.251059V0C2.531507 0 3.019676-.027895 3.312578-.027895C3.57061-.027895 4.051806-.006974 4.11457 0V-.251059C3.66127-.251059 3.591532-.251059 3.591532-.550934V-2.113076Z"></path>
+<path id="tz_shell_vs_lista_g4-111" d="M3.689166-1.48543C3.689166-2.357161 2.942964-3.110336 1.980573-3.110336S.27198-2.357161 .27198-1.48543C.27198-.620672 1.039103 .069738 1.980573 .069738S3.689166-.620672 3.689166-1.48543ZM1.980573-.153425C1.72254-.153425 1.345953-.237111 1.115816-.578829C.927522-.864757 .9066-1.227397 .9066-1.548194C.9066-1.84807 .913574-2.259527 1.157659-2.559402C1.332005-2.761644 1.624907-2.915068 1.980573-2.915068C2.39203-2.915068 2.684932-2.719801 2.838356-2.503611C3.033624-2.231631 3.054545-1.882939 3.054545-1.548194S3.033624-.843836 2.831382-.557908C2.643088-.292902 2.322291-.153425 1.980573-.153425Z"></path>
+<path id="tz_shell_vs_lista_g4-112" d="M1.93873 1.101868C1.48543 1.101868 1.415691 1.101868 1.415691 .801993V-.334745C1.45056-.299875 1.778331 .069738 2.364134 .069738C3.284682 .069738 4.072727-.620672 4.072727-1.506351C4.072727-2.364134 3.361395-3.075467 2.475716-3.075467C2.078207-3.075467 1.673724-2.929016 1.387796-2.650062V-3.075467L.341719-2.998755V-2.747696C.829888-2.747696 .864757-2.712827 .864757-2.419925V.801993C.864757 1.101868 .795019 1.101868 .341719 1.101868V1.352927C.355666 1.352927 .843836 1.325031 1.136737 1.325031C1.39477 1.325031 1.875965 1.345953 1.93873 1.352927V1.101868ZM1.415691-2.322291C1.624907-2.670984 2.02939-2.852304 2.399004-2.852304C2.984807-2.852304 3.438107-2.238605 3.438107-1.506351C3.438107-.711333 2.915068-.125529 2.322291-.125529C1.708593-.125529 1.436613-.662516 1.415691-.704359V-2.322291Z"></path>
+<path id="tz_shell_vs_lista_g4-113" d="M3.528767-3.075467H3.319552L3.068493-2.468742C2.852304-2.803487 2.503611-3.075467 2.008468-3.075467C1.108842-3.075467 .320797-2.39203 .320797-1.499377C.320797-.627646 1.066999 .069738 1.945704 .069738C2.503611 .069738 2.803487-.230137 2.977833-.404483V.801993C2.977833 1.101868 2.908095 1.101868 2.454795 1.101868V1.352927C2.468742 1.352927 2.956912 1.325031 3.249813 1.325031C3.507846 1.325031 3.989041 1.345953 4.051806 1.352927V1.101868C3.598506 1.101868 3.528767 1.101868 3.528767 .801993V-3.075467ZM3.005729-1.004234C3.005729-.878705 3.005729-.850809 2.901121-.669489C2.691905-.327771 2.343213-.125529 1.987547-.125529C1.408717-.125529 .955417-.753176 .955417-1.492403C.955417-2.308344 1.506351-2.852304 2.064259-2.852304C2.650062-2.852304 3.005729-2.280448 3.005729-1.889913V-1.004234Z"></path>
+<path id="tz_shell_vs_lista_g4-114" d="M1.387796-1.590037C1.387796-2.175841 1.659776-2.880199 2.322291-2.880199C2.259527-2.831382 2.203736-2.740722 2.203736-2.629141C2.203736-2.399004 2.385056-2.308344 2.517559-2.308344C2.684932-2.308344 2.838356-2.419925 2.838356-2.629141C2.838356-2.866252 2.615193-3.075467 2.287422-3.075467C1.93873-3.075467 1.555168-2.859278 1.345953-2.329265H1.338979V-3.075467L.341719-2.998755V-2.747696C.808966-2.747696 .864757-2.698879 .864757-2.357161V-.550934C.864757-.251059 .795019-.251059 .341719-.251059V0C.376588 0 .850809-.027895 1.136737-.027895C1.436613-.027895 1.743462-.013948 2.043337 0V-.251059H1.903861C1.387796-.251059 1.387796-.327771 1.387796-.564882V-1.590037Z"></path>
+<path id="tz_shell_vs_lista_g4-115" d="M2.643088-2.929016C2.643088-3.047572 2.643088-3.110336 2.545455-3.110336C2.510585-3.110336 2.496638-3.110336 2.405978-3.02665C2.39203-3.019676 2.322291-2.956912 2.280448-2.922042C2.071233-3.068493 1.806227-3.110336 1.548194-3.110336C.550934-3.110336 .313823-2.587298 .313823-2.238605C.313823-2.015442 .411457-1.834122 .578829-1.694645C.843836-1.464508 1.108842-1.415691 1.54122-1.345953C1.889913-1.283188 2.454795-1.185554 2.454795-.718306C2.454795-.446326 2.266501-.125529 1.597011-.125529S.683437-.564882 .557908-1.039103C.536986-1.129763 .530012-1.157659 .432379-1.157659C.313823-1.157659 .313823-1.108842 .313823-.969365V-.111582C.313823 .006974 .313823 .069738 .411457 .069738C.474222 .069738 .606725-.076712 .746202-.230137C1.053051 .055791 1.429639 .069738 1.597011 .069738C2.503611 .069738 2.838356-.418431 2.838356-.913574C2.838356-1.17858 2.719801-1.387796 2.538481-1.555168C2.273474-1.799253 1.952677-1.855044 1.708593-1.896887C1.150685-1.994521 .697385-2.078207 .697385-2.447821C.697385-2.670984 .885679-2.942964 1.548194-2.942964C2.357161-2.942964 2.39203-2.378082 2.405978-2.175841C2.412951-2.099128 2.496638-2.099128 2.524533-2.099128C2.643088-2.099128 2.643088-2.147945 2.643088-2.280448V-2.929016Z"></path>
+<path id="tz_shell_vs_lista_g4-116" d="M1.401743-2.75467H2.489664V-3.005729H1.401743V-4.288917H1.164633C1.157659-3.66127 .871731-2.970859 .202242-2.949938V-2.75467H.850809V-.871731C.850809-.09066 1.436613 .069738 1.827148 .069738C2.294396 .069738 2.615193-.327771 2.615193-.878705V-1.262267H2.378082V-.885679C2.378082-.411457 2.154919-.153425 1.882939-.153425C1.401743-.153425 1.401743-.739228 1.401743-.864757V-2.75467Z"></path>
+<path id="tz_shell_vs_lista_g4-117" d="M2.517559-2.998755V-2.747696C2.984807-2.747696 3.040598-2.698879 3.040598-2.357161V-1.164633C3.040598-.550934 2.643088-.125529 2.113076-.125529C1.478456-.125529 1.45056-.425405 1.45056-.781071V-3.075467L.376588-2.998755V-2.747696C.899626-2.747696 .899626-2.726775 .899626-2.106102V-1.060025C.899626-.578829 .899626 .069738 2.064259 .069738C2.217684 .069738 2.726775 .069738 3.061519-.516065H3.068493V.069738L4.11457 0V-.251059C3.647323-.251059 3.591532-.299875 3.591532-.641594V-3.075467L2.517559-2.998755Z"></path>
+<path id="tz_shell_vs_lista_g4-118" d="M3.305604-2.322291C3.500872-2.747696 3.849564-2.75467 3.961146-2.75467V-3.005729C3.7868-2.991781 3.605479-2.977833 3.431133-2.977833C3.242839-2.977833 2.984807-2.984807 2.796513-3.005729V-2.75467C3.089415-2.740722 3.089415-2.510585 3.089415-2.489664C3.089415-2.454795 3.082441-2.385056 3.033624-2.287422L2.245579-.564882L1.380822-2.461768C1.380822-2.468742 1.338979-2.545455 1.338979-2.594271C1.338979-2.75467 1.57609-2.75467 1.694645-2.75467V-3.005729C1.680697-3.005729 1.185554-2.977833 .899626-2.977833C.690411-2.977833 .418431-2.984807 .216189-3.005729V-2.75467C.599751-2.75467 .683437-2.740722 .788045-2.503611L1.889913-.076712C1.924782 .006974 1.966625 .069738 2.085181 .069738C2.217684 .069738 2.245579 .006974 2.280448-.069738L3.305604-2.322291Z"></path>
+<path id="tz_shell_vs_lista_g4-120" d="M2.364134-1.562142C2.357161-1.569116 2.308344-1.624907 2.308344-1.63188C2.308344-1.652802 2.768618-2.147945 2.831382-2.21071C3.075467-2.48269 3.319552-2.747696 3.870486-2.75467V-3.005729C3.675218-2.991781 3.472976-2.977833 3.284682-2.977833C3.075467-2.977833 2.803487-2.984807 2.594271-3.005729V-2.75467C2.712827-2.733748 2.733748-2.657036 2.733748-2.594271C2.733748-2.580324 2.733748-2.475716 2.629141-2.357161L2.140971-1.806227L1.562142-2.468742C1.492403-2.545455 1.48543-2.580324 1.48543-2.608219C1.48543-2.712827 1.583064-2.75467 1.673724-2.75467V-3.005729C1.415691-2.984807 1.150685-2.977833 .892653-2.977833C.683437-2.977833 .418431-2.984807 .216189-3.005729V-2.75467C.536986-2.75467 .718306-2.75467 .899626-2.545455L1.771357-1.54122C1.778331-1.534247 1.827148-1.478456 1.827148-1.471482C1.827148-1.45056 1.30411-.878705 1.234371-.801993C.976339-.523039 .739228-.265006 .18132-.251059V0C.390535-.013948 .54396-.027895 .760149-.027895C.969365-.027895 1.248319-.020922 1.457534 0V-.251059C1.373848-.265006 1.318057-.313823 1.318057-.411457C1.318057-.54396 1.39477-.63462 1.506351-.753176L1.994521-1.290162L2.601245-.599751C2.733748-.4533 2.733748-.439352 2.733748-.397509C2.733748-.258032 2.57335-.251059 2.545455-.251059V0C2.608219-.006974 3.110336-.027895 3.333499-.027895S3.779826-.020922 4.002989 0V-.251059C3.535741-.251059 3.47995-.292902 3.319552-.474222L2.364134-1.562142Z"></path>
+<path id="tz_shell_vs_lista_g4-124" d="M7.824658-1.75741V-1.952677H.111582V-1.75741H7.824658Z"></path>
+</defs>
+<g id="tz_shell_vs_lista_page1">
+<g stroke-miterlimit="10" transform="translate(-28.330102,34.032413)scale(0.996264,-0.996264)">
+<g fill="#000" stroke="#000">
+<g stroke-width="0.4">
+<g fill="#972f29" stroke="#972f29">
+<g fill="#972f29" stroke="#972f29">
+</g>
+<g transform="translate(23.13925,88.79869)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#972f29">
+<g stroke="none">
+<g fill="#972f29">
+<use x="-28.330102" y="34.032413" href="#tz_shell_vs_lista_g2-115"></use>
+<use x="-24.145002" y="34.032413" href="#tz_shell_vs_lista_g2-104"></use>
+<use x="-18.250514" y="34.032413" href="#tz_shell_vs_lista_g2-101"></use>
+<use x="-13.382009" y="34.032413" href="#tz_shell_vs_lista_g2-108"></use>
+<use x="-10.434761" y="34.032413" href="#tz_shell_vs_lista_g2-108"></use>
+<use x="-7.487512" y="34.032413" href="#tz_shell_vs_lista_g2-61"></use>
+<use x=".764778" y="34.032413" href="#tz_shell_vs_lista_g2-84"></use>
+<use x="7.26114" y="34.032413" href="#tz_shell_vs_lista_g2-114"></use>
+<use x="11.637765" y="34.032413" href="#tz_shell_vs_lista_g2-117"></use>
+<use x="17.532254" y="34.032413" href="#tz_shell_vs_lista_g2-101"></use>
+<use x="25.937453" y="34.032413" href="#tz_shell_vs_lista_g2-40"></use>
+<use x="30.063594" y="34.032413" href="#tz_shell_vs_lista_g2-105"></use>
+<use x="33.010842" y="34.032413" href="#tz_shell_vs_lista_g2-110"></use>
+<use x="38.905331" y="34.032413" href="#tz_shell_vs_lista_g2-115"></use>
+<use x="43.090431" y="34.032413" href="#tz_shell_vs_lista_g2-101"></use>
+<use x="47.958936" y="34.032413" href="#tz_shell_vs_lista_g2-103"></use>
+<use x="53.263978" y="34.032413" href="#tz_shell_vs_lista_g2-117"></use>
+<use x="59.158466" y="34.032413" href="#tz_shell_vs_lista_g2-114"></use>
+<use x="63.535091" y="34.032413" href="#tz_shell_vs_lista_g2-111"></use>
+<use x="68.840133" y="34.032413" href="#tz_shell_vs_lista_g2-41"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#1f5b0c" stroke="#1f5b0c">
+<g fill="#1f5b0c" stroke="#1f5b0c">
+</g>
+<g transform="translate(229.36803,88.79869)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#1f5b0c">
+<g stroke="none">
+<g fill="#205b0c">
+<use x="-28.330102" y="34.032413" href="#tz_shell_vs_lista_g2-108"></use>
+<use x="-25.382854" y="34.032413" href="#tz_shell_vs_lista_g2-105"></use>
+<use x="-22.435606" y="34.032413" href="#tz_shell_vs_lista_g2-115"></use>
+<use x="-18.250506" y="34.032413" href="#tz_shell_vs_lista_g2-116"></use>
+<use x="-14.124365" y="34.032413" href="#tz_shell_vs_lista_g2-97"></use>
+<use x="-5.429996" y="34.032413" href="#tz_shell_vs_lista_g2-100"></use>
+<use x=".464492" y="34.032413" href="#tz_shell_vs_lista_g2-101"></use>
+<use x="8.869692" y="34.032413" href="#tz_shell_vs_lista_g2-97"></use>
+<use x="14.027366" y="34.032413" href="#tz_shell_vs_lista_g2-114"></use>
+<use x="18.403991" y="34.032413" href="#tz_shell_vs_lista_g2-103"></use>
+<use x="23.709033" y="34.032413" href="#tz_shell_vs_lista_g2-117"></use>
+<use x="29.603522" y="34.032413" href="#tz_shell_vs_lista_g2-109"></use>
+<use x="38.445258" y="34.032413" href="#tz_shell_vs_lista_g2-101"></use>
+<use x="43.313763" y="34.032413" href="#tz_shell_vs_lista_g2-110"></use>
+<use x="48.913504" y="34.032413" href="#tz_shell_vs_lista_g2-116"></use>
+<use x="53.039645" y="34.032413" href="#tz_shell_vs_lista_g2-111"></use>
+<use x="58.344687" y="34.032413" href="#tz_shell_vs_lista_g2-115"></use>
+<use x="66.066482" y="34.032413" href="#tz_shell_vs_lista_g2-40"></use>
+<use x="70.192623" y="34.032413" href="#tz_shell_vs_lista_g2-115"></use>
+<use x="74.377723" y="34.032413" href="#tz_shell_vs_lista_g2-101"></use>
+<use x="79.246227" y="34.032413" href="#tz_shell_vs_lista_g2-103"></use>
+<use x="84.551269" y="34.032413" href="#tz_shell_vs_lista_g2-117"></use>
+<use x="90.445758" y="34.032413" href="#tz_shell_vs_lista_g2-114"></use>
+<use x="94.822383" y="34.032413" href="#tz_shell_vs_lista_g2-111"></use>
+<use x="100.127425" y="34.032413" href="#tz_shell_vs_lista_g2-41"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#e2e4e5">
+<g fill="#e2e4e5">
+<path d="M144.44215 76.82231H3.51244C1.30327 76.82231-.48756 75.03148-.48756 72.82231V52.36958C-.48756 50.16042 1.30327 48.36958 3.51244 48.36958H144.44215C146.65132 48.36958 148.44215 50.16042 148.44215 52.36958V72.82231C148.44215 75.03148 146.65132 76.82231 144.44215 76.82231ZM-.48756 48.36958"></path>
+</g>
+<g transform="translate(2.84541,60.84595)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="-28.330102" y="34.032413" href="#tz_shell_vs_lista_g1-102"></use>
+<use x="-24.625192" y="34.032413" href="#tz_shell_vs_lista_g1-34"></use>
+<use x="-20.920282" y="34.032413" href="#tz_shell_vs_lista_g1-119"></use>
+<use x="-17.215372" y="34.032413" href="#tz_shell_vs_lista_g1-99"></use>
+<use x="-11.040796" y="34.032413" href="#tz_shell_vs_lista_g1-45"></use>
+<use x="-7.335886" y="34.032413" href="#tz_shell_vs_lista_g1-108"></use>
+<use x="-1.16131" y="34.032413" href="#tz_shell_vs_lista_g3-102"></use>
+<use x="2.920626" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="6.625536" y="34.032413" href="#tz_shell_vs_lista_g1-110"></use>
+<use x="10.330446" y="34.032413" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="14.035356" y="34.032413" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="17.740266" y="34.032413" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="21.445176" y="34.032413" href="#tz_shell_vs_lista_g1-100"></use>
+<use x="25.150086" y="34.032413" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="28.854996" y="34.032413" href="#tz_shell_vs_lista_g3-103"></use>
+<use x="32.936932" y="34.032413" href="#tz_shell_vs_lista_g1-34"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#f7dad8">
+<g fill="#f7dad8">
+<path d="M135.90623 33.43205H12.04836C9.83919 33.43205 8.04836 31.64122 8.04836 29.43205V4.71156C8.04836 2.5024 9.83919 .71156 12.04836 .71156H135.90623C138.1154 .71156 139.90623 2.5024 139.90623 4.71156V29.43205C139.90623 31.64122 138.1154 33.43205 135.90623 33.43205ZM8.04836 .71156"></path>
+</g>
+<g transform="translate(11.38133,19.32181)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="2.566" y="34.032413" href="#tz_shell_vs_lista_g1-47"></use>
+<use x="6.27091" y="34.032413" href="#tz_shell_vs_lista_g1-98"></use>
+<use x="9.97582" y="34.032413" href="#tz_shell_vs_lista_g1-105"></use>
+<use x="13.68073" y="34.032413" href="#tz_shell_vs_lista_g1-110"></use>
+<use x="17.38564" y="34.032413" href="#tz_shell_vs_lista_g1-47"></use>
+<use x="21.09055" y="34.032413" href="#tz_shell_vs_lista_g1-115"></use>
+<use x="24.79546" y="34.032413" href="#tz_shell_vs_lista_g1-104"></use>
+<use x="31.147563" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="33.403008" y="34.032413" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="37.588716" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="40.702059" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="44.244351" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="47.357694" y="34.032413" href="#tz_shell_vs_lista_g4-112"></use>
+<use x="51.757883" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="54.871226" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="58.413518" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="61.526861" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="8.175914" y="42.002525" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="14.794347" y="42.002525" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="17.950588" y="42.002525" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="21.063931" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="24.177274" y="42.002525" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="26.43272" y="42.002525" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="30.832909" y="42.002525" href="#tz_shell_vs_lista_g4-103"></use>
+<use x="37.451342" y="42.002525" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="39.706788" y="42.002525" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="43.892495" y="42.002525" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="47.005838" y="42.002525" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="50.54813" y="42.002525" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="52.803575" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="55.916918" y="42.002525" href="#tz_shell_vs_lista_g4-97"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#f5d0ce">
+<g fill="#f5d0ce">
+<path d="M135.90623-17.78296H12.04836C9.83919-17.78296 8.04836-19.57379 8.04836-21.78296V-46.50345C8.04836-48.71262 9.83919-50.50345 12.04836-50.50345H135.90623C138.1154-50.50345 139.90623-48.71262 139.90623-46.50345V-21.78296C139.90623-19.57379 138.1154-17.78296 135.90623-17.78296ZM8.04836-50.50345"></path>
+</g>
+<g transform="translate(11.38133,-32.57375)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="1.512912" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="8.131345" y="34.032413" href="#tz_shell_vs_lista_g1-59"></use>
+<use x="14.483448" y="34.032413" href="#tz_shell_vs_lista_g4-118"></use>
+<use x="18.669169" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="20.924615" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="24.037958" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="30.656391" y="34.032413" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="33.812632" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="37.354924" y="34.032413" href="#tz_shell_vs_lista_g4-112"></use>
+<use x="41.755113" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="45.726353" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="48.839696" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="52.810937" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="57.211126" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="61.182367" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="64.29571" y="34.032413" href="#tz_shell_vs_lista_g4-58"></use>
+<use x="5.639101" y="42.002525" href="#tz_shell_vs_lista_g0-100"></use>
+<use x="10.648089" y="42.002525" href="#tz_shell_vs_lista_g0-111"></use>
+<use x="15.161714" y="42.002525" href="#tz_shell_vs_lista_g0-105"></use>
+<use x="17.693872" y="42.002525" href="#tz_shell_vs_lista_g0-115"></use>
+<use x="23.913498" y="42.002525" href="#tz_shell_vs_lista_g0-99"></use>
+<use x="27.931753" y="42.002525" href="#tz_shell_vs_lista_g0-111"></use>
+<use x="32.445378" y="42.002525" href="#tz_shell_vs_lista_g0-109"></use>
+<use x="39.93119" y="42.002525" href="#tz_shell_vs_lista_g0-97"></use>
+<use x="44.320964" y="42.002525" href="#tz_shell_vs_lista_g0-110"></use>
+<use x="49.329952" y="42.002525" href="#tz_shell_vs_lista_g0-100"></use>
+<use x="54.33894" y="42.002525" href="#tz_shell_vs_lista_g0-111"></use>
+<use x="58.852565" y="42.002525" href="#tz_shell_vs_lista_g0-115"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#f3c7c4">
+<g fill="#f3c7c4">
+<path d="M135.90623-68.99799H12.04836C9.83919-68.99799 8.04836-70.78882 8.04836-72.99799V-97.71848C8.04836-99.92764 9.83919-101.71848 12.04836-101.71848H135.90623C138.1154-101.71848 139.90623-99.92764 139.90623-97.71848V-72.99799C139.90623-70.78882 138.1154-68.99799 135.90623-68.99799ZM8.04836-101.71848"></path>
+</g>
+<g transform="translate(11.38133,-83.49712)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="-.106853" y="34.032413" href="#tz_shell_vs_lista_g1-119"></use>
+<use x="3.598057" y="34.032413" href="#tz_shell_vs_lista_g1-99"></use>
+<use x="9.950159" y="34.032413" href="#tz_shell_vs_lista_g1-45"></use>
+<use x="13.655069" y="34.032413" href="#tz_shell_vs_lista_g1-108"></use>
+<use x="20.007172" y="34.032413" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="23.712082" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="27.416992" y="34.032413" href="#tz_shell_vs_lista_g1-108"></use>
+<use x="31.121902" y="34.032413" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="34.826812" y="34.032413" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="38.531722" y="34.032413" href="#tz_shell_vs_lista_g1-111"></use>
+<use x="42.236632" y="34.032413" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="45.941542" y="34.032413" href="#tz_shell_vs_lista_g1-105"></use>
+<use x="49.646452" y="34.032413" href="#tz_shell_vs_lista_g1-111"></use>
+<use x="53.351362" y="34.032413" href="#tz_shell_vs_lista_g1-46"></use>
+<use x="57.056272" y="34.032413" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="60.761182" y="34.032413" href="#tz_shell_vs_lista_g1-120"></use>
+<use x="64.466092" y="34.032413" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="6.774097" y="42.002525" href="#tz_shell_vs_lista_g1-99"></use>
+<use x="10.479007" y="42.002525" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="14.183917" y="42.002525" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="20.536019" y="42.002525" href="#tz_shell_vs_lista_g1-83"></use>
+<use x="24.240929" y="42.002525" href="#tz_shell_vs_lista_g1-69"></use>
+<use x="27.945839" y="42.002525" href="#tz_shell_vs_lista_g1-71"></use>
+<use x="31.650749" y="42.002525" href="#tz_shell_vs_lista_g1-82"></use>
+<use x="35.355659" y="42.002525" href="#tz_shell_vs_lista_g1-69"></use>
+<use x="39.060569" y="42.002525" href="#tz_shell_vs_lista_g1-68"></use>
+<use x="42.765479" y="42.002525" href="#tz_shell_vs_lista_g1-79"></use>
+<use x="46.470389" y="42.002525" href="#tz_shell_vs_lista_g1-46"></use>
+<use x="50.175299" y="42.002525" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="53.880209" y="42.002525" href="#tz_shell_vs_lista_g1-120"></use>
+<use x="57.585119" y="42.002525" href="#tz_shell_vs_lista_g1-116"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#e2e4e5">
+<g fill="#e2e4e5">
+<path d="M366.37321 76.82231H225.4435C223.23433 76.82231 221.4435 75.03148 221.4435 72.82231V52.36958C221.4435 50.16042 223.23433 48.36958 225.4435 48.36958H366.37321C368.58238 48.36958 370.37321 50.16042 370.37321 52.36958V72.82231C370.37321 75.03148 368.58238 76.82231 366.37321 76.82231ZM221.4435 48.36958"></path>
+</g>
+<g transform="translate(224.77647,60.6515)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="-28.330102" y="34.032413" href="#tz_shell_vs_lista_g1-91"></use>
+<use x="-24.625192" y="34.032413" href="#tz_shell_vs_lista_g1-34"></use>
+<use x="-20.920282" y="34.032413" href="#tz_shell_vs_lista_g1-119"></use>
+<use x="-17.215372" y="34.032413" href="#tz_shell_vs_lista_g1-99"></use>
+<use x="-13.510462" y="34.032413" href="#tz_shell_vs_lista_g1-34"></use>
+<use x="-9.805552" y="34.032413" href="#tz_shell_vs_lista_g1-44"></use>
+<use x="-3.630976" y="34.032413" href="#tz_shell_vs_lista_g1-34"></use>
+<use x=".073934" y="34.032413" href="#tz_shell_vs_lista_g1-45"></use>
+<use x="3.778844" y="34.032413" href="#tz_shell_vs_lista_g1-108"></use>
+<use x="7.483754" y="34.032413" href="#tz_shell_vs_lista_g1-34"></use>
+<use x="11.188664" y="34.032413" href="#tz_shell_vs_lista_g1-44"></use>
+<use x="17.36324" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="21.06815" y="34.032413" href="#tz_shell_vs_lista_g1-110"></use>
+<use x="24.77306" y="34.032413" href="#tz_shell_vs_lista_g1-116"></use>
+<use x="28.47797" y="34.032413" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="32.18288" y="34.032413" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="35.88779" y="34.032413" href="#tz_shell_vs_lista_g1-100"></use>
+<use x="39.5927" y="34.032413" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="43.29761" y="34.032413" href="#tz_shell_vs_lista_g1-93"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#d9f1d1">
+<g fill="#d9f1d1">
+<path d="M357.8373 33.43205H233.97942C231.77025 33.43205 229.97942 31.64122 229.97942 29.43205V4.71156C229.97942 2.5024 231.77025 .71156 233.97942 .71156H357.8373C360.04646 .71156 361.8373 2.5024 361.8373 4.71156V29.43205C361.8373 31.64122 360.04646 33.43205 357.8373 33.43205ZM229.97942 .71156"></path>
+</g>
+<g transform="translate(233.3124,19.32181)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="10.268074" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="13.972984" y="34.032413" href="#tz_shell_vs_lista_g1-120"></use>
+<use x="17.677894" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="21.382804" y="34.032413" href="#tz_shell_vs_lista_g1-99"></use>
+<use x="25.087714" y="34.032413" href="#tz_shell_vs_lista_g1-118"></use>
+<use x="28.792624" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="35.144727" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="39.544916" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="41.800362" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="44.913705" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="48.455997" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="51.56934" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="55.54058" y="34.032413" href="#tz_shell_vs_lista_g4-44"></use>
+<use x="3.169055" y="42.002525" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="6.325295" y="42.002525" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="9.867587" y="42.002525" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="19.059713" y="42.002525" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="21.315158" y="42.002525" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="25.500865" y="42.002525" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="28.614209" y="42.002525" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="32.1565" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="35.269843" y="42.002525" href="#tz_shell_vs_lista_g4-112"></use>
+<use x="39.670033" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="42.783376" y="42.002525" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="46.325667" y="42.002525" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="49.439011" y="42.002525" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="53.410251" y="42.002525" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="57.81044" y="42.002525" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="61.781681" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#cfedc6">
+<g fill="#cfedc6">
+<path d="M357.8373-17.78296H233.97942C231.77025-17.78296 229.97942-19.57379 229.97942-21.78296V-46.50345C229.97942-48.71262 231.77025-50.50345 233.97942-50.50345H357.8373C360.04646-50.50345 361.8373-48.71262 361.8373-46.50345V-21.78296C361.8373-19.57379 360.04646-17.78296 357.8373-17.78296ZM229.97942-50.50345"></path>
+</g>
+<g transform="translate(233.3124,-31.79597)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="8.951478" y="34.032413" href="#tz_shell_vs_lista_g4-99"></use>
+<use x="12.49377" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="16.465011" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="20.8652" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="27.483633" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="29.739079" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="32.852422" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="36.394714" y="34.032413" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="45.586839" y="34.032413" href="#tz_shell_vs_lista_g4-118"></use>
+<use x="49.77256" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="52.028006" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="55.141349" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="8.249186" y="42.002525" href="#tz_shell_vs_lista_g4-117"></use>
+<use x="12.649376" y="42.002525" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="21.841501" y="42.002525" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="25.546411" y="42.002525" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="29.251321" y="42.002525" href="#tz_shell_vs_lista_g1-103"></use>
+<use x="32.956231" y="42.002525" href="#tz_shell_vs_lista_g1-118"></use>
+<use x="39.308334" y="42.002525" href="#tz_shell_vs_lista_g4-108"></use>
+<use x="41.563779" y="42.002525" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="43.819225" y="42.002525" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="46.932568" y="42.002525" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="50.47486" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="53.588203" y="42.002525" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="57.559444" y="42.002525" href="#tz_shell_vs_lista_g4-108"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g fill="#c6eaba">
+<g fill="#c6eaba">
+<path d="M357.8373-68.99799H233.97942C231.77025-68.99799 229.97942-70.78882 229.97942-72.99799V-97.71848C229.97942-99.92764 231.77025-101.71848 233.97942-101.71848H357.8373C360.04646-101.71848 361.8373-99.92764 361.8373-97.71848V-72.99799C361.8373-70.78882 360.04646-68.99799 357.8373-68.99799ZM229.97942-101.71848"></path>
+</g>
+<g transform="translate(233.3124,-79.78877)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x=".621038" y="34.032413" href="#tz_shell_vs_lista_g1-97"></use>
+<use x="4.325948" y="34.032413" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="8.030858" y="34.032413" href="#tz_shell_vs_lista_g1-103"></use>
+<use x="11.735768" y="34.032413" href="#tz_shell_vs_lista_g1-118"></use>
+<use x="15.440678" y="34.032413" href="#tz_shell_vs_lista_g1-91"></use>
+<use x="19.145588" y="34.032413" href="#tz_shell_vs_lista_g1-50"></use>
+<use x="22.850498" y="34.032413" href="#tz_shell_vs_lista_g1-93"></use>
+<use x="29.202601" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="35.392086" y="34.032413" href="#tz_shell_vs_lista_g4-117"></use>
+<use x="39.792275" y="34.032413" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="48.9844" y="34.032413" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="53.384589" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="57.35583" y="34.032413" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="63.900763" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="4.274118" y="42.002525" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="8.674307" y="42.002525" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="14.863792" y="42.002525" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="18.835032" y="42.002525" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="21.948375" y="42.002525" href="#tz_shell_vs_lista_g4-113"></use>
+<use x="26.134077" y="42.002525" href="#tz_shell_vs_lista_g4-117"></use>
+<use x="30.534266" y="42.002525" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="32.789712" y="42.002525" href="#tz_shell_vs_lista_g4-118"></use>
+<use x="36.760951" y="42.002525" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="43.379384" y="42.002525" href="#tz_shell_vs_lista_g4-99"></use>
+<use x="46.921676" y="42.002525" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="50.892917" y="42.002525" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="60.085042" y="42.002525" href="#tz_shell_vs_lista_g1-59"></use>
+<use x="1.998882" y="49.972637" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="6.399072" y="49.972637" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="9.941363" y="49.972637" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="14.127071" y="49.972637" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="17.240414" y="49.972637" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="20.353757" y="49.972637" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="26.97219" y="49.972637" href="#tz_shell_vs_lista_g4-124"></use>
+<use x="37.561857" y="49.972637" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="43.751342" y="49.972637" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="46.907582" y="49.972637" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="53.526015" y="49.972637" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="55.781461" y="49.972637" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="58.937702" y="49.972637" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="62.093942" y="49.972637" href="#tz_shell_vs_lista_g4-111"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+<g stroke-width="0.8">
+<path d="M73.9773 48.16959V36.232" fill="none"></path>
+<g transform="matrix(0.0,-1.0,1.0,0.0,73.9773,36.232)">
+<path d="M2.59995 0L-1.55997 2.07996L0 0L-1.55997-2.07996" stroke="none"></path>
+</g>
+</g>
+<g stroke-width="0.8">
+<path d="M73.9773 .51157V-14.98302" fill="none"></path>
+<g transform="matrix(0.0,-1.0,1.0,0.0,73.9773,-14.98302)">
+<path d="M2.59995 0L-1.55997 2.07996L0 0L-1.55997-2.07996" stroke="none"></path>
+</g>
+</g>
+<g stroke-width="0.8">
+<path d="M73.9773-50.70345V-66.19804" fill="none"></path>
+<g transform="matrix(0.0,-1.0,1.0,0.0,73.9773,-66.19804)">
+<path d="M2.59995 0L-1.55997 2.07996L0 0L-1.55997-2.07996" stroke="none"></path>
+</g>
+</g>
+<g stroke-width="0.8">
+<path d="M295.90836 48.16959V36.232" fill="none"></path>
+<g transform="matrix(0.0,-1.0,1.0,0.0,295.90836,36.232)">
+<path d="M2.59995 0L-1.55997 2.07996L0 0L-1.55997-2.07996" stroke="none"></path>
+</g>
+</g>
+<g stroke-width="0.8">
+<path d="M295.90836 .51157V-14.98302" fill="none"></path>
+<g transform="matrix(0.0,-1.0,1.0,0.0,295.90836,-14.98302)">
+<path d="M2.59995 0L-1.55997 2.07996L0 0L-1.55997-2.07996" stroke="none"></path>
+</g>
+</g>
+<g stroke-width="0.8">
+<path d="M295.90836-50.70345V-66.19804" fill="none"></path>
+<g transform="matrix(0.0,-1.0,1.0,0.0,295.90836,-66.19804)">
+<path d="M2.59995 0L-1.55997 2.07996L0 0L-1.55997-2.07996" stroke="none"></path>
+</g>
+</g>
+<g transform="translate(-5.69055,-122.20505)">
+<g stroke="none" transform="scale(-1.00375,1.00375)translate(-28.330102,34.032413)scale(-1,-1)">
+<g fill="#000">
+<g stroke="none">
+<use x="-25.726615" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="-19.108182" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="-14.707992" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="-12.452547" y="34.032413" href="#tz_shell_vs_lista_g4-102"></use>
+<use x="-9.98262" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="-6.440328" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="-3.326985" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x=".215307" y="34.032413" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="4.615496" y="34.032413" href="#tz_shell_vs_lista_g4-99"></use>
+<use x="8.157788" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="14.776221" y="34.032413" href="#tz_shell_vs_lista_g4-110"></use>
+<use x="19.17641" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="23.14765" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="29.766084" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="35.955568" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="40.355757" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="46.545242" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="50.087534" y="34.032413" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="53.243774" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="56.357117" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="58.612563" y="34.032413" href="#tz_shell_vs_lista_g4-108"></use>
+<use x="60.868009" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="64.839249" y="34.032413" href="#tz_shell_vs_lista_g4-58"></use>
+<use x="71.065917" y="34.032413" href="#tz_shell_vs_lista_g4-99"></use>
+<use x="74.608209" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="78.57945" y="34.032413" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="87.771575" y="34.032413" href="#tz_shell_vs_lista_g1-115"></use>
+<use x="91.476485" y="34.032413" href="#tz_shell_vs_lista_g1-104"></use>
+<use x="95.181395" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="98.886305" y="34.032413" href="#tz_shell_vs_lista_g1-108"></use>
+<use x="102.591215" y="34.032413" href="#tz_shell_vs_lista_g1-108"></use>
+<use x="106.296125" y="34.032413" href="#tz_shell_vs_lista_g1-61"></use>
+<use x="110.001035" y="34.032413" href="#tz_shell_vs_lista_g1-84"></use>
+<use x="113.705945" y="34.032413" href="#tz_shell_vs_lista_g1-114"></use>
+<use x="117.410855" y="34.032413" href="#tz_shell_vs_lista_g1-117"></use>
+<use x="121.115765" y="34.032413" href="#tz_shell_vs_lista_g1-101"></use>
+<use x="127.467868" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="134.086301" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="137.199644" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="140.741936" y="34.032413" href="#tz_shell_vs_lista_g4-120"></use>
+<use x="144.927657" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="148.041" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="154.659434" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="159.059623" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="165.678056" y="34.032413" href="#tz_shell_vs_lista_g4-117"></use>
+<use x="170.078245" y="34.032413" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="173.234486" y="34.032413" href="#tz_shell_vs_lista_g4-117"></use>
+<use x="177.634675" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="181.605916" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="184.719259" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="186.974704" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="193.593138" y="34.032413" href="#tz_shell_vs_lista_g4-118"></use>
+<use x="197.778859" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="200.034305" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="203.147648" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="209.766081" y="34.032413" href="#tz_shell_vs_lista_g0-99"></use>
+<use x="213.784336" y="34.032413" href="#tz_shell_vs_lista_g0-111"></use>
+<use x="218.545628" y="34.032413" href="#tz_shell_vs_lista_g0-100"></use>
+<use x="223.554616" y="34.032413" href="#tz_shell_vs_lista_g0-105"></use>
+<use x="226.086774" y="34.032413" href="#tz_shell_vs_lista_g0-103"></use>
+<use x="230.600399" y="34.032413" href="#tz_shell_vs_lista_g0-111"></use>
+<use x="235.114024" y="34.032413" href="#tz_shell_vs_lista_g4-59"></use>
+<use x="240.016663" y="34.032413" href="#tz_shell_vs_lista_g4-99"></use>
+<use x="243.558954" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="247.530195" y="34.032413" href="#tz_shell_vs_lista_g4-109"></use>
+<use x="256.72232" y="34.032413" href="#tz_shell_vs_lista_g4-108"></use>
+<use x="258.977766" y="34.032413" href="#tz_shell_vs_lista_g4-105"></use>
+<use x="261.233212" y="34.032413" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="264.389452" y="34.032413" href="#tz_shell_vs_lista_g4-116"></use>
+<use x="267.502795" y="34.032413" href="#tz_shell_vs_lista_g4-97"></use>
+<use x="271.474036" y="34.032413" href="#tz_shell_vs_lista_g4-44"></use>
+<use x="276.376674" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="279.918966" y="34.032413" href="#tz_shell_vs_lista_g4-108"></use>
+<use x="282.174412" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="288.363896" y="34.032413" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="291.520137" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="298.13857" y="34.032413" href="#tz_shell_vs_lista_g4-112"></use>
+<use x="302.753226" y="34.032413" href="#tz_shell_vs_lista_g4-111"></use>
+<use x="306.938933" y="34.032413" href="#tz_shell_vs_lista_g4-100"></use>
+<use x="311.339123" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="317.528607" y="34.032413" href="#tz_shell_vs_lista_g4-115"></use>
+<use x="320.684848" y="34.032413" href="#tz_shell_vs_lista_g4-101"></use>
+<use x="324.227139" y="34.032413" href="#tz_shell_vs_lista_g4-114"></use>
+<use x="329.987675" y="34.032413" href="#tz_shell_vs_lista_g0-100"></use>
+<use x="334.996664" y="34.032413" href="#tz_shell_vs_lista_g0-97"></use>
+<use x="339.386438" y="34.032413" href="#tz_shell_vs_lista_g0-100"></use>
+<use x="344.395426" y="34.032413" href="#tz_shell_vs_lista_g0-111"></use>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+</g>
+</svg>
+</div>
+<figcaption class="quarto-float-caption-bottom quarto-float-caption quarto-float-fig" id="fig-shell-vs-lista-caption-0ceaefa1-69ba-4598-a22c-09a6ac19f8ca">
+Figura&nbsp;75.1: Com <code>shell=True</code> a string do usuário atravessa um interpretador de comandos; com lista, ela nunca deixa de ser um argumento.
+</figcaption>
+</figure>
+</div>
+<p>O cenário: um script recebe o nome de um arquivo (de um formulário, de uma fila, de um argumento de linha de comando) e conta as linhas dele.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>entrada <span class="op">=</span> <span class="st">"relatorio.txt; cat SEGREDO.txt"</span>   <span class="co"># o que o usuario "digitou"</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run(<span class="ss">f"wc -l </span><span class="sc">{</span>entrada<span class="sc">}</span><span class="ss">"</span>, shell<span class="op">=</span><span class="va">True</span>, capture_output<span class="op">=</span><span class="va">True</span>, text<span class="op">=</span><span class="va">True</span>, cwd<span class="op">=</span>tmp)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(r.stdout)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>2 relatorio.txt
+token=abc123</code></pre>
+<p>O conteúdo de <code>SEGREDO.txt</code> foi impresso. O <code>;</code> separou dois comandos, o shell executou os dois, e o script não tem a menor ideia de que isso aconteceu — <code>returncode</code> é 0 e tudo parece normal. Troque <code>cat</code> por qualquer outra coisa e a gravidade escala imediatamente.</p>
+<p>A mesma entrada, com lista:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run([<span class="st">"wc"</span>, <span class="st">"-l"</span>, entrada], capture_output<span class="op">=</span><span class="va">True</span>, text<span class="op">=</span><span class="va">True</span>, cwd<span class="op">=</span>tmp)</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"returncode:"</span>, r.returncode)</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"stderr:"</span>, r.stderr.strip())</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>returncode: 1
+stderr: wc: 'relatorio.txt; cat SEGREDO.txt': No such file or directory</code></pre>
+<p>O <code>wc</code> recebeu <strong>um único</strong> argumento — um nome de arquivo esquisito que não existe — e falhou de forma limpa e diagnosticável. É exatamente o comportamento que se quer: entrada inválida vira erro, não vira execução.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>alvo <span class="op">=</span> <span class="st">"arquivo importante; echo INVADIDO"</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>subprocess.run([sys.executable, <span class="st">"-c"</span>, <span class="st">"import sys; print('recebi:', repr(sys.argv[1]))"</span>, alvo], ...)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>recebi: 'arquivo importante; echo INVADIDO'</code></pre>
+<p>A string chegou inteira ao outro processo, com o <code>;</code> e tudo, como <strong>dado</strong>.</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Importante</span>A regra
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Nunca construa a string de um comando por interpolação com dados que você não controla — nem de formulário, nem de arquivo, nem de nome de arquivo em disco, nem de variável de ambiente.</p>
+<p>A lista de argumentos não é uma questão de estilo: ela é a fronteira que impede texto de virar código. E, mesmo com dados que você “controla”, a lista é mais simples, porque você para de se preocupar com aspas, espaços e acentos no caminho.</p>
+</div>
+</div>
+<section id="e-quando-eu-preciso-mesmo-do-shell" class="level3" data-number="75.3.1">
+<h3 data-number="75.3.1" class="anchored" data-anchor-id="e-quando-eu-preciso-mesmo-do-shell"><span class="header-section-number">75.3.1</span> E quando eu preciso mesmo do shell?</h3>
+<p>Quase nunca. Os três motivos que as pessoas dão, e o que fazer:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>“Preciso do shell para…”</th>
+<th>A resposta</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>expandir <code>*.csv</code></td>
+<td><code>Path.glob</code> (<a href="../vol06/cap037-caminhos-e-o-sistema-de-arquivos-com-pathlib.html" class="quarto-xref"><span>Capítulo 37</span></a>) — e ele não engasga com espaço no nome</td>
+</tr>
+<tr class="even">
+<td>encadear com <code>\|</code></td>
+<td>duas chamadas, ligando <code>stdout</code> de uma à <code>stdin</code> da outra</td>
+</tr>
+<tr class="odd">
+<td>usar <code>&gt;</code> para redirecionar</td>
+<td><code>stdout=arquivo_aberto</code></td>
+</tr>
+</tbody>
+</table>
+<p>O único caso legítimo é executar uma linha de comando <strong>que o próprio operador escreveu</strong>, num contexto em que ele já tem acesso ao shell de qualquer maneira — e mesmo aí, <code>shlex.split</code> transforma a string numa lista sem envolver interpretador:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> shlex</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(shlex.split(<span class="st">"git commit -m 'mensagem com espaco'"</span>))</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(shlex.quote(<span class="st">"arquivo importante; rm -rf /"</span>))</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>['git', 'commit', '-m', 'mensagem com espaco']
+"'arquivo importante; rm -rf /'"</code></pre>
+<p><code>shlex.split</code> faz o que o shell faria com as aspas, sem executar nada. <code>shlex.quote</code> escapa uma string para uso seguro <strong>se</strong> você for obrigado a montar uma linha de shell — trate-o como último recurso, não como permissão para voltar ao <code>shell=True</code>.</p>
+</section>
+</section>
+<section id="entrada-ambiente-e-diretório" class="level2" data-number="75.4">
+<h2 data-number="75.4" class="anchored" data-anchor-id="entrada-ambiente-e-diretório"><span class="header-section-number">75.4</span> Entrada, ambiente e diretório</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run(</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>    [sys.executable, <span class="st">"-c"</span>, <span class="st">"import sys; print(sum(float(l) for l in sys.stdin))"</span>],</span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">input</span><span class="op">=</span><span class="st">"-29.8</span><span class="ch">\n</span><span class="st">-30.1</span><span class="ch">\n</span><span class="st">-28.4</span><span class="ch">\n</span><span class="st">"</span>,</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    capture_output<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    text<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>soma: -88.3</code></pre>
+<p><code>input=</code> alimenta a entrada padrão do programa — é assim que se substitui um <code>echo ... |</code> sem shell nenhum.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> os</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run(</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>    [sys.executable, <span class="st">"-c"</span>, <span class="st">"import os; print(os.environ.get('ESTACAO', '&lt;ausente&gt;'))"</span>],</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>    capture_output<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>    text<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    env<span class="op">=</span>{<span class="op">**</span>os.environ, <span class="st">"ESTACAO"</span>: <span class="st">"onu-00043"</span>},</span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>com env : onu-00043
+sem env : &lt;ausente&gt;</code></pre>
+<p>Note o <code>{**os.environ, ...}</code>: passar <code>env={"ESTACAO": "..."}</code> puro <strong>substitui o ambiente inteiro</strong>, e o programa perde <code>PATH</code>, <code>HOME</code> e tudo mais — um erro que produz falhas bizarras. Para mudar o diretório de trabalho, <code>cwd=</code> é o parâmetro, e ele é muito melhor que um <code>os.chdir</code> que afeta o processo todo.</p>
+</section>
+<section id="popen-quando-esperar-não-serve" class="level2" data-number="75.5">
+<h2 data-number="75.5" class="anchored" data-anchor-id="popen-quando-esperar-não-serve"><span class="header-section-number">75.5</span> <code>Popen</code>: quando esperar não serve</h2>
+<p><code>run</code> é síncrono: ele espera o programa terminar e devolve tudo de uma vez. Para um processo que roda por dez minutos imprimindo progresso, você quer as linhas <strong>enquanto elas saem</strong>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>proc <span class="op">=</span> subprocess.Popen(</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>    [sys.executable, <span class="st">"-u"</span>, <span class="st">"-c"</span>, <span class="st">"for i in range(3): print('linha', i, flush=True)"</span>],</span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>    stdout<span class="op">=</span>subprocess.PIPE,</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>    text<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> linha <span class="kw">in</span> proc.stdout:</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(<span class="st">"  recebi:"</span>, linha.rstrip())</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>proc.wait()</span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"returncode:"</span>, proc.returncode)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>  recebi: linha 0
+  recebi: linha 1
+  recebi: linha 2
+returncode: 0</code></pre>
+<p>Dois detalhes que fazem a diferença entre isso funcionar e travar: o <code>-u</code> (ou <code>flush=True</code>) do lado de lá, porque um programa que escreve num <em>pipe</em> usa buffer de bloco e não solta nada até encher; e o <code>proc.wait()</code> no fim, sem o qual você deixa um processo zumbi.</p>
+<p>E a armadilha clássica: <strong><code>proc.stdout.read()</code> com <code>stderr=PIPE</code> também cheio dá impasse.</strong> O programa enche o buffer de <code>stderr</code>, bloqueia esperando alguém ler, e você está bloqueado lendo <code>stdout</code>. A saída é <code>proc.communicate()</code>, que lê os dois ao mesmo tempo — ou, mais simples, <code>stderr=subprocess.STDOUT</code> para juntar tudo num canal só.</p>
+</section>
+<section id="notas-de-portabilidade" class="level2" data-number="75.6">
+<h2 data-number="75.6" class="anchored" data-anchor-id="notas-de-portabilidade"><span class="header-section-number">75.6</span> Notas de portabilidade</h2>
+<ul>
+<li><strong><code>shell=True</code> no Windows usa <code>cmd.exe</code></strong>, cuja sintaxe de citação é diferente da do <code>sh</code>. Um comando montado à mão que funciona no Linux pode se comportar de outra forma lá — mais um motivo para a lista.</li>
+<li><strong>Programas embutidos do shell não são executáveis.</strong> <code>dir</code> no Windows e <code>cd</code> em qualquer lugar não existem como arquivo; <code>subprocess.run(["cd", ".."])</code> dá <code>FileNotFoundError</code>. Mudança de diretório é <code>cwd=</code>.</li>
+<li><strong>A codificação da saída</strong> não é sempre UTF-8. <code>text=True</code> usa a codificação preferida da plataforma, que no Windows pode ser <code>cp1252</code>; quando você sabe o que o programa emite, seja explícito com <code>encoding="utf-8"</code> e considere <code>errors="replace"</code> para não perder a saída inteira por um byte inválido.</li>
+</ul>
+</section>
+<section id="jeito-pythônico" class="level2" data-number="75.7">
+<h2 data-number="75.7" class="anchored" data-anchor-id="jeito-pythônico"><span class="header-section-number">75.7</span> 🐍 Jeito Pythônico</h2>
+<p><strong>Lista de argumentos, sempre. <code>shell=True</code> é a exceção que precisa de justificativa escrita.</strong> Não é uma preferência estética: é a diferença entre a entrada do usuário ser dado ou ser código.</p>
+<p><strong><code>check=True</code> e <code>timeout=</code> em toda chamada.</strong> Sem o primeiro, seu script ignora falhas; sem o segundo, ele pendura para sempre. Os dois juntos custam duas palavras e cobrem os dois modos de falha mais comuns.</p>
+<p><strong>Antes de chamar um programa externo, pergunte se a biblioteca padrão resolve.</strong> <code>curl</code> é <code>httpx</code> (<a href="cap078-requisicoes-http-com-requests-e-httpx.html" class="quarto-xref"><span>Capítulo 78</span></a>); <code>ls</code> e <code>find</code> são <code>pathlib</code>; <code>sed</code> e <code>awk</code> são <code>re</code>; <code>tar</code> e <code>zip</code> são <code>shutil</code> e <code>zipfile</code>; <code>wc -l</code> é <code>sum(1 for _ in f)</code>. Cada processo externo evitado é uma dependência de sistema a menos, um modo de falha a menos e um problema de portabilidade a menos.</p>
+<p><strong>Encapsule a chamada numa função.</strong> <code>def contar_linhas(caminho: Path) -&gt; int</code> que faz a validação, monta a lista, trata <code>CalledProcessError</code> e devolve um valor Python é testável e substituível; um <code>subprocess.run</code> espalhado por dez lugares não é nenhum dos dois.</p>
+<p><strong>Registre o comando e o código de saída.</strong> Quando algo falhar em produção, o <code>stderr</code> do programa externo é o diagnóstico inteiro — e ele só existe se você tiver capturado e registrado (<a href="../vol09/cap060-logging-registrando-o-que-o-programa-faz.html" class="quarto-xref"><span>Capítulo 60</span></a>).</p>
+<p><strong>Valide o que vai para o comando, mesmo com lista.</strong> A lista impede injeção de shell, mas não impede que alguém passe <code>--output=/etc/passwd</code> para um programa que aceita esse argumento. Quando a entrada é um caminho, resolva e confirme que está dentro da raiz esperada; quando é uma escolha, valide contra uma lista fechada.</p>
+</section>
+<section id="laboratório" class="level2" data-number="75.8">
+<h2 data-number="75.8" class="anchored" data-anchor-id="laboratório"><span class="header-section-number">75.8</span> 🧪 Laboratório</h2>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Aviso
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Os passos 4 e 5 executam um comando injetado de propósito. Rode-os <strong>num diretório descartável</strong> criado por <code>tempfile.mkdtemp</code>, como no roteiro, e nunca no seu diretório de trabalho.</p>
+</div>
+</div>
+<p><strong>Passo 1 — ambiente.</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb25"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> lab-subprocess <span class="kw">&amp;&amp;</span> <span class="bu">cd</span> lab-subprocess</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="ex">python3.13</span> <span class="at">-m</span> venv .venv</span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate        <span class="co"># Windows: .venv\Scripts\activate</span></span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Não há dependência externa: <code>subprocess</code> e <code>shlex</code> são biblioteca padrão.</p>
+<p><strong>Passo 2 — o básico e os três erros.</strong> Escreva um script que faça quatro chamadas usando <code>sys.executable</code> como programa externo: uma que imprime algo; uma que sai com código 3 <strong>sem</strong> <code>check=True</code>; a mesma <strong>com</strong> <code>check=True</code>, capturando <code>CalledProcessError</code> e imprimindo <code>e.returncode</code>; e uma com <code>time.sleep(30)</code> e <code>timeout=1.0</code>, capturando <code>TimeoutExpired</code>.</p>
+<pre class="text"><code>returncode : 3
+levantou excecao? nao - sem check=True</code></pre>
+<p>Guarde essa linha: é o comportamento padrão, e é o que faz script engolir falha.</p>
+<p><strong>Passo 3 — o programa que não existe.</strong> Chame <code>subprocess.run(["programa_que_nao_existe_123"])</code> e confirme que a exceção é <code>FileNotFoundError</code>, <strong>não</strong> <code>CalledProcessError</code>.</p>
+<p><strong>Passo 4 — a injeção, num diretório descartável.</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb27"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> subprocess, tempfile</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> pathlib <span class="im">import</span> Path</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>tmp <span class="op">=</span> Path(tempfile.mkdtemp(prefix<span class="op">=</span><span class="st">"lab-injecao-"</span>))</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>(tmp <span class="op">/</span> <span class="st">"relatorio.txt"</span>).write_text(<span class="st">"linha 1</span><span class="ch">\n</span><span class="st">linha 2</span><span class="ch">\n</span><span class="st">"</span>)</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>(tmp <span class="op">/</span> <span class="st">"SEGREDO.txt"</span>).write_text(<span class="st">"token=abc123</span><span class="ch">\n</span><span class="st">"</span>)</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>entrada <span class="op">=</span> <span class="st">"relatorio.txt; cat SEGREDO.txt"</span></span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>r <span class="op">=</span> subprocess.run(<span class="ss">f"wc -l </span><span class="sc">{</span>entrada<span class="sc">}</span><span class="ss">"</span>, shell<span class="op">=</span><span class="va">True</span>, capture_output<span class="op">=</span><span class="va">True</span>, text<span class="op">=</span><span class="va">True</span>, cwd<span class="op">=</span>tmp)</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(r.stdout)</span></code></pre></div><button title="Copiar para a área de transferência" class="code-copy-button"><i class="bi"></i></button></div>
+<pre class="text"><code>2 relatorio.txt
+token=abc123</code></pre>
+<p>O segredo vazou, e <code>r.returncode</code> é 0. (No Windows, use <code>type SEGREDO.txt</code> no lugar de <code>cat</code>; o mecanismo é o mesmo com <code>cmd.exe</code>.)</p>
+<p><strong>Passo 5 — a correção.</strong> Troque para <code>["wc", "-l", entrada]</code>, sem <code>shell</code>:</p>
+<pre class="text"><code>returncode: 1
+stderr: wc: 'relatorio.txt; cat SEGREDO.txt': No such file or directory</code></pre>
+<p>Erro limpo, nada executado. Apague o diretório com <code>shutil.rmtree(tmp)</code> — aqui é seguro, porque <code>tmp</code> veio de <code>mkdtemp</code> e não de concatenação.</p>
+<p><strong>Passo 6 — <code>shlex</code>.</strong> Rode <code>shlex.split("git commit -m 'mensagem com espaco'")</code> e confirme que a mensagem ficou num item só. Depois <code>shlex.quote("arquivo importante; rm -rf /")</code> e observe as aspas que ele acrescentou.</p>
+<p><strong>Passo 7 — entrada e ambiente.</strong> Faça uma chamada com <code>input=</code> alimentando três números pela entrada padrão. Depois duas chamadas lendo <code>os.environ["ESTACAO"]</code>: uma com <code>env={**os.environ, "ESTACAO": "onu-00043"}</code> e outra sem. Por fim, tente <code>env={"ESTACAO": "x"}</code> <strong>sem</strong> o <code>**os.environ</code> e veja o que quebra — é o erro que produz falhas incompreensíveis.</p>
+<p><strong>Passo 8 — saída em tempo real.</strong> Escreva um programa que imprima cinco linhas com <code>time.sleep(0.5)</code> entre elas, e consuma com <code>Popen</code> iterando sobre <code>proc.stdout</code>. Depois <strong>remova o <code>-u</code></strong> e rode de novo: as cinco linhas chegam todas juntas no fim. Essa é a razão pela qual “meu script não mostra o progresso”.</p>
+<p><strong>Passo 9 — encapsular.</strong> Transforme tudo numa função <code>contar_linhas(caminho: Path) -&gt; int</code> que valida o caminho, chama <code>wc -l</code> com lista, <code>check=True</code> e <code>timeout=10</code>, converte a saída para <code>int</code> e levanta uma exceção própria em caso de falha. Escreva dois testes com <code>tmp_path</code> (<a href="../vol11/cap070-testes-com-pytest-fundamentos-assercoes-e.html" class="quarto-xref"><span>Capítulo 70</span></a>): um caminho válido e um inexistente. É essa função que o resto do programa deve chamar — nunca <code>subprocess.run</code> direto.</p>
+</section>
+<section id="resumo" class="level2" data-number="75.9">
+<h2 data-number="75.9" class="anchored" data-anchor-id="resumo"><span class="header-section-number">75.9</span> Resumo</h2>
+<ul>
+<li><strong><code>subprocess.run</code> é a interface única</strong> desde o 3.5; devolve um <code>CompletedProcess</code> com <code>args</code>, <code>returncode</code>, <code>stdout</code> e <code>stderr</code>. <code>capture_output=True</code> para capturar, <code>text=True</code> para decodificar.</li>
+<li>Três falhas, três mecanismos: programa que retorna código diferente de zero <strong>não levanta exceção</strong> sem <code>check=True</code>; programa travado exige <code>timeout=</code>; programa inexistente dá <code>FileNotFoundError</code>, não <code>CalledProcessError</code>.</li>
+<li><strong><code>shell=True</code> faz a string do usuário atravessar um interpretador de comandos</strong>, e um <code>;</code> no meio de um nome de arquivo vira um segundo comando executado com seus privilégios — sem erro e com <code>returncode</code> 0. Com lista de argumentos, a mesma entrada vira um nome de arquivo inválido e falha de forma limpa.</li>
+<li>Os motivos alegados para precisar do shell têm resposta na biblioteca padrão: <code>Path.glob</code> para curinga, encadeamento de dois <code>Popen</code> para <code>|</code>, <code>stdout=arquivo</code> para <code>&gt;</code>. Quando não houver saída, <code>shlex.split</code> converte a string em lista sem executar nada.</li>
+<li><strong><code>input=</code></strong> alimenta a entrada padrão; <strong><code>cwd=</code></strong> troca o diretório sem afetar o processo; e <code>env=</code> deve ser sempre <code>{**os.environ, ...}</code>, porque um dicionário puro apaga o ambiente inteiro.</li>
+<li><strong><code>Popen</code></strong> entrega saída em tempo real, desde que o outro lado não esteja com buffer (<code>-u</code> ou <code>flush=True</code>); ler dois canais à mão causa impasse, então use <code>communicate()</code> ou <code>stderr=subprocess.STDOUT</code>.</li>
+<li>Antes de chamar um programa externo, verifique se a biblioteca padrão já faz — e encapsule a chamada numa função tipada e testável em vez de espalhar <code>subprocess.run</code> pelo código.</li>
+</ul>
 
 
+</section>
 
 </main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">
@@ -1389,7 +2337,7 @@ ul.task-list li input[type="checkbox"] {
 </div>   
     <div class="nav-footer-center">
       &nbsp;
-    <div class="toc-actions"><ul><li><a href="https://github.com/VitorMattosDev/manual-python/edit/main/vol12/cap075-subprocess-chamando-programas-externos-com.qmd" class="toc-action"><i class="bi bi-github"></i>Editar essa página</a></li><li><a href="https://github.com/VitorMattosDev/manual-python/issues/new" class="toc-action"><i class="bi empty"></i>Criar uma issue</a></li></ul></div></div>
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/VitorMattosDev/manual-python/edit/main/vol12/cap075-subprocess-chamando-programas-externos-com.qmd" class="toc-action"><i class="bi bi-github"></i>Editar essa página</a></li><li><a href="https://github.com/VitorMattosDev/manual-python/issues/new" class="toc-action"><i class="bi empty"></i>Criar uma issue</a></li></ul></div></div>
     <div class="nav-footer-right">
 <p>Licença CC BY-SA 4.0</p>
 </div>
