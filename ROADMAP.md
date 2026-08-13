@@ -125,7 +125,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ### Volume 12 — Automação, Sistema e Redes
 
-- [ ] **cap 074** - Scripts de automação: arquivos, planilhas e tarefas repetitivas - `vol12/cap074-scripts-de-automacao-arquivos-planilhas-e.qmd`
+- [x] **cap 074** - Scripts de automação: arquivos, planilhas e tarefas repetitivas - `vol12/cap074-scripts-de-automacao-arquivos-planilhas-e.qmd`
 - [ ] **cap 075** - subprocess: chamando programas externos com segurança - `vol12/cap075-subprocess-chamando-programas-externos-com.qmd`
 - [ ] **cap 076** - Interfaces de linha de comando com argparse, Click e Typer - `vol12/cap076-interfaces-de-linha-de-comando-com-argparse.qmd`
 - [ ] **cap 077** - Redes com sockets: TCP, UDP e o modelo cliente-servidor - `vol12/cap077-redes-com-sockets-tcp-udp-e-o-modelo-cliente.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (73 concluidos).
+**Total:** 104 capitulos em 16 volumes (74 concluidos).
 

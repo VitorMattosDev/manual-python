@@ -1,3 +1,442 @@
 # Scripts de automação: arquivos, planilhas e tarefas repetitivas {#sec-cap074}
 
-*(em elaboracao)*
+Todo primeiro dia útil do mês alguém da equipe abre uma pasta com noventa arquivos chamados `leituras 04-03-2026.csv`, renomeia um por um para `2026-03-04_onu-00051.csv`, cola tudo numa planilha, calcula três médias e manda por e-mail. Leva duas horas, e uma vez por trimestre sai errado porque a pessoa se distraiu no arquivo 63.
+
+Esta é a tarefa que justificou o Python para mais gente do que qualquer outra. Ela é chata, é frequente, e — o mais importante — **ela é exatamente especificável**: existe uma regra clara ligando o nome antigo ao novo, e uma conta clara ligando as leituras ao resumo. Onde há regra clara e repetição, há script.
+
+Este capítulo abre a Fase 4 do manual e é o primeiro em que instalamos dependências externas de verdade. Ele reúne o que os volumes anteriores construíram — `pathlib` (@sec-cap037), `csv` (@sec-cap062), `re` (@sec-cap061), `logging` (@sec-cap060), `argparse` — num tipo específico de programa: o script que mexe nos arquivos de outra pessoa e **não pode errar**.
+
+## O problema de verdade
+
+```text
+entrada/
+    LEIAME.md
+    onu-00043/
+        leituras 01-03-2026.csv
+        leituras 10-03-2026.csv
+        leituras 19-03-2026.csv
+        rascunho.txt
+    onu-00051/
+        leituras 04-03-2026.csv
+        ...
+```
+
+Três coisas a resolver: os nomes não ordenam (dia primeiro), a estação só existe no nome da pasta, e há arquivos que **não** devem ser tocados (`rascunho.txt`, `LEIAME.md`).
+
+## Encontrar os arquivos certos
+
+O `pathlib` faz a varredura, e a diferença entre dois métodos decide o resultado:
+
+```python
+from pathlib import Path
+
+raiz = Path("entrada")
+print("glob  *.csv  :", len(list(raiz.glob("*.csv"))))
+print("glob  */*.csv:", len(list(raiz.glob("*/*.csv"))))
+print("rglob *.csv  :", len(list(raiz.rglob("*.csv"))))
+print("rglob *      :", len(list(raiz.rglob("*"))))
+```
+
+```text
+glob  *.csv  : 0
+glob  */*.csv: 9
+rglob *.csv  : 9
+rglob *      : 14
+```
+
+`glob` olha **um nível**; `rglob` desce a árvore inteira. O `glob("*.csv")` devolvendo zero é o resultado que mais assusta iniciante: os arquivos estão lá, mas um nível abaixo. E `rglob("*")` conta 14 porque inclui os diretórios e os arquivos que não interessam.
+
+Duas cautelas que vêm da experiência:
+
+- **`sorted()` sempre.** A ordem de `glob` e `rglob` depende do sistema de arquivos. Um script que renomeia em ordem imprevisível é um script cujo resultado muda entre a sua máquina e a do servidor.
+- **Filtrar por padrão de nome, não só por extensão.** `rglob("*.csv")` pega qualquer CSV, inclusive um que alguém deixou ali por engano. O filtro real é uma expressão regular sobre o nome.
+
+## O padrão do script seguro
+
+Um script que renomeia arquivos alheios precisa de três propriedades que nada tem a ver com o algoritmo:
+
+::: {#fig-script-seguro}
+```{.tikz}
+%%| filename: script-seguro
+%%| alt: As tres fases de um script de automacao seguro
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=3.4cm,minimum height=1.6cm,font=\small},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-2.2,-4.2) rectangle (14.6,3.2);
+
+  \node[bx,fill=manualgray!20]   (ler)  at (0,0)    {\textbf{1. planejar}\\\scriptsize monta a lista\\\scriptsize (origem, destino)};
+  \node[bx,fill=manualyellow!30] (ver)  at (5.2,0)  {\textbf{2. mostrar}\\\scriptsize imprime o plano\\\scriptsize \textbf{sem tocar em disco}};
+  \node[bx,fill=manualgreen!20]  (apl)  at (10.4,0) {\textbf{3. aplicar}\\\scriptsize so com \texttt{-{}-aplicar}\\\scriptsize explicito};
+
+  \draw[->,>=stealth,thick] (ler) -- (ver);
+  \draw[->,>=stealth,thick] (ver) -- (apl);
+
+  \node[nt,anchor=south,text width=4.6cm] at (0,1.1)  {nenhum efeito colateral:\\da para testar};
+  \node[nt,anchor=south,text width=4.6cm] at (5.2,1.1) {o padrao do script\\e nao fazer nada};
+  \node[nt,anchor=south,text width=4.6cm] at (10.4,1.1) {a acao destrutiva\\exige um ato deliberado};
+
+  \draw[->,>=stealth,dashed,manualblue]
+    (apl.south) .. controls (10.4,-2.6) and (0,-2.6) .. (ler.south);
+  \node[nt,anchor=north,text width=11.0cm] at (5.2,-2.9)
+    {\textbf{idempotencia}: rodar de novo depois de aplicar tem de resultar em zero mudancas};
+\end{tikzpicture}
+```
+Planejar, mostrar, aplicar — e rodar duas vezes deve dar o mesmo resultado que rodar uma.
+:::
+
+**Ensaio por padrão.** O script não altera nada até receber `--aplicar`. Isso inverte o risco: o erro de digitação vira uma listagem inútil, não noventa arquivos destruídos.
+
+**Idempotência.** Rodar duas vezes tem de ser igual a rodar uma. Um script que renomeia `a` para `b` e, na segunda execução, renomeia `b` para `c`, é um script que ninguém pode executar com confiança.
+
+**Registro.** `logging` (@sec-cap060) e não `print`: dá para mandar para arquivo, dá para filtrar por nível, e o `--verboso` mostra também o que foi **ignorado**, que é metade do diagnóstico quando o script "não fez nada".
+
+### O script
+
+```python
+"""Renomeia 'leituras DD-MM-AAAA.csv' para 'AAAA-MM-DD_estacao.csv'."""
+
+import argparse
+import logging
+import re
+import sys
+from pathlib import Path
+
+PADRAO = re.compile(r"^leituras (\d{2})-(\d{2})-(\d{4})\.csv$")
+
+log = logging.getLogger("renomear")
+
+
+def planejar(raiz: Path) -> list[tuple[Path, Path]]:
+    """Devolve a lista de (origem, destino) sem tocar em disco."""
+    plano = []
+    for origem in sorted(raiz.rglob("*.csv")):
+        m = PADRAO.match(origem.name)
+        if m is None:
+            log.debug("ignorado (nome fora do padrao): %s", origem.name)
+            continue
+        dia, mes, ano = m.groups()
+        estacao = origem.parent.name
+        plano.append((origem, origem.with_name(f"{ano}-{mes}-{dia}_{estacao}.csv")))
+    return plano
+
+
+def aplicar(plano: list[tuple[Path, Path]], *, de_verdade: bool) -> int:
+    feitos = 0
+    for origem, destino in plano:
+        if destino.exists() and destino != origem:
+            log.warning("COLISAO, pulando: %s ja existe", destino.name)
+            continue
+        if destino == origem:
+            log.info("ja no formato: %s", origem.name)
+            continue
+        log.info("%s -> %s", origem.name, destino.name)
+        if de_verdade:
+            origem.rename(destino)
+        feitos += 1
+    return feitos
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("raiz", nargs="?", default="entrada", type=Path)
+    p.add_argument("--aplicar", action="store_true", help="executa de verdade")
+    p.add_argument("-v", "--verboso", action="store_true")
+    args = p.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verboso else logging.INFO,
+        format="%(levelname)-8s %(message)s",
+    )
+
+    plano = planejar(args.raiz)
+    feitos = aplicar(plano, de_verdade=args.aplicar)
+
+    modo = "aplicado" if args.aplicar else "ENSAIO (use --aplicar)"
+    log.info("%d arquivo(s) a renomear -- %s", feitos, modo)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+Sem argumento nenhum:
+
+```text
+INFO     leituras 01-03-2026.csv -> 2026-03-01_onu-00043.csv
+INFO     leituras 10-03-2026.csv -> 2026-03-10_onu-00043.csv
+INFO     leituras 19-03-2026.csv -> 2026-03-19_onu-00043.csv
+INFO     leituras 04-03-2026.csv -> 2026-03-04_onu-00051.csv
+...
+INFO     9 arquivo(s) a renomear -- ENSAIO (use --aplicar)
+```
+
+Nada mudou em disco. Você lê as nove linhas, confere duas ou três, e só então:
+
+```bash
+python renomear.py --aplicar
+```
+
+```text
+INFO     9 arquivo(s) a renomear -- aplicado
+```
+
+E o teste que fecha a conta:
+
+```bash
+python renomear.py --aplicar
+```
+
+```text
+INFO     0 arquivo(s) a renomear -- aplicado
+```
+
+Zero. O script é idempotente porque `PADRAO` só casa com o formato **antigo**: um arquivo já renomeado não entra no plano. Essa é a forma mais barata de idempotência — fazer o critério de seleção excluir o resultado da própria operação.
+
+Repare também em três decisões pequenas do código:
+
+- **`planejar` não tem efeito colateral nenhum.** Ela é uma função pura que recebe um caminho e devolve uma lista, o que a torna trivial de testar com `tmp_path` (@sec-cap070).
+- **A colisão é tratada explicitamente.** `origem.rename(destino)` **sobrescreve silenciosamente** o destino em Linux e macOS. Sem a verificação de `destino.exists()`, dois arquivos que produzam o mesmo nome novo resultam em um arquivo perdido, sem erro nenhum.
+- **`nargs="?"` com padrão** deixa o caminho opcional, mas ele existe — o script não tem um caminho fixo escondido no meio do código.
+
+## Copiar, mover e arquivar
+
+O `shutil` cobre o que `pathlib` não faz:
+
+| Função | Faz |
+|---|---|
+| `shutil.copy2(o, d)` | copia preservando data de modificação e metadados |
+| `shutil.copytree(o, d)` | copia uma árvore inteira |
+| `shutil.move(o, d)` | move, funcionando **entre sistemas de arquivos** |
+| `shutil.make_archive(base, "zip", raiz)` | compacta um diretório |
+| `shutil.disk_usage(caminho)` | espaço total, usado e livre |
+
+Duas notas. `Path.rename` falha ao atravessar partições (`OSError: Invalid cross-device link`); `shutil.move` copia e apaga nesse caso, e é o que se usa quando o destino pode estar noutro disco. E `copy2` é quase sempre preferível a `copy`, porque preservar a data de modificação é o que permite ao script saber depois o que já foi processado.
+
+```python
+import shutil
+
+alvo = shutil.make_archive("saida/entrada-2026-03", "zip", root_dir="entrada")
+```
+
+```text
+arquivo : entrada-2026-03.zip
+tamanho : 2629 bytes
+itens   : 14
+```
+
+::: {.callout-warning}
+## `shutil.rmtree` apaga sem perguntar
+
+`shutil.rmtree(caminho)` remove o diretório e **todo o seu conteúdo**, recursivamente, sem confirmação e sem lixeira. Um caminho montado por concatenação de string que resulte em `/` ou em `C:\` apaga o que alcançar.
+
+As três defesas, em ordem de importância: **nunca calcule o caminho a apagar** — receba-o como argumento explícito; **valide antes**, conferindo que o caminho está dentro de uma raiz esperada (`caminho.resolve().is_relative_to(raiz.resolve())`); e **ensaie primeiro**, listando o que seria removido. Em teste, use exclusivamente `tmp_path`.
+:::
+
+## A planilha
+
+Aqui entra a primeira dependência externa do manual. CSV resolve o problema técnico (@sec-cap062), mas quem recebe o relatório quer um `.xlsx` — com cabeçalho em negrito, colunas na largura certa e a primeira linha congelada.
+
+```bash
+pip install openpyxl
+```
+
+A versão usada aqui: **openpyxl 3.1.5**.
+
+```python
+import csv
+import statistics
+from collections import defaultdict
+from pathlib import Path
+
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
+
+
+def ler_todos(raiz: Path) -> dict[str, list[float]]:
+    por_estacao: dict[str, list[float]] = defaultdict(list)
+    for arquivo in sorted(raiz.rglob("*.csv")):
+        with arquivo.open(newline="", encoding="utf-8") as f:
+            for linha in csv.DictReader(f):
+                por_estacao[linha["estacao"]].append(float(linha["temperatura"]))
+    return dict(por_estacao)
+
+
+def resumir(dados: dict[str, list[float]]) -> list[dict[str, object]]:
+    return [
+        {
+            "estacao": e,
+            "leituras": len(v),
+            "minima": min(v),
+            "maxima": max(v),
+            "media": round(statistics.fmean(v), 2),
+        }
+        for e, v in sorted(dados.items())
+    ]
+```
+
+```text
+{'estacao': 'onu-00043', 'leituras': 12, 'minima': -34.7, 'maxima': -25.4, 'media': -31.6}
+{'estacao': 'onu-00051', 'leituras': 12, 'minima': -34.9, 'maxima': -26.1, 'media': -29.15}
+{'estacao': 'onu-00107', 'leituras': 12, 'minima': -34.7, 'maxima': -25.3, 'media': -30.31}
+```
+
+Note o `newline=""` no `open`: é obrigatório com o módulo `csv` e omiti-lo produz linhas em branco alternadas no Windows. E `statistics.fmean` (@sec-cap059) é mais rápido e mais preciso que `sum(v) / len(v)` para ponto flutuante.
+
+A escrita da planilha:
+
+```python
+def gravar_xlsx(linhas: list[dict[str, object]], destino: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Resumo"
+
+    cabecalho = list(linhas[0])
+    ws.append(cabecalho)
+    for c in range(1, len(cabecalho) + 1):
+        ws.cell(row=1, column=c).font = Font(bold=True)
+
+    for linha in linhas:
+        ws.append([linha[k] for k in cabecalho])
+
+    for c, nome in enumerate(cabecalho, start=1):
+        largura = max(len(nome), *(len(str(l[nome])) for l in linhas)) + 2
+        ws.column_dimensions[get_column_letter(c)].width = largura
+
+    ws.freeze_panes = "A2"
+    wb.save(destino)
+```
+
+Quatro detalhes que separam uma planilha usável de um despejo de dados: `ws.title` nomeia a aba (o padrão é "Sheet"), `Font(bold=True)` marca o cabeçalho, `column_dimensions[...].width` evita a coluna de `#####`, e `freeze_panes = "A2"` mantém o cabeçalho visível ao rolar.
+
+Lendo de volta para conferir:
+
+```python
+from openpyxl import load_workbook
+
+wb = load_workbook("saida/resumo.xlsx")
+ws = wb.active
+print("aba:", ws.title, "| dimensoes:", ws.dimensions, "| congelado:", ws.freeze_panes)
+for linha in ws.iter_rows(values_only=True):
+    print(linha)
+```
+
+```text
+aba: Resumo | dimensoes: A1:E4 | congelado: A2
+('estacao', 'leituras', 'minima', 'maxima', 'media')
+('onu-00043', 12, -34.7, -25.4, -31.6)
+('onu-00051', 12, -34.9, -26.1, -29.15)
+('onu-00107', 12, -34.7, -25.3, -30.31)
+```
+
+Os tipos sobreviveram: `12` é inteiro, `-34.7` é `float`. Isso importa porque uma planilha em que os números viraram texto não soma no Excel — e a causa costuma ser gravar `str(valor)` em vez do valor.
+
+Duas armadilhas do `openpyxl`: ele lê e escreve `.xlsx`, **não** `.xls` antigo (para esse, `xlrd` em modo legado); e, ao abrir uma planilha que contém fórmulas, o padrão devolve a **fórmula como texto** — para os valores calculados, `load_workbook(..., data_only=True)`, que só funciona se o Excel tiver salvado o arquivo com o cache dos resultados.
+
+Para volumes grandes, `Workbook(write_only=True)` e `load_workbook(read_only=True)` trocam funcionalidade por memória constante. E quando a análise passa a ser o objetivo — e não só o formato de saída — o `pandas` do Volume 13 substitui esse código inteiro por três linhas.
+
+## Fazer o script rodar sozinho
+
+Um script de automação executado à mão continua dependendo de alguém lembrar. As três formas de agendar:
+
+- **Linux/macOS**: `cron`. `0 6 1 * * /caminho/.venv/bin/python /caminho/consolidar.py` roda às 6h do primeiro dia de cada mês. Use sempre **caminhos absolutos**, inclusive o do interpretador do ambiente virtual — o `cron` roda com um `PATH` mínimo e quase nenhuma variável de ambiente, e "funciona no meu terminal e não no cron" é quase sempre isso.
+- **Windows**: Agendador de Tarefas, apontando para o `python.exe` do `venv` e com o diretório de trabalho definido explicitamente.
+- **`systemd timer`** em servidor Linux moderno: mais verboso que o `cron`, e em troca dá registro no `journalctl`, controle de sobreposição e reexecução após falha.
+
+Em qualquer um deles, duas regras: **escreva log em arquivo** (não há terminal para ver a saída) e **devolva código de saída diferente de zero** quando falhar, porque é isso que o agendador monitora.
+
+## 🐍 Jeito Pythônico
+
+**Ensaio é o padrão; ação destrutiva exige um sinalizador.** Um script que apaga, move ou sobrescreve deve precisar de `--aplicar` para fazer qualquer coisa. Custa quatro linhas com `argparse` e elimina a categoria inteira de acidente irreversível.
+
+**Separe planejar de aplicar.** A função que decide o que fazer não deve tocar em disco, e a que toca em disco não deve decidir nada. Além de tornar o ensaio trivial, isso é o que permite testar a lógica com `pytest` sem um sistema de arquivos falso.
+
+**`pathlib`, não `os.path` nem concatenação de string.** `raiz / estacao / nome` funciona nos três sistemas operacionais e nunca produz `entrada//onu-00043`. E `Path.with_name`, `with_suffix` e `relative_to` cobrem quase toda manipulação de nome sem uma linha de `str`.
+
+**Idempotência antes de esperteza.** Prefira que o critério de seleção exclua o resultado da operação — assim a segunda execução não faz nada por construção, e não porque você lembrou de conferir.
+
+**`logging`, não `print`, e registre também o que foi ignorado.** Quando o script "não fez nada", a resposta está nas linhas de `DEBUG` que dizem por que cada arquivo foi pulado.
+
+**Fixe a versão das dependências.** Um script agendado que roda por dois anos vai encontrar um `openpyxl` novo em algum momento. `pyproject.toml` com versão declarada e um ambiente virtual próprio (@sec-cap031) é o que impede a tarefa de quebrar sozinha numa madrugada.
+
+## 🧪 Laboratório
+
+Você vai construir o renomeador seguro, verificar que ele é idempotente, e gerar a planilha.
+
+**Passo 1 — ambiente e bagunça.**
+
+```bash
+mkdir lab-automacao && cd lab-automacao
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install openpyxl pytest
+```
+
+Crie um `preparar.py` que monte a árvore do início do capítulo: três pastas de estação, três CSV em cada uma com nome no formato `leituras DD-MM-AAAA.csv`, mais um `rascunho.txt` e um `LEIAME.md`. Use `random.seed(42)` para que os números sejam reproduzíveis.
+
+**Passo 2 — entender a varredura.** Antes de escrever qualquer coisa, rode no REPL:
+
+```python
+from pathlib import Path
+raiz = Path("entrada")
+len(list(raiz.glob("*.csv"))), len(list(raiz.rglob("*.csv")))
+```
+
+```text
+(0, 9)
+```
+
+Zero e nove. Guarde esse contraste.
+
+**Passo 3 — só planejar.** Escreva a função `planejar(raiz)` que devolve a lista de `(origem, destino)` **sem tocar em disco**. Rode e imprima o plano. Confirme que `rascunho.txt` e `LEIAME.md` não aparecem, e que o `estacao` veio do nome da pasta.
+
+**Passo 4 — testar o planejamento.** Escreva um teste com `tmp_path` (@sec-cap070) que crie dois arquivos de brinquedo e verifique o plano. Este passo só é possível porque `planejar` não tem efeito colateral — é o pagamento da separação do passo 3.
+
+**Passo 5 — ensaio e aplicação.** Complete o script com `argparse` e `--aplicar`. Rode sem argumento:
+
+```text
+INFO     9 arquivo(s) a renomear -- ENSAIO (use --aplicar)
+```
+
+Confirme com `ls` que **nada** mudou. Só então rode com `--aplicar`.
+
+**Passo 6 — idempotência.** Rode `python renomear.py --aplicar` de novo:
+
+```text
+INFO     0 arquivo(s) a renomear -- aplicado
+```
+
+Se o seu deu diferente de zero, o critério de seleção está casando com o formato novo — conserte a expressão regular, não o resto.
+
+**Passo 7 — a colisão.** Crie à mão dois arquivos que produzam o mesmo nome de destino (mesma data, mesma pasta, nomes de origem diferentes) e rode o ensaio. Você deve ver `COLISAO, pulando`. Agora **remova a verificação** de `destino.exists()`, rode com `--aplicar` num diretório descartável e confirme que um dos dois arquivos simplesmente sumiu, sem erro nenhum. Restaure a verificação.
+
+**Passo 8 — o resumo em CSV e em XLSX.** Escreva `consolidar.py` com `ler_todos`, `resumir`, `gravar_csv` e `gravar_xlsx`. Rode e abra a planilha: cabeçalho em negrito, colunas largas o bastante, primeira linha congelada.
+
+**Passo 9 — provar que os tipos sobreviveram.** Leia a planilha de volta:
+
+```python
+from openpyxl import load_workbook
+ws = load_workbook("saida/resumo.xlsx").active
+for linha in ws.iter_rows(values_only=True):
+    print(linha)
+```
+
+```text
+('estacao', 'leituras', 'minima', 'maxima', 'media')
+('onu-00043', 12, -34.7, -25.4, -31.6)
+```
+
+Confirme que `12` é `int` e `-34.7` é `float`, não strings. Depois altere `gravar_xlsx` para escrever `str(linha[k])`, gere de novo, e veja a diferença — é a origem clássica da planilha que não soma.
+
+**Passo 10 — o arquivo morto.** Feche com `shutil.make_archive("saida/entrada-2026-03", "zip", root_dir="entrada")` e confira o conteúdo do zip com o módulo `zipfile`. Este é o passo que torna o script executável todo mês sem medo: o estado anterior está guardado.
+
+## Resumo
+
+- `Path.glob` olha **um nível**, `Path.rglob` desce a árvore inteira — e o `glob("*.csv")` devolvendo zero num diretório cheio de CSV é o mal-entendido mais comum. `sorted()` sempre, porque a ordem do sistema de arquivos não é estável.
+- O padrão do **script seguro** tem três fases: `planejar` (sem efeito colateral, testável), **mostrar** (ensaio como comportamento padrão), e `aplicar` só com um sinalizador explícito. E ele precisa ser **idempotente** — o jeito barato é fazer o critério de seleção não casar com o resultado da própria operação.
+- **`Path.rename` sobrescreve o destino em silêncio** em Linux e macOS: verifique `destino.exists()` antes, ou dois arquivos viram um sem erro nenhum. Para atravessar partições, `shutil.move`; para copiar preservando data, `copy2`.
+- **`shutil.rmtree` apaga recursivamente sem confirmação.** Nunca calcule o caminho a apagar, valide que ele está dentro de uma raiz esperada com `is_relative_to`, e ensaie antes.
+- **`openpyxl`** escreve `.xlsx` com cabeçalho em negrito, largura de coluna e `freeze_panes`; grave os valores com o tipo certo, porque uma planilha de strings não soma. `data_only=True` para ler resultados de fórmula, e os modos `read_only`/`write_only` para volumes grandes.
+- Para agendar, use **caminhos absolutos**, inclusive o do interpretador do ambiente virtual — `cron` roda com `PATH` mínimo. Escreva log em arquivo e devolva código de saída diferente de zero na falha, porque é o que o agendador observa.
