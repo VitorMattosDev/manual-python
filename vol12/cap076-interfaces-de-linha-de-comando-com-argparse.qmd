@@ -1,3 +1,465 @@
 # Interfaces de linha de comando com argparse, Click e Typer {#sec-cap076}
 
-*(em elaboracao)*
+O script de renomeação do @sec-cap074 nasceu com o caminho de entrada escrito no meio do código. Funcionou por uma semana. Depois veio a segunda pasta, e alguém copiou o arquivo e trocou a linha. Depois a terceira. Hoje existem quatro cópias quase idênticas do mesmo script, e ninguém sabe qual é a boa.
+
+Uma **interface de linha de comando** resolve isso e mais coisas: transforma o script num programa que aceita parâmetros, se explica sozinho com `--help`, valida a entrada antes de fazer estrago, devolve código de saída que um agendador consegue monitorar, e se encaixa num *pipeline* com outros programas.
+
+Python tem três caminhos para isso, e a escolha entre eles é real: `argparse` na biblioteca padrão, **Click** como a biblioteca clássica de terceiros, e **Typer**, que constrói a interface a partir das anotações de tipo do @sec-cap068.
+
+## `argparse`: o da biblioteca padrão
+
+```python
+"""Consolida leituras de estacoes meteorologicas."""
+
+import argparse
+import sys
+from pathlib import Path
+
+
+def montar_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="coletor",
+        description=__doc__,
+        epilog="Exemplo: coletor entrada/ -o resumo.csv --formato csv",
+    )
+    p.add_argument("raiz", type=Path, help="diretorio com os CSV de entrada")
+    p.add_argument("-o", "--saida", type=Path, default=Path("resumo.csv"),
+                   help="arquivo de saida (padrao: %(default)s)")
+    p.add_argument("--formato", choices=["csv", "json", "xlsx"], default="csv",
+                   help="formato do relatorio (padrao: %(default)s)")
+    p.add_argument("--minima", type=float, default=-90.0,
+                   help="descarta leituras abaixo deste valor")
+    p.add_argument("--aplicar", action="store_true", help="grava de verdade")
+    p.add_argument("-v", "--verboso", action="count", default=0,
+                   help="pode ser repetido: -vv")
+    p.add_argument("--versao", action="version", version="%(prog)s 1.0")
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = montar_parser().parse_args(argv)
+    ...
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+O `--help` sai pronto:
+
+```text
+usage: coletor [-h] [-o SAIDA] [--formato {csv,json,xlsx}] [--minima MINIMA]
+               [--aplicar] [-v] [--versao]
+               raiz
+
+Consolida leituras de estacoes meteorologicas.
+
+positional arguments:
+  raiz                  diretorio com os CSV de entrada
+
+options:
+  -h, --help            show this help message and exit
+  -o, --saida SAIDA     arquivo de saida (padrao: resumo.csv)
+  --formato {csv,json,xlsx}
+                        formato do relatorio (padrao: csv)
+  --minima MINIMA       descarta leituras abaixo deste valor
+  --aplicar             grava de verdade
+  -v, --verboso         pode ser repetido: -vv
+  --versao              show program's version number and exit
+
+Exemplo: coletor entrada/ -o resumo.csv --formato csv
+```
+
+E a conversão acontece na entrada:
+
+```bash
+python cli_argparse.py entrada/ -o r.json --formato json -vv --aplicar
+```
+
+```text
+raiz     = entrada
+saida    = r.json
+formato  = json
+minima   = -90.0
+aplicar  = True
+verboso  = 2
+```
+
+`raiz` e `saida` chegaram como `Path`, `minima` como `float`, `aplicar` como `bool`, e `verboso` como o inteiro 2 — o `action="count"` conta as repetições, que é o idioma consagrado para `-v`, `-vv`, `-vvv`.
+
+Os erros são tratados antes de o seu código rodar:
+
+```text
+coletor: error: argument --formato: invalid choice: 'pdf' (choose from 'csv', 'json', 'xlsx')
+```
+
+```text
+coletor: error: the following arguments are required: raiz
+```
+
+Os dois saem com **código 2**, que é a convenção Unix para erro de uso (1 fica para erro de execução). Isso importa para quem chama seu programa de um script.
+
+### Decisões de projeto que valem em qualquer biblioteca
+
+Quatro coisas no código acima não são detalhes de `argparse`:
+
+- **`montar_parser` separada de `main`.** Isso permite testar o *parser* sem executar o programa, e é a diferença entre uma interface testável e uma que só dá para verificar rodando.
+- **`main(argv=None)` recebendo a lista.** `parse_args(None)` lê `sys.argv`; `parse_args(["entrada"])` lê o que você passou. Um parâmetro, e o teste fica trivial.
+- **`sys.exit(main())`.** O código de saída vem do `return` de `main`, em vez de um `sys.exit` escondido no meio da lógica.
+- **`%(default)s` no texto de ajuda.** Escrever o padrão à mão garante que ele vai divergir do código; a interpolação não.
+
+### Subcomandos
+
+Quando o programa faz mais de uma coisa (`git commit`, `git push`), `argparse` oferece `add_subparsers`:
+
+```python
+sub = p.add_subparsers(dest="comando", required=True)
+c = sub.add_parser("consolidar", help="gera o resumo")
+c.add_argument("raiz", type=Path)
+l = sub.add_parser("listar", help="lista os arquivos")
+```
+
+Funciona, e é aqui que o `argparse` começa a ficar verboso. Um programa com quatro subcomandos e vinte opções vira duzentas linhas de configuração antes da primeira linha de lógica.
+
+## Click: o decorador
+
+```bash
+pip install click
+```
+
+```python
+import click
+from pathlib import Path
+
+
+@click.group(help=__doc__)
+@click.version_option("1.0", prog_name="coletor")
+def cli() -> None:
+    pass
+
+
+@cli.command()
+@click.argument("raiz", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("-o", "--saida", type=click.Path(path_type=Path), default=Path("resumo.csv"),
+              show_default=True, help="arquivo de saida")
+@click.option("--formato", type=click.Choice(["csv", "json", "xlsx"]), default="csv",
+              show_default=True, help="formato do relatorio")
+@click.option("--aplicar/--ensaio", default=False, show_default=True,
+              help="grava de verdade")
+def consolidar(raiz: Path, saida: Path, formato: str, aplicar: bool) -> None:
+    """Le todos os CSV e grava um resumo por estacao."""
+    click.echo(f"raiz={raiz} ...")
+```
+
+```text
+Usage: cli_click.py [OPTIONS] COMMAND [ARGS]...
+
+  Coletor: consolida e inspeciona leituras de estacoes.
+
+Options:
+  --version  Show the version and exit.
+  --help     Show this message and exit.
+
+Commands:
+  consolidar  Le todos os CSV e grava um resumo por estacao.
+  listar      Lista os arquivos que seriam processados.
+```
+
+Três ganhos concretos sobre `argparse`:
+
+**A ajuda vem da *docstring*.** `"""Le todos os CSV..."""` virou a descrição do subcomando na listagem e no `--help` dele. Uma fonte só (@sec-cap073), zero duplicação.
+
+**`click.Path(exists=True, file_okay=False)` valida antes de chamar sua função:**
+
+```text
+Error: Invalid value for 'RAIZ': Directory 'nao_existe' does not exist.
+```
+
+Seu código nunca recebe um caminho inexistente. Com `argparse`, `type=Path` só converte — a verificação de existência fica por sua conta.
+
+**`--aplicar/--ensaio` é um par explícito.** O `--help` mostra `[default: ensaio]`, e quem lê a linha de comando sabe exatamente o que está pedindo. Comparado com o `--aplicar` mudo do `argparse`, é uma interface melhor para uma operação destrutiva (@sec-cap074).
+
+Click traz ainda `click.confirm`, `click.prompt`, barra de progresso (`click.progressbar`), cores (`click.secho`), e `CliRunner` para teste.
+
+## Typer: a interface a partir dos tipos
+
+```bash
+pip install typer
+```
+
+Typer é construído **sobre** Click, e a ideia é: a assinatura da função já descreve a interface.
+
+```python
+from enum import Enum
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+app = typer.Typer(help=__doc__, no_args_is_help=True)
+
+
+class Formato(str, Enum):
+    csv = "csv"
+    json = "json"
+    xlsx = "xlsx"
+
+
+@app.command()
+def consolidar(
+    raiz: Annotated[Path, typer.Argument(help="diretorio com os CSV", exists=True)],
+    saida: Annotated[Path, typer.Option("-o", "--saida", help="arquivo de saida")] = Path("resumo.csv"),
+    formato: Annotated[Formato, typer.Option(help="formato do relatorio")] = Formato.csv,
+    minima: Annotated[float, typer.Option(help="descarta abaixo deste valor")] = -90.0,
+    aplicar: Annotated[bool, typer.Option(help="grava de verdade")] = False,
+) -> None:
+    """Le todos os CSV e grava um resumo por estacao."""
+    typer.echo(f"raiz={raiz} saida={saida} formato={formato.value} ...")
+```
+
+```text
+ Usage: cli_typer.py consolidar [OPTIONS] {raiz}
+
+ Le todos os CSV e grava um resumo por estacao.
+
++- Arguments -------------------------------------------------------------+
+| *    raiz      <path>  diretorio com os CSV [required]                  |
++-------------------------------------------------------------------------+
++- Options ---------------------------------------------------------------+
+| --saida    -o                  <path>           arquivo de saida        |
+|                                                 [default: resumo.csv]   |
+| --formato                      <csv|json|xlsx>  formato do relatorio    |
+|                                                 [default: csv]          |
+| --minima                       <float>          descarta abaixo deste   |
+|                                                 valor                   |
+|                                                 [default: -90.0]        |
+| --aplicar      --no-aplicar                     grava de verdade        |
+|                                                 [default: no-aplicar]   |
++-------------------------------------------------------------------------+
+```
+
+O que a anotação de tipo produziu sozinha:
+
+- `float` virou `<float>` com conversão e validação;
+- o `Enum` virou `<csv|json|xlsx>` com a lista de escolhas;
+- `bool` gerou automaticamente o par `--aplicar / --no-aplicar`;
+- `Path` com `exists=True` valida a existência;
+- a *docstring* virou a descrição.
+
+O resultado é que **os tipos são verdade em três lugares ao mesmo tempo**: o `mypy` (@sec-cap069) confere a função, o Typer valida a entrada em tempo de execução, e o `--help` documenta. Nenhuma das três informações foi escrita duas vezes.
+
+```text
+Invalid value for '--formato': 'pdf' is not one of 'csv', 'json', 'xlsx'.
+Invalid value for 'raiz': Path 'nao_existe' does not exist.
+```
+
+## Qual escolher
+
+::: {#fig-escolha-cli}
+```{.tikz}
+%%| filename: escolha-cli
+%%| alt: Comparacao entre argparse, Click e Typer
+\begin{tikzpicture}[
+  cx/.style={draw,rounded corners,align=left,text width=4.2cm,minimum height=4.2cm,font=\scriptsize},
+  tt/.style={font=\small\bfseries,align=center},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-1.4,-4.6) rectangle (14.4,3.6);
+
+  \node[tt] at (1.6,3.1)  {argparse};
+  \node[tt] at (6.9,3.1)  {Click};
+  \node[tt] at (12.2,3.1) {Typer};
+
+  \node[cx,fill=manualgray!18] at (1.6,0.6)
+    {\textbf{biblioteca padrao}\\[4pt]
+     + zero dependencia\\
+     + esta em toda maquina\\[4pt]
+     -- verboso com subcomando\\
+     -- so converte, nao valida\\
+     -- ajuda escrita a mao\\[4pt]
+     \textit{script interno, ferramenta de CI, codigo que nao pode ter dependencia}};
+
+  \node[cx,fill=manualblue!18] at (6.9,0.6)
+    {\textbf{decoradores}\\[4pt]
+     + ajuda vem da docstring\\
+     + valida (\texttt{exists}, \texttt{Choice})\\
+     + \texttt{prompt}, cores, progresso\\
+     + \texttt{CliRunner} para teste\\[4pt]
+     -- uma dependencia\\[4pt]
+     \textit{CLI grande, muitos subcomandos, controle fino}};
+
+  \node[cx,fill=manualgreen!18] at (12.2,0.6)
+    {\textbf{anotacoes de tipo}\\[4pt]
+     + menos codigo que Click\\
+     + tipo vale para mypy,\\ \ \ validacao e ajuda\\
+     + completacao de shell\\[4pt]
+     -- construido sobre Click\\
+     -- \texttt{Annotated} e verboso\\[4pt]
+     \textit{projeto novo ja tipado}};
+
+  \node[nt,anchor=north,text width=13.4cm] at (6.9,-2.0)
+    {os tres produzem o mesmo programa para quem usa --- a escolha e sobre quanto codigo voce escreve e quantas dependencias aceita};
+\end{tikzpicture}
+```
+Os três geram interfaces equivalentes; diferem em quanto você precisa escrever e no que validam por conta própria.
+:::
+
+A recomendação prática:
+
+- **Script interno que ninguém instala, ou ferramenta que roda em ambiente mínimo**: `argparse`. Zero dependência tem valor real quando o script vive num contêiner enxuto ou num servidor que você não controla.
+- **Projeto novo, já tipado, que você vai distribuir**: **Typer**. É o menor caminho entre a função e a interface, e reaproveita anotações que você ia escrever de qualquer forma.
+- **CLI grande com muitos subcomandos, ou quando precisar de controle fino** sobre grupos, contexto e composição: **Click**. Typer usa Click por baixo, então nada se perde ao começar por Typer e descer um nível quando necessário.
+
+## Distribuir como comando
+
+Ninguém quer digitar `python /caminho/longo/cli.py`. O `pyproject.toml` (@sec-cap032, @sec-cap034) instala o programa como comando de verdade:
+
+```toml
+[project]
+name = "coletor"
+version = "1.0.0"
+requires-python = ">=3.13"
+dependencies = ["typer>=0.27"]
+
+[project.scripts]
+coletor = "coletor.cli:app"
+```
+
+```bash
+pip install -e .
+coletor consolidar entrada/ --formato json
+```
+
+O `pip` gera um executável no `bin` do ambiente virtual apontando para `app`. E `uv tool install` (@sec-cap033) instala a ferramenta num ambiente isolado, disponível globalmente sem poluir nada.
+
+## Testar a interface
+
+Uma CLI é código como outro qualquer, e o @sec-cap070 vale inteiro aqui:
+
+```python
+from typer.testing import CliRunner
+
+from cli_argparse import montar_parser
+from cli_typer import app
+
+runner = CliRunner()
+
+
+def test_argparse_padroes():
+    args = montar_parser().parse_args(["entrada"])
+    assert args.formato == "csv"
+    assert args.aplicar is False
+    assert args.verboso == 0
+
+
+def test_argparse_recusa_formato_invalido():
+    with pytest.raises(SystemExit) as info:
+        montar_parser().parse_args(["entrada", "--formato", "pdf"])
+    assert info.value.code == 2
+
+
+def test_typer_listar(tmp_path):
+    (tmp_path / "a.csv").write_text("x")
+    r = runner.invoke(app, ["listar", str(tmp_path)])
+    assert r.exit_code == 0
+    assert "a.csv" in r.stdout
+
+
+def test_typer_raiz_inexistente():
+    r = runner.invoke(app, ["consolidar", "nao_existe"])
+    assert r.exit_code == 2
+```
+
+```text
+....                                                                     [100%]
+4 passed in 0.16s
+```
+
+Dois idiomas a guardar. No `argparse`, um erro de uso chama `sys.exit(2)`, então o teste é `pytest.raises(SystemExit)` conferindo `info.value.code`. No Typer e no Click, o `CliRunner` **não** deixa o processo morrer: ele devolve um resultado com `exit_code`, `stdout` e `exception`, o que torna o teste bem mais direto.
+
+## 🐍 Jeito Pythônico
+
+**Separe o *parser* da lógica, e a lógica da apresentação.** A função que faz o trabalho recebe argumentos Python e devolve dados; a camada de CLI só traduz. Isso permite testar sem CLI, usar a mesma função de outro programa, e trocar `argparse` por Typer sem reescrever nada que importe.
+
+**`main(argv=None)` e `sys.exit(main())`.** Um parâmetro opcional torna a CLI inteira testável, e o código de saída vindo do `return` mantém o controle de saída num lugar só. Convenção Unix: 0 sucesso, 2 erro de uso, 1 (ou outro) erro de execução.
+
+**Valide na fronteira.** `click.Path(exists=True)` e `Annotated[Path, typer.Argument(exists=True)]` recusam a entrada antes de a sua função rodar. Cada validação feita pela biblioteca é um `if` que você não escreve e um teste que você não precisa manter.
+
+**Ajuda vem da *docstring* e o padrão vem do código.** `%(default)s` no `argparse`, `show_default=True` no Click, automático no Typer. Texto de ajuda com valores escritos à mão diverge do comportamento real, e ninguém percebe porque ninguém testa a ajuda.
+
+**Operação destrutiva pede sinalizador explícito**, e um par `--aplicar/--ensaio` é melhor que um `--aplicar` solto: quem lê a linha de comando no histórico do shell sabe o que aconteceu.
+
+**Respeite a convenção de saída padrão.** Dados vão para `stdout`, mensagens e diagnósticos vão para `stderr`. Um programa que imprime "Processando..." em `stdout` não pode ser encadeado com `|`, e é assim que uma CLI deixa de ser útil num *pipeline*.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-cli && cd lab-cli
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install click typer pytest
+```
+
+**Passo 2 — `argparse`.** Escreva `cli_argparse.py` com `montar_parser()` e `main(argv=None)`, incluindo: um posicional `raiz` do tipo `Path`; `-o/--saida` com padrão; `--formato` com `choices`; `--minima` do tipo `float`; `--aplicar` com `store_true`; e `-v` com `action="count"`. Rode `--help` e confira que o texto do padrão aparece — se você não usou `%(default)s`, ele não aparece.
+
+**Passo 3 — os erros e os códigos.** Rode três comandos inválidos: sem `raiz`, com `--formato pdf`, e com `--minima abc`. Depois de cada um, confira o código de saída:
+
+```bash
+python cli_argparse.py --formato pdf entrada; echo $?
+```
+
+```text
+coletor: error: argument --formato: invalid choice: 'pdf' (choose from 'csv', 'json', 'xlsx')
+2
+```
+
+Os três dão 2. Guarde: é a convenção que distingue "você usou errado" de "deu erro".
+
+**Passo 4 — testar o *parser*.** Escreva dois testes: um que confira os padrões com `montar_parser().parse_args(["entrada"])`, e um que confirme `SystemExit` com `code == 2` para `--formato pdf`. Este passo só funciona porque `montar_parser` está separada — se você tivesse escrito tudo dentro de `main`, não haveria o que testar.
+
+**Passo 5 — a mesma CLI em Typer.** Reescreva com `typer.Typer()`, dois subcomandos (`consolidar` e `listar`), um `Enum` para o formato e `Annotated[Path, typer.Argument(exists=True)]` para a raiz. Compare o número de linhas com o `argparse` do passo 2.
+
+**Passo 6 — o que o tipo deu de graça.** Rode `python cli_typer.py consolidar --help` e localize na saída: o `<float>` de `minima`, o `<csv|json|xlsx>` do `Enum`, e o par `--aplicar / --no-aplicar` que você não escreveu. Depois rode com `--formato pdf` e com um diretório inexistente, e confirme que a sua função **nunca foi chamada**.
+
+**Passo 7 — testar com `CliRunner`.**
+
+```python
+from typer.testing import CliRunner
+runner = CliRunner()
+
+def test_typer_listar(tmp_path):
+    (tmp_path / "a.csv").write_text("x")
+    r = runner.invoke(app, ["listar", str(tmp_path)])
+    assert r.exit_code == 0
+    assert "a.csv" in r.stdout
+```
+
+Rode os quatro testes juntos:
+
+```text
+....                                                                     [100%]
+4 passed in 0.16s
+```
+
+**Passo 8 — instalar como comando.** Reorganize em `src/coletor/cli.py`, escreva o `pyproject.toml` com `[project.scripts]`, e rode `pip install -e .`. Depois feche o terminal, reabra, ative o ambiente e digite `coletor --help`. É esta a diferença entre um arquivo `.py` e uma ferramenta.
+
+**Passo 9 — `stdout` contra `stderr`.** Faça `listar` imprimir os caminhos em `stdout` e uma linha "N arquivos encontrados" em `stderr` (`typer.echo(..., err=True)`). Depois rode:
+
+```bash
+coletor listar entrada | wc -l
+```
+
+A contagem tem de bater com o número de arquivos — a linha de diagnóstico não pode estar no meio dos dados. Agora troque `err=True` por nada e rode de novo para ver a contagem ficar errada. É esta a razão da convenção.
+
+## Resumo
+
+- Uma CLI transforma um script num programa: aceita parâmetros, se explica com `--help`, valida antes de agir e devolve **código de saída** — 0 sucesso, **2 erro de uso**, outro para erro de execução.
+- **`argparse`** está na biblioteca padrão e resolve o caso comum; fica verboso com subcomandos e apenas **converte** os tipos, sem validar existência. Use `%(default)s` para que a ajuda não divirja do código.
+- **Click** tira a ajuda da *docstring*, valida com `click.Path(exists=True)` e `click.Choice`, e oferece `prompt`, cores, barra de progresso e `CliRunner`.
+- **Typer** constrói a interface a partir das **anotações de tipo**: `float` vira conversão, `Enum` vira lista de escolhas, `bool` vira o par `--x/--no-x`, `Path(exists=True)` valida. O mesmo tipo serve ao `mypy`, à validação e ao `--help`.
+- Escolha: `argparse` quando zero dependência importa; **Typer** para projeto novo já tipado; **Click** para CLI grande ou controle fino — e Typer é construído sobre Click, então descer um nível é sempre possível.
+- **Separe *parser*, lógica e apresentação**; `main(argv=None)` e `sys.exit(main())` tornam tudo testável. No `argparse` o teste captura `SystemExit`; no Click e no Typer o `CliRunner` devolve `exit_code` e `stdout` sem matar o processo.
+- Distribua com `[project.scripts]` no `pyproject.toml`, e mantenha **dados em `stdout`, diagnóstico em `stderr`** — é o que permite encadear seu programa com outros.
