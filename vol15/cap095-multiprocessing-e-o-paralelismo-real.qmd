@@ -1,3 +1,464 @@
 # Multiprocessing e o paralelismo real {#sec-cap095}
 
-*(em elaboracao)*
+Processos contornam o GIL porque cada um tem o seu próprio interpretador. É a única forma de ganhar tempo de parede em cálculo escrito em Python puro, e o @sec-cap093 mediu o ganho.
+
+O que ele não mediu foi o preço. Processos não compartilham memória, então todo dado que entra e todo resultado que sai precisa ser **serializado, copiado e reconstruído**. A diferença entre um programa que fica 5x mais rápido e um que fica 470x mais lento com a mesma biblioteca está inteiramente em entender essa fronteira. Este capítulo é sobre ela.
+
+## Como um processo filho nasce
+
+O `multiprocessing` tem três formas de criar um filho, e elas diferem no que o filho recebe de graça:
+
+::: {#fig-metodos-inicio}
+```{.tikz}
+%%| filename: metodos-inicio
+%%| alt: Comparacao entre fork, spawn e forkserver e o que cada filho herda do pai
+\begin{tikzpicture}[
+  cx/.style={draw,rounded corners,align=left,text width=3.9cm,
+             font=\scriptsize,inner sep=6pt},
+  hd/.style={draw,rounded corners,align=center,text width=3.9cm,
+             minimum height=0.8cm,font=\scriptsize\bfseries,inner sep=5pt}
+]
+  \path (-0.3,-6.8) rectangle (14.5,3.6);
+
+  \node[draw,rounded corners,fill=manualgray!18,align=center,text width=13.4cm,
+        font=\scriptsize,minimum height=0.85cm] at (7.2,3.0)
+    {\textbf{processo pai:} interpretador carregado, modulos importados,
+     variaveis globais definidas, arquivos e conexoes abertos};
+
+  \node[hd,fill=manualgreen!22] at (2.4,1.5) {fork --- 11 ms};
+  \node[hd,fill=manualred!18]   at (7.2,1.5) {spawn --- 100 ms};
+  \node[hd,fill=manualblue!20]  at (12.0,1.5) {forkserver --- 50 ms};
+
+  \draw[->,>=stealth] (7.2,2.55) -- (7.2,2.15) -- (2.4,2.15) -- (2.4,1.95);
+  \draw[->,>=stealth] (7.2,2.55) -- (7.2,1.95);
+  \draw[->,>=stealth] (7.2,2.55) -- (7.2,2.15) -- (12.0,2.15) -- (12.0,1.95);
+
+  \node[cx,fill=manualgreen!12] at (2.4,-0.4)
+    {\textbf{o filho recebe tudo}\\
+     copia do processo inteiro, com copia-na-escrita. Imports feitos,
+     globais definidas, descritores abertos --- tudo ja esta la. O modulo
+     nao roda de novo.};
+  \node[cx,fill=manualred!12] at (7.2,-0.4)
+    {\textbf{o filho recebe quase nada}\\
+     interpretador novo, do zero, que reimporta o modulo principal. So
+     existe o que o import cria; o resto precisa ser enviado serializado.};
+  \node[cx,fill=manualblue!12] at (12.0,-0.4)
+    {\textbf{o meio-termo}\\
+     um servidor enxuto e bifurcado uma unica vez, cedo. Cada filho nasce
+     dele, herdando pouco e custando pouco.};
+
+  \node[cx,fill=manualyellow!18] at (2.4,-3.4)
+    {\textbf{so em Unix.}\\
+     Perigoso quando ha threads: uma trava segurada por outra thread e
+     copiada ja travada, e ninguem no filho vai solta-la.};
+  \node[cx,fill=manualyellow!18] at (7.2,-3.4)
+    {\textbf{padrao em Windows e macOS.}\\
+     Exige a guarda \texttt{\_\_main\_\_} e que todo objeto enviado seja
+     serializavel. E o mais restritivo --- e o mais portavel.};
+  \node[cx,fill=manualyellow!18] at (12.0,-3.4)
+    {\textbf{padrao do 3.14 em Linux.}\\
+     Evita a armadilha do fork com threads sem pagar os 100 ms do spawn
+     a cada processo criado.};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.4cm,
+        font=\scriptsize,inner sep=6pt] at (7.2,-5.9)
+    {\textbf{escreva como se fosse spawn, sempre.} Codigo que depende do que o
+     fork herda funciona na sua maquina Linux e quebra no Windows, no macOS e
+     no Python 3.14 --- e quebra na forma mais cara possivel, so quando alguem
+     tenta rodar em outro lugar.};
+\end{tikzpicture}
+```
+Os três métodos de início e o que cada filho recebe. Tempos medidos para criar um pool de 8 processos.
+:::
+
+```text
+== custo de criar um pool de 8 processos (tarefa trivial)
+  fork            11.1 ms
+  spawn          100.4 ms
+  forkserver      50.1 ms
+```
+
+E a diferença de herança, medida com uma variável global definida **depois** do import:
+
+```python
+HERDADO = {"criado_no_pai": os.getpid()}
+
+def quem_sou_eu(_=None):
+    return (os.getpid(), HERDADO.get("depois_do_import", "AUSENTE"))
+
+HERDADO["depois_do_import"] = "valor definido no pai"   # apos o import
+```
+
+```text
+== estado criado APOS o import: o filho enxerga?
+  fork         filho vê: ['valor definido no pai']
+  spawn        filho vê: ['AUSENTE']
+```
+
+É a fonte mais comum de "funciona na minha máquina" em código com processos. Com `fork`, uma conexão de banco aberta na inicialização, um cache preenchido, uma configuração montada em tempo de execução — tudo aparece no filho de graça. Com `spawn`, nada disso existe, e o código quebra com `AttributeError` ou `None` onde deveria haver um objeto.
+
+::: {.callout-important}
+## O padrão está mudando
+Até o 3.13, `fork` é o padrão em Linux. **No 3.14 o padrão em Linux passou a ser `forkserver`**, porque `fork` num processo que já tem threads é inseguro — e quase todo programa real tem threads, mesmo sem saber (bibliotecas de log, clientes HTTP, o próprio `ProcessPoolExecutor`). O Python 3.13 já emite `DeprecationWarning` nesse caso. Escreva hoje o código que vai funcionar depois: nada de depender de herança.
+:::
+
+## A guarda `__main__` não é opcional
+
+Com `spawn` e `forkserver`, o filho **reimporta o módulo principal**. Se a criação do pool estiver no nível do módulo, o filho cria um pool também, e esse neto cria outro:
+
+```python
+# ERRADO: sem a guarda
+ctx = mp.get_context("spawn")
+with ProcessPoolExecutor(max_workers=2, mp_context=ctx) as ex:
+    print(list(ex.map(trivial, range(4))))
+```
+
+```text
+criando o pool sem a guarda if __name__ == '__main__'
+criando o pool sem a guarda if __name__ == '__main__'
+criando o pool sem a guarda if __name__ == '__main__'
+RuntimeError:
+        An attempt has been made to start a new process before the
+        current process has finished its bootstrapping phase.
+
+        This probably means that you are not using fork to start your
+        child processes and you have forgotten to use the proper idiom
+        in the main module:
+
+            if __name__ == '__main__':
+                freeze_support()
+                ...
+```
+
+A mensagem impressa três vezes é a recursão começando. O Python detecta e aborta — mas em outras configurações o resultado é uma bomba de processos.
+
+A correção é a de sempre: todo trabalho num `main()`, e no nível do módulo apenas o mínimo.
+
+```python
+def main():
+    with ProcessPoolExecutor(max_workers=8) as ex:
+        ...
+
+if __name__ == "__main__":
+    main()
+```
+
+Consequência prática: **o módulo principal precisa ser barato de importar.** Se importá-lo carrega um modelo de 2 GB ou abre conexões, cada processo filho faz isso de novo.
+
+## O que atravessa a fronteira
+
+Argumentos e resultados viajam serializados com `pickle`. Nem tudo passa:
+
+```text
+== o que nao atravessa a fronteira
+  lambda             AttributeError: Can't get local object '<lambda>'
+  funcao aninhada    AttributeError: Can't get local object 'interna'
+  arquivo aberto     TypeError: cannot pickle 'TextIOWrapper' instances
+  gerador            TypeError: cannot pickle 'generator' object
+```
+
+O padrão: `pickle` guarda funções e classes **por nome qualificado**, não por conteúdo. Por isso `lambda`, função aninhada e método de classe local falham — o filho não conseguiria encontrá-los para reconstruir. E objetos ligados a recursos do sistema (arquivo, *socket*, trava, conexão, gerador em andamento) não têm como ser recriados do outro lado.
+
+Na prática:
+
+- A função enviada a um pool precisa ser **definida no nível do módulo**.
+- Abra recursos **dentro** do trabalhador, nunca os passe como argumento. Use o `initializer` do executor para preparar um por processo.
+- Se precisa mesmo de um `lambda` ou de um *closure*, use `functools.partial` sobre uma função de módulo.
+
+## O custo da fronteira
+
+Serializar não é grátis, e a conta cresce com o tamanho do dado:
+
+```text
+== custo de atravessar a fronteira entre processos
+    1 MiB | pickle ida+volta     0.5 ms | 4 envios pelo pool 0.03 s
+   50 MiB | pickle ida+volta    52.3 ms | 4 envios pelo pool 0.71 s
+```
+
+Meio segundo só para entregar os dados a quatro processos. Se o cálculo em cima deles levar 200 ms, paralelizar **perde** para o laço sequencial.
+
+::: {#fig-fronteira}
+```{.tikz}
+%%| filename: fronteira
+%%| alt: Copia por pickle contra memoria compartilhada entre processos
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=2.3cm,
+             minimum height=1.0cm,font=\scriptsize},
+  et/.style={draw,rounded corners,align=center,text width=1.8cm,
+             minimum height=0.8cm,font=\tiny,fill=manualyellow!22},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm},
+  ti/.style={font=\scriptsize\bfseries,anchor=west}
+]
+  \path (-0.3,-6.4) rectangle (14.4,3.4);
+
+  % ---------- por copia ----------
+  \node[ti] at (-0.2,3.1) {por copia --- 50 MiB para 4 processos: 0,66 s};
+
+  \node[bx,fill=manualgreen!18] at (1.4,1.7) {processo pai\\50 MiB};
+  \node[et] at (4.3,1.7) {\texttt{pickle}\\serializa};
+  \node[et] at (7.0,1.7) {pipe do\\sistema};
+  \node[et] at (9.7,1.7) {\texttt{pickle}\\reconstroi};
+  \node[bx,fill=manualblue!18] at (12.6,1.7) {filho\\+50 MiB};
+
+  \draw[->,>=stealth] (2.70,1.7) -- (3.25,1.7);
+  \draw[->,>=stealth] (5.35,1.7) -- (5.95,1.7);
+  \draw[->,>=stealth] (8.05,1.7) -- (8.65,1.7);
+  \draw[->,>=stealth] (10.75,1.7) -- (11.30,1.7);
+
+  \node[nt] at (-0.2,0.5)
+    {Cada um dos quatro filhos recebe a sua propria copia integral --- 200 MiB
+     no total, mais o tempo de serializar e reconstruir quatro vezes.};
+
+  % ---------- compartilhada ----------
+  \node[ti] at (-0.2,-1.1) {memoria compartilhada --- os mesmos 50 MiB: 0,01 s};
+
+  \node[bx,fill=manualgreen!18] at (1.5,-2.6) {processo pai};
+  \node[et,fill=manualred!18] at (4.9,-2.6) {so o \emph{nome}\\do bloco viaja};
+  \node[draw,rounded corners,align=center,text width=3.2cm,minimum height=1.6cm,
+        font=\scriptsize,fill=manualgray!20] at (8.6,-2.6)
+    {\texttt{SharedMemory}\\50 MiB, uma vez so};
+  \node[bx,fill=manualblue!18] at (12.9,-1.9) {filho 1};
+  \node[bx,fill=manualblue!18] at (12.9,-3.3) {filho 2};
+
+  \draw[->,>=stealth] (2.85,-2.6) -- (3.75,-2.6);
+  \draw[->,>=stealth] (6.05,-2.6) -- (6.95,-2.6);
+  \draw[<->,>=stealth] (10.25,-2.2) -- (11.55,-1.9);
+  \draw[<->,>=stealth] (10.25,-3.0) -- (11.55,-3.3);
+
+  \node[nt] at (-0.2,-4.6)
+    {Os filhos mapeiam o mesmo bloco: nada e copiado e nada e serializado.
+     Em troca, voce passa a gerenciar o ciclo de vida na mao --- \texttt{close}
+     em cada processo, \texttt{unlink} exatamente uma vez --- e a sincronizacao
+     volta a ser problema seu, como no capitulo anterior.};
+\end{tikzpicture}
+```
+Copiar 50 MiB para quatro processos custa 0,66 s; compartilhá-los custa 0,01 s.
+:::
+
+```python
+from multiprocessing import shared_memory
+
+def soma_por_nome(nome):                 # o filho recebe uma string
+    blo = shared_memory.SharedMemory(name=nome)
+    try:
+        return sum(bytes(blo.buf[::1_000_000]))
+    finally:
+        blo.close()                      # cada processo fecha a sua vista
+
+blo = shared_memory.SharedMemory(create=True, size=TAM)
+blo.buf[:TAM] = dados
+try:
+    with ProcessPoolExecutor(max_workers=4) as ex:
+        list(ex.map(soma_por_nome, [blo.name] * 4))
+finally:
+    blo.close()
+    blo.unlink()                         # exatamente uma vez, no dono
+```
+
+```text
+== enviando 50 MiB para 4 processos, por copia
+  copia (pickle)          0.66 s
+  memoria compartilhada   0.01 s
+```
+
+**Sessenta e seis vezes mais rápido**, porque o que atravessou a fronteira foi uma string com o nome do bloco. Para NumPy, o mesmo mecanismo aparece pronto: crie o `SharedMemory` e construa um `np.ndarray` com `buffer=blo.buf` nos dois lados.
+
+::: {.callout-warning}
+## `unlink` exatamente uma vez, e nunca duas
+`close()` desfaz o mapeamento do processo atual; `unlink()` destrói o bloco para todo mundo. Chamar `unlink` no filho apaga o bloco enquanto os irmãos ainda o usam. Esquecer o `unlink` deixa o bloco vazando em `/dev/shm` **depois de o programa terminar** — ele sobrevive ao processo, e só some no reinício ou na remoção manual.
+:::
+
+## Estado compartilhado, quando for inevitável
+
+Para poucos valores, `Value` e `Array` moram em memória compartilhada e aceitam uma trava:
+
+```python
+valor = mp.Value("i", 0)
+trava = mp.Lock()
+
+def incrementa(valor, trava):
+    for _ in range(50_000):
+        with trava:
+            valor.value += 1
+```
+
+```text
+== Value compartilhado: 4 processos, 50.000 incrementos cada
+  esperado 200000, obtido 200000
+```
+
+Note que a trava continua sendo necessária: `valor.value += 1` sofre exatamente a corrida do @sec-cap094, agora entre processos.
+
+Para estruturas ricas — dicionário, lista, fila —, existe `Manager`, que cria um processo servidor e entrega **proxies**. É flexível e conveniente, e cobra caro por operação:
+
+```text
+== 20000 chamadas de append, uma a uma
+  list() comum              1.0 ms
+  Manager().list()       2036.9 ms  (tamanho final 20000)
+  cada append pelo proxy custou 102 us contra 0.050 us
+  razao: 2055x
+```
+
+Cada `append` num proxy é uma ida e volta pela rede local até o processo do gerenciador. Duas mil vezes o custo de um `append` normal. `Manager` serve para **estado de coordenação** — um dicionário de progresso atualizado a cada segundo, um sinalizador de parada — e nunca para o caminho quente.
+
+A ordem de preferência é clara: **não compartilhar** (devolva resultados pelo `map`), depois `shared_memory` para dados grandes, depois `Value`/`Array` para escalares, e `Manager` por último.
+
+## O escalonamento real
+
+```text
+== 8 tarefas de CPU (20M quadrados cada), variando trabalhadores
+  sequencial        6.51 s   (referencia)
+   2 processos      3.28 s   ganho 1.98x
+   4 processos      1.74 s   ganho 3.73x
+   8 processos      1.26 s   ganho 5.17x
+  12 processos      1.27 s   ganho 5.37x
+  16 processos      1.28 s   ganho 5.06x
+```
+
+A curva tem a forma esperada: quase linear no começo (1,98x com 2), afastando-se depois (3,73x com 4), saturando em 8 — que é o número de tarefas — e **piorando** com 16, quando processos passam a disputar os mesmos núcleos e a pagar troca de contexto.
+
+::: {.callout-note}
+## Por que este 5,17x e o 4,33x do @sec-cap093 não batem
+São execuções diferentes. O tempo dos 8 processos é estável (1,26 s a 1,36 s); a referência sequencial variou entre 5,8 s e 6,5 s conforme o estado da máquina. Medir a referência logo depois de criar e destruir pools chegou a inflá-la para 9,9 s — o que produziria um "ganho" de 7,85x que não significa nada. A lição vale para todo este volume: **compare apenas números medidos na mesma execução**, e desconfie de qualquer ganho que você não conseguiu reproduzir. O @sec-cap097 é inteiro sobre isso.
+:::
+
+### `chunksize`: o parâmetro que muda tudo
+
+Aqui está o resultado mais violento deste capítulo. Duzentas mil tarefas minúsculas (`x + 1`) em oito processos:
+
+```text
+== 200.000 tarefas minusculas: o custo de despachar uma a uma
+  chunksize=1       37.52 s
+  chunksize=100      0.41 s
+  chunksize=10000    0.08 s
+```
+
+**De 37,52 s para 0,08 s — 470 vezes.** O trabalho é idêntico; o que mudou foi quantas vezes o pool serializou um item, mandou por um *pipe*, acordou um processo e recebeu a resposta de volta. Com `chunksize=1`, o custo administrativo é milhares de vezes maior que a tarefa.
+
+O sintoma clássico: "paralelizei e ficou mais lento que o `for`". Quase sempre é isso, e quase sempre a correção é uma palavra-chave.
+
+A regra: **o pedaço tem de durar bem mais que o despacho.** Como o despacho custa algumas dezenas de microssegundos, mire em pedaços de pelo menos alguns milissegundos. `multiprocessing.Pool.map` calcula um `chunksize` razoável sozinho quando você não informa; `ProcessPoolExecutor.map` usa **1** por padrão — e é por isso que ele é mais fácil de usar mal.
+
+## `Pool` ou `ProcessPoolExecutor`?
+
+| | `multiprocessing.Pool` | `ProcessPoolExecutor` |
+|---|---|---|
+| interface | própria | igual à de threads |
+| `chunksize` padrão em `map` | calculado | **1** |
+| resultado fora de ordem | `imap_unordered` | `as_completed` |
+| erro num trabalhador | pode travar o pool | processo é reposto |
+| trocar por threads | reescrever | trocar o nome da classe |
+
+Use `ProcessPoolExecutor` por padrão — a interface compartilhada com threads é o que torna a escolha do modelo uma medição, como no @sec-cap093 — e **sempre informe `chunksize` no `map`**. `Pool` continua útil pelo `imap_unordered` com entrada preguiçosa, que processa um fluxo sem materializá-lo.
+
+Dois cuidados finais:
+
+**`initializer` para recursos por processo.** Abrir uma conexão por tarefa é desperdício; abrir uma por processo é o certo.
+
+```python
+def prepara():
+    global CONEXAO
+    CONEXAO = abre_conexao()
+
+with ProcessPoolExecutor(max_workers=8, initializer=prepara) as ex:
+    ...
+```
+
+**Um trabalhador morto por `SIGKILL`** (o *OOM killer*, tipicamente) faz o `ProcessPoolExecutor` levantar `BrokenProcessPool`, e todo o pool vai junto. Se as tarefas puderem consumir muita memória, limite `max_workers` pela memória disponível, não pelo número de núcleos.
+
+## 🐍 Jeito Pythônico
+
+**Escreva como se o método de início fosse `spawn`.** Nada de depender do que o `fork` herda: quebra no Windows, no macOS e no Python 3.14, sempre na máquina de outra pessoa.
+
+**Guarda `if __name__ == "__main__":` em todo programa com processos**, com o trabalho dentro de um `main()`. E módulo principal barato de importar.
+
+**Sempre passe `chunksize` no `map` de um `ProcessPoolExecutor`.** O padrão é 1, e ele custou 470x aqui.
+
+**Funções de trabalho no nível do módulo.** `lambda`, função aninhada e método local não passam pelo `pickle`; use `functools.partial` quando precisar fixar argumentos.
+
+**Abra recursos dentro do trabalhador, via `initializer`** — não passe arquivo, *socket* ou conexão como argumento.
+
+**Meça a fronteira antes de paralelizar.** 50 MiB custaram 0,66 s só para entrar; se o cálculo é mais curto que isso, o `for` sequencial ganha.
+
+**Para dados grandes, `shared_memory`** — 66x aqui —, com `close()` em cada processo e `unlink()` exatamente uma vez.
+
+**`Manager` só para coordenação.** 102 µs por operação, 2055x um `append` normal.
+
+**`max_workers` pela memória quando as tarefas forem pesadas**, não pelo número de núcleos: um trabalhador morto pelo *OOM killer* derruba o pool inteiro.
+
+**Não use processos para carga de espera.** Continua valendo o @sec-cap093: mesmo ganho das threads, com muito mais custo.
+
+## 🧪 Laboratório
+
+**Passo 1 — os três métodos.** Crie um pool de 8 processos com `mp.get_context("fork" | "spawn" | "forkserver")` e cronometre:
+
+```text
+  fork            11.1 ms
+  spawn          100.4 ms
+  forkserver      50.1 ms
+```
+
+**Passo 2 — herança.** Defina uma global **depois** dos imports e leia-a dentro do trabalhador. Confirme:
+
+```text
+  fork         filho vê: ['valor definido no pai']
+  spawn        filho vê: ['AUSENTE']
+```
+
+Depois abra um arquivo antes de criar o pool e tente lê-lo no filho nos dois métodos. Explique o resultado.
+
+**Passo 3 — a guarda.** Crie o pool no nível do módulo com `spawn` e rode. Confirme as impressões repetidas e o `RuntimeError` sobre a fase de *bootstrapping*. Depois mova tudo para `main()` e confirme a correção.
+
+::: {.callout-warning}
+## Rode o passo 3 com `timeout`
+Um erro de guarda pode virar criação descontrolada de processos. Use `timeout 20 python sem_guarda.py` e tenha `pkill -f sem_guarda` à mão.
+:::
+
+**Passo 4 — o que não serializa.** Tente `pickle.dumps` num `lambda`, numa função aninhada, num arquivo aberto e num gerador. Anote as quatro mensagens e classifique cada uma como "não encontrável pelo nome" ou "ligado a recurso do sistema".
+
+**Passo 5 — a curva.** Rode 8 tarefas de CPU com 1, 2, 4, 8, 12 e 16 processos. Ache o joelho da curva e explique as duas quedas: saturação em 8 (número de tarefas) e piora em 16 (disputa).
+
+**Passo 6 — a referência instável.** Meça o tempo sequencial cinco vezes seguidas num processo limpo, depois meça de novo logo após criar e destruir três pools. Compare. Este passo é o motivo da caixa de aviso deste capítulo.
+
+**Passo 7 — `chunksize`.** Duzentas mil tarefas de `x + 1` com `chunksize` 1, 100 e 10000:
+
+```text
+  chunksize=1       37.52 s
+  chunksize=10000    0.08 s
+```
+
+Calcule o custo de despacho por tarefa a partir do primeiro número. Depois refaça com uma tarefa que gaste 5 ms e observe a diferença encolher — e explique por quê.
+
+**Passo 8 — a fronteira.** Envie 1 MiB e 50 MiB para 4 processos e cronometre. Depois monte a versão com `shared_memory` e compare:
+
+```text
+  copia (pickle)          0.66 s
+  memoria compartilhada   0.01 s
+```
+
+**Passo 9 — o bloco vazado.** Crie um `SharedMemory` e termine o programa **sem** `unlink`. Confira `ls -l /dev/shm` e veja o bloco sobrevivendo ao processo. Remova-o à mão e escreva a versão com `try/finally`.
+
+**Passo 10 — `Value` e a corrida entre processos.** Quatro processos incrementando um `mp.Value` 50 mil vezes cada, **sem** trava. Confirme a perda. Acrescente `mp.Lock` e confirme os 200000.
+
+**Passo 11 — o preço do `Manager`.** Compare 20 mil `append` numa lista comum e num `ger.list()`:
+
+```text
+  list() comum              1.0 ms
+  Manager().list()       2036.9 ms
+```
+
+Depois troque por um único `extend` e observe o custo desabar — e conclua a regra sobre número de idas e voltas.
+
+**Passo 12 — `initializer`.** Escreva um pool cujo `initializer` imprime o PID e cria uma "conexão". Confirme que ele roda uma vez por processo, e não uma vez por tarefa.
+
+## Resumo
+
+- **Três métodos de início**, medidos para um pool de 8: `fork` **11 ms** (herda tudo, só Unix, inseguro com threads), `spawn` **100 ms** (herda quase nada, portável), `forkserver` **50 ms** (o meio-termo, e o **padrão do 3.14 em Linux**).
+- **Escreva como se fosse `spawn`.** Com `fork` o filho enxergou a global definida no pai; com `spawn`, `AUSENTE`. Depender disso é quebrar em outra plataforma.
+- **A guarda `if __name__ == "__main__":` é obrigatória** — sem ela, o filho reimporta o módulo e o Python aborta com o erro de fase de *bootstrapping*.
+- **Só passa pela fronteira o que o `pickle` aceita**: nada de `lambda`, função aninhada, arquivo aberto ou gerador. Função de trabalho no nível do módulo; recursos abertos no `initializer`.
+- **A fronteira custa**: 50 MiB para 4 processos levaram **0,66 s**; os mesmos dados via `shared_memory`, **0,01 s** (66x). `close()` em cada processo, `unlink()` uma vez — bloco esquecido sobrevive ao programa em `/dev/shm`.
+- **`chunksize` é o parâmetro mais caro do módulo**: 200 mil tarefas minúsculas levaram **37,52 s** com `chunksize=1` e **0,08 s** com 10000 — **470x**. `ProcessPoolExecutor.map` usa 1 por padrão.
+- **A curva satura**: 1,98x com 2 processos, 3,73x com 4, 5,17x com 8, e piora com 16.
+- **Compare apenas números da mesma execução.** A referência sequencial variou de 5,8 s a 9,9 s conforme o estado da máquina, o que sozinho move o "ganho" de 4,3x para 7,9x.
+- **Ordem de preferência para estado**: não compartilhar > `shared_memory` > `Value`/`Array` > `Manager` (102 µs por operação, 2055x um `append`).

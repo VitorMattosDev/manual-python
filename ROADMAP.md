@@ -158,7 +158,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 - [x] **cap 093** - Concorrência, paralelismo e o GIL - `vol15/cap093-concorrencia-paralelismo-e-o-gil.qmd`
 - [x] **cap 094** - Threads e o módulo threading - `vol15/cap094-threads-e-o-modulo-threading.qmd`
-- [ ] **cap 095** - Multiprocessing e o paralelismo real - `vol15/cap095-multiprocessing-e-o-paralelismo-real.qmd`
+- [x] **cap 095** - Multiprocessing e o paralelismo real - `vol15/cap095-multiprocessing-e-o-paralelismo-real.qmd`
 - [ ] **cap 096** - Programação assíncrona: async, await e asyncio - `vol15/cap096-programacao-assincrona-async-await-e-asyncio.qmd`
 - [ ] **cap 097** - Medindo desempenho: timeit, profiling e otimização - `vol15/cap097-medindo-desempenho-timeit-profiling-e.qmd`
 - [ ] **cap 098** - Memória, contagem de referências e o coletor de lixo - `vol15/cap098-memoria-contagem-de-referencias-e-o-coletor.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (94 concluidos).
+**Total:** 104 capitulos em 16 volumes (95 concluidos).
 
