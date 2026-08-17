@@ -1,3 +1,490 @@
 # Autenticação, autorização e segurança em aplicações Python {#sec-cap091}
 
-*(em elaboracao)*
+O vazamento de senhas de um site qualquer sai no noticiário e alguém pergunta: "mas as senhas estavam criptografadas?" A pergunta já começa errada — senha não se criptografa, porque criptografia é reversível e ninguém precisa recuperar uma senha. Senha se transforma num resumo caro de calcular. E a diferença entre fazer isso direito e fazer errado é medível: neste capítulo, **1,23 milhão de tentativas por segundo contra 18**.
+
+Segurança de aplicação é um assunto grande, e nenhum capítulo o esgota. O que este faz é cobrir os pontos onde código Python de verdade costuma errar: armazenamento de senha, comparação de segredo, geração de token, a diferença entre autenticação e autorização, e as três ou quatro injeções que continuam derrubando sistemas trinta anos depois de descobertas.
+
+```bash
+pip install argon2-cffi pyjwt "fastapi[standard]" python-multipart
+```
+
+::: {.callout-important}
+## O aviso que este capítulo repete
+Não invente criptografia, não invente protocolo de sessão e não escreva o seu próprio esquema de hash. Todo exemplo aqui usa biblioteca estabelecida, e a lição central é **quando usar qual**, não como reimplementá-la. Se o projeto puder usar autenticação pronta (Django, Authlib, um provedor de identidade externo), use.
+:::
+
+## Senhas: o custo é a defesa
+
+::: {#fig-senha-armazenamento}
+```{.tikz}
+%%| filename: senha-armazenamento
+%%| alt: Quatro formas de guardar senha e o que cada uma custa ao atacante
+\begin{tikzpicture}[
+  mt/.style={draw,rounded corners,align=left,text width=3.0cm,
+             minimum height=1.05cm,font=\scriptsize},
+  ex/.style={draw,rounded corners,align=left,text width=5.2cm,
+             minimum height=1.05cm,font=\scriptsize},
+  vl/.style={draw,rounded corners,align=center,text width=2.4cm,
+             minimum height=1.05cm,font=\scriptsize\bfseries}
+]
+  \path (-0.4,-4.6) rectangle (14.6,3.6);
+
+  \node[font=\scriptsize\bfseries,align=center] at (2.8,3.2) {como se guarda};
+  \node[font=\scriptsize\bfseries,align=center] at (8.0,3.2)
+    {o que o vazamento entrega};
+  \node[font=\scriptsize\bfseries,align=center,text width=2.6cm] at (12.8,3.2)
+    {tentativas por segundo};
+
+  \node[mt,fill=manualred!22] at (2.8,2.0) {\textbf{texto claro}};
+  \node[ex,fill=manualred!14] at (8.0,2.0)
+    {tudo, na hora --- e as mesmas senhas\\reusadas em outros sites};
+  \node[vl,fill=manualred!26] at (12.8,2.0) {nao precisa};
+
+  \node[mt,fill=manualred!18] at (2.8,0.6) {\textbf{SHA-256 puro}};
+  \node[ex,fill=manualred!14] at (8.0,0.6)
+    {tabela arco-iris resolve as comuns;\\senhas iguais tem hash igual};
+  \node[vl,fill=manualred!22] at (12.8,0.6) {1,23 milhao};
+
+  \node[mt,fill=manualyellow!24] at (2.8,-0.8) {\textbf{SHA-256 com sal}};
+  \node[ex,fill=manualyellow!18] at (8.0,-0.8)
+    {mata a tabela pronta, mas a forca\\bruta continua barata demais};
+  \node[vl,fill=manualyellow!26] at (12.8,-0.8) {cerca de\\1 milhao};
+
+  \node[mt,fill=manualgreen!20] at (2.8,-2.2) {\textbf{Argon2id}\\(ou bcrypt, scrypt)};
+  \node[ex,fill=manualgreen!14] at (8.0,-2.2)
+    {sal por senha e custo de CPU e de\\memoria calibrados de proposito};
+  \node[vl,fill=manualgreen!26] at (12.8,-2.2) {18};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=14.2cm,
+        font=\scriptsize] at (7.1,-3.9)
+    {\textbf{medido neste capitulo, num nucleo desta maquina.} O numero da direita e o
+     que separa um vazamento de um incidente: a 1,23 milhao por segundo, uma lista de
+     senhas comuns cai em minutos; a 18 por segundo, a mesma lista levaria anos --- e
+     o atacante com GPU melhora os dois numeros, mas a razao entre eles nao muda.};
+\end{tikzpicture}
+```
+As quatro formas de guardar senha, e o custo de cada uma para quem ataca.
+:::
+
+```python
+import hashlib, time
+
+hashlib.sha256(SENHA.encode()).hexdigest()
+```
+
+```text
+  sha256 direto : 42a19079da401b8c8afbd5225dbc0577713e66363b4adf746fbc4836d3eadad0
+  a mesma senha : True
+  200.000 sha256 em 0.163 s -> 1.23 milhoes de tentativas por segundo (1 nucleo)
+```
+
+Duas propriedades condenam o SHA-256 para senha, e as duas aparecem nessa saída. **A mesma senha dá sempre o mesmo hash** — então quem vazou o banco vê imediatamente quais contas compartilham senha, e uma tabela pré-computada resolve as comuns. E **é rápido de propósito**, porque foi feito para verificar integridade de arquivo, não para resistir a força bruta.
+
+O certo é um algoritmo desenhado para ser lento e caro em memória:
+
+```python
+from argon2 import PasswordHasher
+
+ph = PasswordHasher()
+h1 = ph.hash(SENHA)
+ph.verify(h1, SENHA)          # True, ou VerifyMismatchError
+```
+
+```text
+  hash   : $argon2id$v=19$m=65536,t=3,p=4$7AqtboI7wiWsDiZDemsyzA$Y/8kfMg2kkHqpT9eFWXFChOV44igqeLib6HiOT8ySiA
+  outro  : $argon2id$v=19$m=65536,t=3,p=4$1imHo8ELb+2H2MWXGYXAv ...
+  iguais? False <- sal aleatorio, nunca iguais
+  custo  : 56.9 ms por hash
+  ataque : 18 tentativas por segundo, no mesmo nucleo
+  verify certo : True
+  verify errado: VerifyMismatchError
+  precisa reidratar? False
+  hash de parametro fraco precisa reidratar? True
+```
+
+O formato do hash é autodescritivo e vale ler: `$argon2id$` é a variante, `v=19` a versão, `m=65536,t=3,p=4` são memória (64 MiB), iterações e paralelismo, e depois vêm o sal e o resumo, separados por `$`. **Tudo que a verificação precisa está na própria string** — não há coluna separada de sal, e é por isso que `verify` funciona sem nenhum parâmetro extra.
+
+Três consequências práticas:
+
+**Dois hashes da mesma senha nunca são iguais**, porque o sal é aleatório. Então nunca compare hashes: chame `verify`.
+
+**O custo é ajustável e é a defesa.** 57 ms por verificação é imperceptível num login e devastador para quem tenta milhões. Se o seu servidor é mais rápido, aumente os parâmetros até chegar perto disso.
+
+**`check_needs_rehash` permite subir o custo com o tempo.** Como os parâmetros estão gravados no hash, dá para detectar hashes antigos e regravá-los **no próximo login bem-sucedido**, quando você tem a senha em mãos. É a única migração de senha que existe: não há como reforçar um hash sem a senha original.
+
+::: {.callout-note}
+## bcrypt, scrypt, Argon2, PBKDF2
+Argon2id é a recomendação atual (venceu a competição de 2015 e é o que a OWASP recomenda primeiro). **bcrypt** continua aceitável e muito usado — cuidado só com o limite de 72 bytes de entrada. **scrypt** está na `hashlib` da biblioteca padrão. **PBKDF2** (também na `hashlib`, e o padrão do Django) é o mais fraco dos quatro contra hardware dedicado, mas com um número alto de iterações ainda é defensável e é o único aceito por alguns padrões de conformidade.
+
+O que **não** serve: MD5, SHA-1, SHA-256/512 puros, e qualquer coisa que você tenha inventado.
+:::
+
+## Comparação em tempo constante
+
+```python
+segredo == recebido                     # errado para segredo
+hmac.compare_digest(segredo, recebido)  # certo
+```
+
+Por quê? Porque `==` para de comparar no primeiro byte diferente. Com 200 000 bytes, o efeito fica visível:
+
+```text
+bytes de 200,000 posicoes, melhor de 5 rodadas de 2.000 chamadas:
+  ==             difere na 1a posicao :     0.04 us
+  ==             difere na ultima     :     6.33 us
+  compare_digest difere na 1a posicao :   104.48 us
+  compare_digest difere na ultima     :   104.42 us
+```
+
+O `==` levou **160 vezes mais tempo** quando a diferença estava no fim — ou seja, o tempo de resposta conta quantos bytes iniciais o atacante já acertou. Com medições suficientes, dá para descobrir um token byte a byte. O `compare_digest` gastou o mesmo tempo nos dois casos, porque percorre tudo sempre.
+
+Honestidade sobre a medição: **com um token de 64 caracteres, a diferença some no ruído do interpretador** (42,3 ns contra 45,0 ns na mesma máquina). Isso não torna o ataque impossível — ele funciona por estatística sobre muitas amostras, e o servidor real tem menos ruído que este teste. E, como `compare_digest` custa praticamente nada, não há motivo para não usá-lo sempre que os dois lados forem segredo: token de API, assinatura de webhook, código de verificação.
+
+## Segredos: `secrets`, nunca `random`
+
+```python
+import secrets
+
+secrets.token_urlsafe(32)     # token de sessao, link de recuperacao
+secrets.token_hex(16)         # identificador opaco
+secrets.choice(alfabeto)      # codigo de verificacao
+```
+
+```text
+  token_urlsafe(32): Cl8YzUFO7h4fSedYxG2b6Rnk7p8WgJsYMC0ri_U_qio
+  token_hex(16)    : 6ca26b2ada45b001223070014249cfc8
+  choice de 6      : CYG3RX
+  random.random()  : 0.6394267984578837 <- previsivel: NUNCA para segredo
+  random.random()  : 0.6394267984578837 <- mesma semente, mesmo valor
+```
+
+As duas últimas linhas são a demonstração: `random` é um **Mersenne Twister**, determinístico e reprodutível a partir da semente (@sec-cap059). Isso é exatamente o que se quer numa simulação e exatamente o que não se quer num token — com algumas saídas observadas, o estado interno é recuperável e todas as próximas ficam previsíveis. `secrets` usa a fonte do sistema operacional.
+
+## Autenticação e autorização são coisas diferentes
+
+**Autenticação** responde *quem é você*; **autorização** responde *o que você pode*. Confundir as duas produz o erro de status mais comum de API, e produz também sistemas em que qualquer usuário logado apaga qualquer registro.
+
+::: {#fig-fluxo-login}
+```{.tikz}
+%%| filename: fluxo-login
+%%| alt: Fluxo de login com token, do POST /token ao pedido autorizado
+\begin{tikzpicture}[
+  ln/.style={draw,rounded corners,align=center,text width=3.0cm,
+             minimum height=0.8cm,font=\scriptsize\bfseries},
+  nt/.style={draw,rounded corners,align=left,text width=3.2cm,
+             font=\tiny,fill=manualyellow!20,inner sep=5pt},
+  mg/.style={font=\scriptsize,align=center,fill=white,inner sep=3pt}
+]
+  \path (-0.4,-4.8) rectangle (14.6,3.6);
+
+  \node[ln,fill=manualblue!18] at (2.2,3.1) {cliente};
+  \node[ln,fill=manualgreen!18] at (10.0,3.1) {servidor};
+
+  \draw[manualgray,dashed] (2.2,2.6) -- (2.2,-3.4);
+  \draw[manualgray,dashed] (10.0,2.6) -- (10.0,-3.4);
+
+  \draw[->,>=stealth,thick] (2.2,2.0) -- (10.0,2.0);
+  \node[mg] at (6.1,2.25) {\texttt{POST /token} --- usuario e senha, sobre TLS};
+
+  \draw[manualgray,thin] (10.0,1.2) -- (10.9,1.2);
+  \node[nt,anchor=west] at (10.9,1.2)
+    {\texttt{ph.verify(hash, senha)}\\
+     usuario inexistente gasta o\\mesmo tempo, de proposito};
+
+  \draw[<-,>=stealth,thick] (2.2,0.3) -- (10.0,0.3);
+  \node[mg] at (6.1,0.55) {\texttt{200 \{access\_token, token\_type: bearer\}}};
+
+  \draw[->,>=stealth,thick] (2.2,-0.6) -- (10.0,-0.6);
+  \node[mg] at (6.1,-0.35) {\texttt{GET /eu} --- \texttt{Authorization: Bearer <token>}};
+
+  \draw[manualgray,thin] (10.0,-1.4) -- (10.9,-1.4);
+  \node[nt,anchor=west] at (10.9,-1.4)
+    {\texttt{jwt.decode}: assinatura,\\
+     \texttt{exp}; e so entao o papel};
+
+  \draw[<-,>=stealth,thick] (2.2,-2.4) -- (10.0,-2.4);
+  \node[mg] at (6.1,-2.15)
+    {\texttt{200} com os dados, ou \texttt{401}, ou \texttt{403}};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=14.2cm,
+        font=\scriptsize] at (7.1,-4.2)
+    {\textbf{401 e 403 nao sao sinonimos:} \texttt{401 Unauthorized} significa
+     \textit{nao sei quem voce e} --- token ausente, invalido ou expirado --- e vem com
+     \texttt{WWW-Authenticate}. \texttt{403 Forbidden} significa \textit{sei quem voce e
+     e voce nao pode}. Trocados, o cliente entra em laco de renovacao de token.};
+\end{tikzpicture}
+```
+O fluxo completo: login, token, pedido autorizado — e onde cada status entra.
+:::
+
+### O JWT por dentro
+
+```python
+import jwt
+
+def cria_token(sub: str, papel: str, minutos: int = 15) -> str:
+    agora = datetime.now(timezone.utc)
+    corpo = {"sub": sub, "papel": papel, "iat": agora,
+             "exp": agora + timedelta(minutes=minutos)}
+    return jwt.encode(corpo, SEGREDO, algorithm="HS256")
+```
+
+```text
+  token   : eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbmEiLCJ ...
+  partes  : 36 84 43 caracteres
+  cabecalho: {'alg': 'HS256', 'typ': 'JWT'}
+  corpo SEM verificar: {'sub': 'ana', 'papel': 'admin', 'iat': 1786975642, 'exp': 1786976542}
+  <- qualquer um le o corpo: JWT e assinado, NAO e cifrado
+```
+
+::: {.callout-warning}
+## JWT não esconde nada
+O corpo é Base64, não criptografia. Qualquer pessoa com o token lê o conteúdo — repare que a linha acima decodificou sem segredo nenhum. **Nunca ponha CPF, e-mail, endereço ou qualquer dado sensível num JWT.** O que a assinatura garante é que o conteúdo não foi *alterado*, não que ele seja secreto.
+:::
+
+E o que a verificação pega:
+
+```text
+  valido                 : ana
+  assinatura adulterada  -> InvalidSignatureError
+  segredo errado         -> InvalidSignatureError
+  token expirado         -> ExpiredSignatureError
+  algoritmo none         -> InvalidAlgorithmError
+```
+
+O último caso é histórico. O ataque **`alg: none`** derrubou muita biblioteca de JWT: um token com algoritmo `none` e assinatura vazia era aceito como válido. A defesa está na chamada:
+
+```python
+jwt.decode(token, SEGREDO, algorithms=["HS256"])   # a lista NAO e opcional
+```
+
+Passar `algorithms=` explicitamente é o que impede o token de escolher como quer ser verificado. Bibliotecas modernas exigem o parâmetro; a lição é nunca aceitar `alg` vindo do próprio token.
+
+Duas notas mais sobre o segredo: ele precisa de **pelo menos 32 bytes** para HS256 (o PyJWT emite `InsecureKeyLengthWarning` abaixo disso — e emitiu, no teste do "segredo errado"), e ele vem do ambiente, nunca do código-fonte.
+
+### O fluxo, ponta a ponta
+
+```python
+@app.post("/token")
+def login(form: Annotated[OAuth2PasswordRequestForm, Depends()]):
+    u = USUARIOS.get(form.username)
+    generico = HTTPException(401, "usuario ou senha invalidos",
+                             headers={"WWW-Authenticate": "Bearer"})
+    if u is None:
+        ph.hash("gasta-o-mesmo-tempo")     # evita descobrir usuario pelo tempo
+        raise generico
+    try:
+        ph.verify(u["senha"], form.password)
+    except VerifyMismatchError:
+        raise generico
+    return {"access_token": cria_token(u["nome"], u["papel"]),
+            "token_type": "bearer"}
+
+def usuario_atual(token: Annotated[str, Depends(oauth2)]) -> dict:
+    try:
+        dados = jwt.decode(token, SEGREDO, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(401, "token invalido",
+                            headers={"WWW-Authenticate": "Bearer"})
+    return {"nome": dados["sub"], "papel": dados["papel"]}
+
+def exige(papel: str):
+    def checa(u: Annotated[dict, Depends(usuario_atual)]) -> dict:
+        if u["papel"] != papel:
+            raise HTTPException(403, f"exige papel {papel}")
+        return u
+    return checa
+
+@app.delete("/produtos/{pid}")
+def remover(pid: int, u: Annotated[dict, Depends(exige("admin"))]):
+    return {"removido": pid, "por": u["nome"]}
+```
+
+```text
+  senha errada        -> 401 {'detail': 'usuario ou senha invalidos'}
+  usuario inexistente -> 401 {'detail': 'usuario ou senha invalidos'} <- mesma mensagem, de proposito
+  login ok            -> token_type = bearer
+  GET /eu sem token   -> 401 Bearer
+  GET /eu (ana)       -> {'nome': 'ana', 'papel': 'admin'}
+  DELETE (ana/admin)  -> 200 {'removido': 7, 'por': 'ana'}
+  DELETE (beto/leitor)-> 403 {'detail': 'exige papel admin'} <- autenticado, sem permissao
+  token lixo          -> 401 {'detail': 'token invalido'}
+```
+
+Quatro decisões dentro desse trecho que valem por si:
+
+**A mensagem de erro do login é sempre a mesma.** "Usuário não existe" contra "senha errada" entrega ao atacante a lista de contas válidas — que é metade do trabalho dele. Uma mensagem só, para os dois casos.
+
+**O `ph.hash(...)` no caminho do usuário inexistente é intencional.** Sem ele, a resposta para um usuário que não existe volta em microssegundos e a de senha errada em 57 ms; essa diferença enumera contas tão bem quanto a mensagem. Gastar o tempo de propósito fecha o canal.
+
+**`exige(papel)` é uma fábrica de dependências.** A autorização vira parte da assinatura da rota (@sec-cap088), aparece no OpenAPI e não se esquece de ser chamada — ao contrário de um `if` dentro da view.
+
+**O `401` vem com `WWW-Authenticate`**, como o protocolo manda, e o `403` não.
+
+::: {.callout-note}
+## Onde guardar o token no navegador
+`localStorage` é vulnerável a XSS: qualquer script injetado na página lê o token. A alternativa mais segura é um **cookie `HttpOnly`, `Secure` e `SameSite=Lax`** — inacessível ao JavaScript —, ao custo de precisar de proteção CSRF. Para SPA que fala com API em outro domínio, JWT curto (minutos) mais *refresh token* rotativo é o arranjo comum. Não há escolha sem contrapartida; o que não existe é token de longa duração em `localStorage` sendo uma boa ideia.
+:::
+
+### Revogação: o preço do JWT
+
+Um JWT válido continua válido até expirar, **mesmo que o usuário seja desativado** — o servidor não consulta nada para verificá-lo, e é justamente isso que o torna barato. Os arranjos usuais:
+
+- **expiração curta** (5 a 15 minutos) mais *refresh token* guardado no banco, que **é** consultado e pode ser revogado;
+- **lista de bloqueio** dos tokens revogados até que expirem (custa uma consulta, mas só dos revogados);
+- **sessão no servidor** — o modelo clássico, em que o cookie é só um identificador e o estado fica no banco ou no Redis. Menos na moda e perfeitamente adequado para a maioria dos sistemas com interface web.
+
+## As injeções que continuam funcionando
+
+```python
+ENTRADA = "x' OR '1'='1"
+sql = f"SELECT nome, papel FROM usuario WHERE nome = '{ENTRADA}'"
+```
+
+```text
+  f-string  SQL: SELECT nome, papel FROM usuario WHERE nome = 'x' OR '1'='1'
+  f-string  -> [('ana', 'admin'), ('beto', 'leitor')] <- vazou a tabela toda
+  parametros -> [] <- nada, como esperado
+```
+
+O mesmo texto que vazou a tabela inteira via `f-string` não fez nada como parâmetro. A regra tem uma linha: **o valor nunca entra no texto do SQL.** Vale para `sqlite3` (@sec-cap065), para `sa.text()` (@sec-cap090) e para o cursor de qualquer driver.
+
+As outras que aparecem em código Python:
+
+| ataque | o erro | a defesa |
+|---|---|---|
+| SQL injection | valor concatenado no SQL | parâmetros (`?`, `:nome`), sempre |
+| injeção de comando | `subprocess` com `shell=True` | lista de argumentos, sem `shell` (@sec-cap075) |
+| desserialização | `pickle.loads` de fonte externa | JSON; `pickle` só de origem confiável (@sec-cap064) |
+| travessia de caminho | `Path(base) / nome_do_usuario` | `resolve()` e conferir que está sob a base (@sec-cap037) |
+| XSS | HTML montado com concatenação | escape do template; `MarkupSafe`, `\|safe` só consciente |
+| SSRF | buscar URL que o usuário mandou | lista de permissão de domínio, sem seguir redirecionamento |
+| ReDoS | regex com repetição aninhada em entrada livre | limitar tamanho da entrada, evitar `(a+)+` (@sec-cap061) |
+
+Duas merecem uma frase a mais. **`eval` e `exec` sobre entrada externa não têm defesa** — não existe *sandbox* confiável para eles em Python puro; a resposta é não usar. E **XXE**: `xml.etree` da biblioteca padrão não expande entidades externas por padrão, mas `lxml` com opções erradas expande — para XML de fonte não confiável, `defusedxml`.
+
+## Configuração e segredos
+
+Três regras que evitam a maior parte dos incidentes bobos:
+
+**Segredo nunca no código, nem no repositório.** Ambiente, cofre (Vault, Secrets Manager) ou arquivo fora do controle de versão. Um `.env` no `.gitignore` para desenvolvimento; nunca em produção compartilhada.
+
+**Falhe na inicialização se faltar.** `BaseSettings` sem valor padrão (@sec-cap087) derruba o processo com o nome da variável — muito melhor que descobrir no primeiro pedido que precisa do segredo.
+
+**`DEBUG` desligado em produção, sempre.** A página de erro do Flask e do Django em modo de depuração mostra o código-fonte, as variáveis locais e — no Flask com o depurador ligado — um console Python interativo na página de erro. É acesso remoto de execução de código servido de bandeja.
+
+E os cabeçalhos de resposta que custam pouco: `Strict-Transport-Security` (força HTTPS), `X-Content-Type-Options: nosniff`, `Content-Security-Policy` (a defesa estrutural contra XSS), `Referrer-Policy`. Em FastAPI/Starlette, um middleware de dez linhas; no Django, o `SecurityMiddleware` já faz quase tudo por configuração.
+
+## 🐍 Jeito Pythônico
+
+**Senha com Argon2id (ou bcrypt/scrypt), nunca SHA puro.** Medido: 1,23 milhão de tentativas por segundo contra 18.
+
+**Nunca compare hashes de senha; chame `verify`.** O sal aleatório faz dois hashes da mesma senha serem diferentes.
+
+**`check_needs_rehash` no login bem-sucedido**, para subir o custo com o tempo. É a única janela em que você tem a senha em mãos.
+
+**`hmac.compare_digest` para todo segredo comparado**: token, assinatura de webhook, código de verificação. Custa quase nada e fecha o canal de tempo.
+
+**`secrets`, nunca `random`, para qualquer valor que precise ser imprevisível.**
+
+**Mensagem de erro de login única**, e o mesmo tempo de resposta para usuário inexistente. Enumeração de contas é um vazamento.
+
+**`algorithms=` explícito no `jwt.decode`.** Nunca deixe o token escolher como é verificado.
+
+**Nada sensível dentro de um JWT.** Ele é assinado, não cifrado.
+
+**`401` para "não sei quem você é", `403` para "sei e você não pode".** O `401` leva `WWW-Authenticate`.
+
+**Autorização como dependência**, não `if` dentro da view — entra na assinatura, no OpenAPI e não se esquece.
+
+**Valor de usuário nunca concatenado**: em SQL, em comando de sistema, em caminho de arquivo, em HTML.
+
+**Segredo no ambiente e `DEBUG` desligado.** A página de erro em modo de depuração é execução remota de código.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-seguranca && cd lab-seguranca
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install argon2-cffi pyjwt fastapi httpx python-multipart
+```
+
+**Passo 2 — a conta que decide tudo.** Meça quantos SHA-256 a sua máquina faz por segundo e quanto tempo o `PasswordHasher().hash()` leva:
+
+```text
+  200.000 sha256 em 0.163 s -> 1.23 milhoes de tentativas por segundo (1 nucleo)
+  custo  : 56.9 ms por hash
+  ataque : 18 tentativas por segundo, no mesmo nucleo
+```
+
+Divida um pelo outro. Depois pegue uma lista de mil senhas comuns e calcule quanto tempo cada esquema levaria para testá-la contra dez mil contas.
+
+**Passo 3 — o formato do hash.** Gere dois hashes da **mesma** senha e confirme que são diferentes. Depois separe a string por `$` e identifique variante, versão, parâmetros, sal e resumo. Aumente `memory_cost` e veja o tempo e a string mudarem.
+
+**Passo 4 — reidratação.** Crie um hash com parâmetros fracos (`time_cost=1, memory_cost=8`) e confirme:
+
+```text
+  hash de parametro fraco precisa reidratar? True
+```
+
+Escreva o trecho de login que, ao verificar com sucesso, regrava o hash quando `check_needs_rehash` for verdadeiro.
+
+**Passo 5 — tempo constante.** Reproduza a medição com 200 000 bytes:
+
+```text
+  ==             difere na 1a posicao :     0.04 us
+  ==             difere na ultima     :     6.33 us
+  compare_digest difere na 1a posicao :   104.48 us
+  compare_digest difere na ultima     :   104.42 us
+```
+
+Depois repita com 64 bytes e observe a diferença sumir no ruído. Explique por que isso **não** é motivo para usar `==`.
+
+**Passo 6 — aleatoriedade.** Gere dez tokens com `secrets.token_urlsafe(32)`. Depois use `random.seed(42)` duas vezes e confirme que a sequência se repete exatamente. Escreva em uma frase por que a segunda propriedade é fatal num token de recuperação de senha.
+
+**Passo 7 — o JWT por dentro.** Emita um token e decodifique o corpo **sem** o segredo, com `options={"verify_signature": False}`. Depois altere um caractere da assinatura e confirme `InvalidSignatureError`. Emita um token expirado (`minutos=-1`) e confirme `ExpiredSignatureError`.
+
+**Passo 8 — o ataque `alg: none`.** Gere `jwt.encode({"sub": "invasor"}, None, algorithm="none")` e tente decodificá-lo. Confirme:
+
+```text
+  algoritmo none         -> InvalidAlgorithmError
+```
+
+Depois **remova** o parâmetro `algorithms=` e veja o que a biblioteca faz.
+
+**Passo 9 — o fluxo completo.** Monte o `/token`, o `usuario_atual` e o `exige("admin")`. Verifique os seis casos: senha errada, usuário inexistente, sem token, token lixo, papel certo e papel errado. Confirme os status:
+
+```text
+  DELETE (beto/leitor)-> 403 {'detail': 'exige papel admin'}
+  token lixo          -> 401 {'detail': 'token invalido'}
+```
+
+**Passo 10 — enumeração por tempo.** Meça o tempo de resposta de `/token` para um usuário existente com senha errada e para um usuário inexistente, cem vezes cada. **Remova** o `ph.hash(...)` do caminho do usuário inexistente e meça de novo. A diferença que aparecer é o vazamento.
+
+**Passo 11 — injeção ao vivo.** Crie uma tabela SQLite com dois usuários e consulte com `f-string` usando a entrada `x' OR '1'='1`:
+
+```text
+  f-string  -> [('ana', 'admin'), ('beto', 'leitor')] <- vazou a tabela toda
+  parametros -> []
+```
+
+Depois faça o mesmo com `sa.text()` do SQLAlchemy, primeiro com `f-string` e depois com `:parametro`.
+
+**Passo 12 — cabeçalhos.** Escreva um middleware que acrescente `Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy` e um `Content-Security-Policy` restritivo. Confira o resultado com `curl -I`.
+
+## Resumo
+
+- **Senha não se criptografa**: guarda-se um resumo caro. Medido: SHA-256 permite **1,23 milhão** de tentativas por segundo num núcleo; Argon2id, **18**.
+- O hash do Argon2 é autodescritivo (`$argon2id$v=19$m=65536,t=3,p=4$sal$resumo`): sal aleatório por senha, dois hashes iguais nunca acontecem, e `check_needs_rehash` permite subir o custo no próximo login.
+- **`hmac.compare_digest` para comparar segredo.** O `==` sai no primeiro byte diferente — 0,04 µs contra 6,33 µs no teste — e esse tempo conta quantos bytes o atacante acertou.
+- **`secrets`, nunca `random`.** O Mersenne Twister é reprodutível a partir da semente, o oposto do que um token precisa.
+- **Autenticação é quem você é (`401`, com `WWW-Authenticate`); autorização é o que você pode (`403`).** Trocá-los põe o cliente em laço de renovação.
+- **JWT é assinado, não cifrado**: o corpo se lê sem segredo nenhum. Nada sensível ali dentro, e `algorithms=` sempre explícito no `decode` — é o que barra o ataque `alg: none`.
+- Token válido **não se revoga**: use expiração curta mais *refresh token* consultado no banco, lista de bloqueio, ou sessão no servidor.
+- **Login com mensagem única e tempo constante.** Mensagem diferente ou resposta mais rápida para usuário inexistente entrega a lista de contas.
+- **Autorização como dependência**, não `if` dentro da view.
+- **Valor de usuário nunca concatenado**: SQL parametrizado, `subprocess` sem `shell=True`, `pickle` só de fonte confiável, caminho conferido com `resolve()`, HTML escapado pelo template.
+- **Segredo no ambiente, `DEBUG` desligado** e os cabeçalhos de segurança ligados — o console interativo da página de erro em modo de depuração é execução remota de código.
