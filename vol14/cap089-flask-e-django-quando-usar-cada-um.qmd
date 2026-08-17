@@ -1,3 +1,475 @@
 # Flask e Django: quando usar cada um {#sec-cap089}
 
-*(em elaboracao)*
+A pergunta chega sempre na mesma forma — "Flask ou Django?" — e quase sempre com a expectativa de uma resposta única. Não há. O que existe é um eixo: de um lado, ferramentas que fazem pouco e não decidem nada por você; do outro, ferramentas que trazem a aplicação quase pronta e cobram por isso em convenções que você precisa aceitar.
+
+Flask e Django são os dois extremos desse eixo no Python, e a escolha errada dói de formas opostas. Escolher Flask para um sistema com trinta modelos, painel administrativo e permissões produz uma reimplementação artesanal e pior do Django. Escolher Django para um serviço de três rotas produz uma pasta com quinze arquivos, um sistema de migrações e um ORM para guardar nada.
+
+Este capítulo usa **Flask 3.1.3** (Werkzeug 3.1.8) e **Django 6.1**, e mostra o mesmo problema resolvido dos dois jeitos.
+
+```bash
+pip install flask django
+```
+
+## O eixo
+
+::: {#fig-eixo-frameworks}
+```{.tikz}
+%%| filename: eixo-frameworks
+%%| alt: Eixo de frameworks web em Python, do micro ao completo
+\begin{tikzpicture}[
+  fw/.style={draw,rounded corners,align=center,text width=3.4cm,
+             minimum height=1.0cm,font=\scriptsize\bfseries},
+  ds/.style={draw,rounded corners,align=left,text width=3.4cm,
+             minimum height=3.2cm,font=\scriptsize}
+]
+  \path (-0.4,-5.0) rectangle (14.0,3.6);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.2cm] at (6.8,3.3)
+    {o eixo: quanto o framework decide por voce};
+
+  \draw[->,>=stealth,very thick,manualgray] (0.6,2.4) -- (13.0,2.4);
+  \node[font=\tiny,anchor=west,color=manualgray!150] at (0.6,2.75)
+    {decide pouco --- voce monta tudo};
+  \node[font=\tiny,anchor=east,color=manualgray!150] at (12.7,2.78)
+    {decide muito --- voce aceita as convencoes};
+
+  \node[fw,fill=manualblue!18] at (2.4,1.4) {Flask};
+  \node[fw,fill=manualgreen!18] at (6.8,1.4) {FastAPI};
+  \node[fw,fill=manualyellow!24] at (11.2,1.4) {Django};
+
+  \draw[manualgray,thin] (2.4,2.4) -- (2.4,1.95);
+  \draw[manualgray,thin] (6.8,2.4) -- (6.8,1.95);
+  \draw[manualgray,thin] (11.2,2.4) -- (11.2,1.95);
+
+  \node[ds,fill=manualblue!10] at (2.4,-0.9)
+    {\textbf{vem na caixa}\\
+     roteamento, contexto de\\pedido, templates Jinja,\\sessao assinada\\[3pt]
+     \textbf{voce escolhe}\\
+     ORM, migracoes, forms,\\autenticacao, admin,\\validacao, serializacao};
+
+  \node[ds,fill=manualgreen!10] at (6.8,-0.9)
+    {\textbf{vem na caixa}\\
+     roteamento, validacao\\Pydantic, OpenAPI,\\injecao de dependencia,\\ASGI nativo\\[3pt]
+     \textbf{voce escolhe}\\
+     ORM, migracoes,\\autenticacao, admin};
+
+  \node[ds,fill=manualyellow!14] at (11.2,-0.9)
+    {\textbf{vem na caixa}\\
+     ORM, migracoes, admin,\\forms, autenticacao e\\permissoes, sessoes,\\templates, i18n, cache,\\protecao CSRF\\[3pt]
+     \textbf{voce escolhe}\\
+     pouca coisa --- e esse\\e o ponto};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.2cm,
+        font=\scriptsize] at (6.8,-4.1)
+    {\textbf{o custo nao e de codigo, e de tempo.} Montar ORM, migracao, admin e
+     permissoes sobre Flask leva meses e resulta em algo pior que o Django. Aceitar
+     as convencoes do Django num servico de tres rotas custa uma arvore de diretorios
+     e um sistema de migracoes para nada. Escolha pelo tamanho do problema, nao pelo
+     gosto.};
+\end{tikzpicture}
+```
+O eixo do micro ao completo, e o que cada posição custa.
+:::
+
+## Flask: o roteador e o contexto
+
+Uma aplicação Flask é um objeto com rotas registradas por decorador (@sec-cap051):
+
+```python
+from flask import Flask, abort, jsonify, request
+
+app = Flask(__name__)
+
+@app.get("/produtos/<int:produto_id>")
+def obter(produto_id):
+    if produto_id not in CATALOGO:
+        abort(404, description="produto nao encontrado")
+    return jsonify(CATALOGO[produto_id])
+
+@app.errorhandler(404)
+def nao_encontrado(e):
+    return jsonify(erro=e.description, status=404), 404
+```
+
+```text
+  GET  /produtos/1      -> 200  {"id":1,"nome":"Fluent Python","preco":189.0}
+  GET  /produtos/99     -> 404  {"erro":"produto nao encontrado","status":404}
+  GET  /produtos/abc    -> 404  {"erro":"The requested URL was not found on the server...
+```
+
+Guarde a terceira linha: `/produtos/abc` deu **`404`**, não `422`. O conversor `<int:...>` faz parte do casamento da rota — se o segmento não é inteiro, a rota simplesmente não casa, e o Flask responde "não existe". FastAPI casa a rota e depois valida, devolvendo `422` com o campo. As duas respostas são defensáveis; o que não pode é o cliente descobrir a diferença em produção.
+
+### O corpo é problema seu
+
+Aqui está a diferença mais concreta em relação ao capítulo anterior:
+
+```python
+@app.post("/produtos")
+def criar():
+    dados = request.get_json(silent=True)
+    if not isinstance(dados, dict) or "nome" not in dados:
+        return jsonify(erro="corpo invalido"), 400
+    try:
+        preco = float(dados["preco"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify(erro="preco invalido"), 400
+    novo = {"id": max(CATALOGO) + 1, "nome": str(dados["nome"]), "preco": preco}
+    CATALOGO[novo["id"]] = novo
+    return jsonify(novo), 201
+```
+
+```text
+  {'nome': 'Mouse', 'preco': 129.9}        -> 201 {"id":2,"nome":"Mouse","preco":129.9}
+  {'nome': 'Mouse'}                        -> 400 {"erro":"preco invalido"}
+  {'nome': 'Mouse', 'preco': 'muito'}      -> 400 {"erro":"preco invalido"}
+```
+
+Dez linhas para validar dois campos, e ainda assim: a mensagem não diz **qual** campo em metade dos casos, o erro do `nome` ausente vira "preço inválido", e não há esquema nenhum para documentar. Multiplique por trinta rotas.
+
+A saída óbvia é usar Pydantic (@sec-cap087) dentro do Flask — e é exatamente isso que muita gente faz, com `flask-pydantic` ou na mão. Vale notar o que isso significa: quando você acrescenta Pydantic, um ORM e uma camada de autenticação ao Flask, está reconstruindo peça por peça o que o Django já traz, com a diferença de que agora a integração entre elas é sua responsabilidade.
+
+### Contexto: a variável global que não é global
+
+```python
+@app.get("/contexto")
+def contexto():
+    g.trilha.append("view")
+    return jsonify(app=current_app.name, caminho=request.path,
+                   metodo=request.method, trilha=g.trilha)
+```
+
+```text
+  GET /contexto -> {"agente":"manual-python/1.0","app":"c089_flask","caminho":"/contexto","metodo":"GET","trilha":["before_request","view"]}
+```
+
+`request`, `g`, `session` e `current_app` parecem variáveis globais e não são: são *proxies* ligados ao pedido em andamento, isolados por contexto. Fora de um pedido, tocá-los é erro:
+
+```text
+  request.path fora do pedido -> RuntimeError
+    Working outside of request context.
+```
+
+Essa mensagem é provavelmente a mais vista por quem começa em Flask. Ela aparece em script de manutenção, em tarefa agendada, em teste e em qualquer código que rode fora do ciclo do pedido. A cura é criar o contexto explicitamente:
+
+```python
+with app.test_request_context("/produtos/1?ordem=preco"):
+    print(request.path, dict(request.args))
+```
+
+```text
+  dentro de test_request_context: /produtos/1 {'ordem': 'preco'}
+```
+
+Para código que precisa da aplicação mas não de um pedido (uma tarefa de fila, por exemplo), o par é `with app.app_context():`.
+
+O modelo é elegante e tem um preço real: **a dependência da view é implícita**. Nada na assinatura de `contexto()` diz que ela usa `request` e `g`, o que torna o teste unitário mais difícil e a leitura menos direta que a assinatura explícita do FastAPI.
+
+### Blueprints: o jeito de crescer
+
+```python
+relatorios = Blueprint("relatorios", __name__, url_prefix="/relatorios")
+
+@relatorios.get("/resumo")
+def resumo():
+    return jsonify(itens=len(CATALOGO), valor=...)
+
+app.register_blueprint(relatorios)
+```
+
+```text
+  GET /relatorios/resumo -> {"itens":2,"valor":318.9}
+```
+
+Um `Blueprint` é um conjunto de rotas, templates e arquivos estáticos que se registra numa aplicação com um prefixo. É o que impede um `app.py` de 2 000 linhas — e o análogo direto do `APIRouter` do FastAPI e do "app" do Django.
+
+::: {.callout-note}
+## `app.config` mudou no Flask 3
+Configurações antigas de JSON (`JSON_SORT_KEYS`, `JSONIFY_PRETTYPRINT_REGULAR`) **não têm mais efeito**: a serialização passou para `app.json`, e o equivalente é `app.json.sort_keys = False`. É o tipo de mudança que não quebra nada e faz a configuração ser ignorada em silêncio — se um ajuste de `app.config` parece não funcionar, confira se ele não migrou.
+:::
+
+## Django: a aplicação quase pronta
+
+Django inverte o ponto de partida. Em vez de "aqui está um roteador, monte o resto", ele entrega ORM, migrações, formulários, autenticação, permissões, sessões, painel administrativo e proteção CSRF — e pede que você siga a estrutura dele.
+
+Normalmente isso vive em vários arquivos (`models.py`, `views.py`, `urls.py`, `settings.py`). Para caber num exemplo executável, dá para configurar tudo num arquivo só:
+
+```python
+import django
+from django.conf import settings
+
+settings.configure(
+    DEBUG=False,
+    SECRET_KEY="apenas-para-o-laboratorio",
+    ROOT_URLCONF=__name__,
+    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3",
+                           "NAME": ":memory:"}},
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth",
+                    "django.contrib.admin", "django.contrib.sessions",
+                    "django.contrib.messages", "__main__"],
+    MIDDLEWARE=[...],
+    TEMPLATES=[...],
+    USE_TZ=True,
+)
+django.setup()
+```
+
+### O modelo é a fonte da verdade
+
+```python
+class Produto(models.Model):
+    CATEGORIAS = [("livro", "Livro"), ("eletronico", "Eletronico")]
+
+    sku = models.CharField(max_length=8, unique=True)
+    nome = models.CharField(max_length=60)
+    preco = models.DecimalField(max_digits=9, decimal_places=2)
+    categoria = models.CharField(max_length=12, choices=CATEGORIAS)
+    autor = models.ForeignKey(Autor, on_delete=models.PROTECT,
+                              related_name="produtos")
+
+    class Meta:
+        ordering = ["nome"]
+```
+
+Dessa declaração o Django deriva: o esquema do banco, a migração que o cria, o formulário de edição, a tela do admin, a validação de tamanho e de escolha, e a API de consulta.
+
+```text
+  count           : 3
+  filter+order    : ['LIV-0008', 'LIV-0007']
+  agregacao       : {'preco__sum': Decimal('597.900000000000'), 'preco__avg': Decimal('199.300000000000')}
+  travessia       : Luciano Ramalho
+  reverso         : ['LIV-0008', 'ELE-0042']
+  SQL gerado      :
+    SELECT "__main___produto"."id", ... FROM "__main___produto"
+    WHERE "__main___produto"."categoria" = livro ORDER BY "__main___produto"."nome" ASC
+```
+
+Três coisas nessa saída:
+
+**`DecimalField` devolve `Decimal`, não `float`.** Para dinheiro, é a escolha certa (@sec-cap010) — e o Django a impõe pelo tipo de campo, em vez de deixar por conta de quem escreve a consulta.
+
+**`related_name="produtos"` cria a navegação reversa.** `autor.produtos.all()` funciona sem nenhuma consulta escrita à mão.
+
+**`.query` mostra o SQL.** É a primeira ferramenta a usar quando o ORM parece estar fazendo bobagem — e ela vai aparecer de novo no @sec-cap090.
+
+### O N+1, e a cura de uma palavra
+
+```python
+for p in Produto.objects.all():          # sem select_related
+    _ = p.autor.nome
+
+for p in Produto.objects.select_related("autor"):
+    _ = p.autor.nome
+```
+
+```text
+  sem select_related : 4 consultas
+  com select_related : 1 consultas
+```
+
+Três produtos, quatro consultas: uma para a lista e **uma por autor acessado**. Com trezentos produtos seriam 301. O ORM não avisa: cada acesso a `p.autor` parece um atributo comum e é uma ida ao banco.
+
+`select_related` resolve com `JOIN` (para `ForeignKey` e `OneToOne`); `prefetch_related` resolve com uma segunda consulta (para `ManyToMany` e reversos). **É o defeito de desempenho mais comum em aplicações Django**, e o mais fácil de corrigir depois de detectado — a dificuldade toda é detectá-lo, porque em desenvolvimento, com dez registros, ninguém percebe.
+
+### Formulários: validação que conversa com o banco
+
+```python
+class ProdutoForm(forms.ModelForm):
+    class Meta:
+        model = Produto
+        fields = ["sku", "nome", "preco", "categoria", "autor"]
+```
+
+```text
+  valido?  True
+  valido?  False
+    nome       This field is required.
+    preco      Enter a number.
+    categoria  Select a valid choice. brinquedo is not one of the available choices.
+    autor      Select a valid choice. That choice is not one of the available choices.
+    sku        Produto with this Sku already exists.
+```
+
+Compare com o Pydantic do @sec-cap087: as quatro primeiras mensagens têm equivalente direto. **A quinta não.** `Produto with this Sku already exists` exigiu uma consulta ao banco — o `ModelForm` conhece a restrição `unique=True` e vai conferir. O `autor` inválido também: ele checou que a chave estrangeira existe.
+
+É a diferença de escopo entre as duas ferramentas. Pydantic valida **forma**; o `ModelForm` valida forma **e estado do banco**, porque ele nasce do modelo. Num sistema com muitas restrições relacionais, isso poupa uma quantidade grande de código de verificação — e é uma das razões pelas quais reimplementar Django sobre Flask sai caro.
+
+E o mesmo formulário renderiza HTML, com rótulos, tipos de campo, `select` populado a partir da chave estrangeira e mensagens de erro no lugar certo.
+
+### O ciclo do pedido
+
+::: {#fig-ciclo-pedido}
+```{.tikz}
+%%| filename: ciclo-pedido
+%%| alt: O ciclo do pedido no Django e no Flask lado a lado
+\begin{tikzpicture}[
+  et/.style={draw,rounded corners,align=left,text width=5.2cm,
+             minimum height=0.72cm,font=\scriptsize},
+  ti/.style={font=\small\bfseries,align=center,text width=5.6cm}
+]
+  \path (-0.4,-4.6) rectangle (14.0,3.6);
+
+  \node[ti] at (3.4,3.2) {Django};
+  \node[ti] at (10.6,3.2) {Flask};
+
+  \node[et,fill=manualgray!14] at (3.4,2.4) {servidor WSGI ou ASGI};
+  \node[et,fill=manualyellow!22] at (3.4,1.5)
+    {\textbf{MIDDLEWARE} --- 6 camadas ja no\\projeto novo: seguranca, sessao,\\CSRF, autenticacao, mensagens};
+  \node[et,fill=manualblue!16] at (3.4,0.3) {\textbf{URLconf}: \texttt{path()} casa a rota};
+  \node[et,fill=manualblue!16] at (3.4,-0.6) {\textbf{view}: funcao ou classe};
+  \node[et,fill=manualgreen!16] at (3.4,-1.5) {\textbf{ORM} e \textbf{template}};
+  \node[et,fill=manualgray!14] at (3.4,-2.4) {resposta sobe pela mesma pilha};
+
+  \node[et,fill=manualgray!14] at (10.6,2.4) {servidor WSGI (Werkzeug)};
+  \node[et,fill=manualyellow!22] at (10.6,1.5)
+    {\textbf{middleware WSGI}: nenhum por\\padrao --- o que voce puser};
+  \node[et,fill=manualblue!16] at (10.6,0.55) {\texttt{before\_request}};
+  \node[et,fill=manualblue!16] at (10.6,-0.35) {\textbf{url\_map} e a \textbf{view}};
+  \node[et,fill=manualgreen!16] at (10.6,-1.25) {o que voce escolheu usar};
+  \node[et,fill=manualgray!14] at (10.6,-2.15)
+    {\texttt{after\_request}, \texttt{teardown\_request}};
+
+  \draw[->,>=stealth,thick] (0.5,2.4) -- (0.5,-2.4);
+  \node[font=\tiny,rotate=90,anchor=south] at (0.3,0.0) {pedido};
+  \draw[->,>=stealth,thick] (7.7,2.4) -- (7.7,-2.15);
+  \node[font=\tiny,rotate=90,anchor=south] at (7.5,0.1) {pedido};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.2cm,
+        font=\scriptsize] at (6.8,-3.7)
+    {\textbf{a diferenca em uma linha:} o projeto Django novo ja vem com protecao CSRF,
+     sessao e autenticacao ligadas; o projeto Flask novo vem com nada, e cada uma
+     dessas camadas e uma decisao que alguem precisa lembrar de tomar.};
+\end{tikzpicture}
+```
+O mesmo pedido nos dois ciclos: o que já está ligado e o que você precisa ligar.
+:::
+
+```text
+  GET /produtos/1/                 -> 200  {"sku": "LIV-0007", "nome": "Fluent Python", "preco": "189.00", ...
+  GET /produtos/999/               -> 404
+  GET /produtos/                   -> 200  {"total": 3, "itens": ["LIV-0008", "LIV-0007", "ELE-0042"]}
+  GET /produtos/?categoria=livro   -> 200  {"total": 2, "itens": ["LIV-0008", "LIV-0007"]}
+  GET /produtos/abc/               -> 404
+```
+
+### O que vem junto sem pedir
+
+```text
+  /admin/  ->  302 (redireciona para o login)
+  usuarios :  0
+  hash da senha: pbkdf2_sha256$1500000$6ISdBAbZQ1kxBU6E ...
+  confere senha: True | senha errada: False
+```
+
+`User.objects.create_user(...)` já gravou a senha com PBKDF2-SHA256 e 1 500 000 iterações. Ninguém escreveu uma linha sobre hashing, sal ou fator de custo — e é assim que se evita a categoria inteira de erro que o @sec-cap091 vai detalhar. O painel `/admin/` também já existe, com login, permissões por modelo e formulários gerados.
+
+Esse é o argumento do Django em uma frase: **o que vem pronto vem pronto e correto**, feito por pessoas que pensaram no assunto por vinte anos.
+
+## Escolhendo
+
+| se o projeto… | escolha |
+|---|---|
+| tem muitos modelos, relações e regras de permissão | **Django** |
+| precisa de painel administrativo para gente não técnica | **Django**, pelo admin |
+| é um site com formulários, sessões e páginas HTML | **Django** |
+| é uma API JSON pura para outro sistema consumir | **FastAPI** |
+| precisa de OpenAPI, WebSocket ou muita concorrência de I/O | **FastAPI** |
+| é um serviço pequeno, um webhook, um painel interno | **Flask** |
+| precisa embutir um servidor num programa maior | **Flask** |
+| já tem uma equipe que domina um deles | **esse** |
+
+E as combinações que existem de verdade: **Django REST Framework** ou **Django Ninja** dão a uma base Django uma API JSON decente (o Ninja usa Pydantic e se parece bastante com FastAPI); **FastAPI mais SQLModel/SQLAlchemy** cobre a parte de dados que o FastAPI não traz; e o Django tem suporte a **ASGI e views `async`** desde a versão 3, embora o ORM só tenha ganhado interface assíncrona depois e boa parte do ecossistema ainda seja síncrona.
+
+::: {.callout-tip}
+## O critério que funciona
+Liste o que o sistema vai precisar em um ano: modelos, painel, permissões, relatórios, integrações. Se essa lista tem mais de meia dúzia de itens que o Django já traz, o Django ganha por tempo. Se a lista couber em "recebo JSON, respondo JSON", o Django é peso morto.
+:::
+
+## 🐍 Jeito Pythônico
+
+**Escolha pelo tamanho do problema, não pelo gosto.** Reimplementar Django sobre Flask leva meses e sai pior; usar Django para três rotas custa uma árvore de diretórios inteira.
+
+**Em Flask, valide com Pydantic** em vez de `if isinstance` nas views — e note que, ao somar Pydantic, ORM e autenticação, você está montando um Django artesanal.
+
+**Em Flask, `Blueprint` desde cedo.** Antes de o `app.py` passar de umas poucas centenas de linhas.
+
+**`request`, `g` e `session` são proxies de contexto.** Fora do pedido, `app.app_context()` ou `app.test_request_context()`; nunca guardar `request` numa variável de módulo.
+
+**Em Django, `select_related` e `prefetch_related` desde a primeira consulta com relação.** Medido aqui: 4 consultas viraram 1 com três registros; com trezentos, 301 viram 1.
+
+**Confira o SQL com `.query`** antes de suspeitar do banco.
+
+**`DecimalField` para dinheiro**, nunca `FloatField`.
+
+**`ModelForm` valida forma e estado.** Chave estrangeira inexistente e violação de `unique` só se pegam com o banco à mão — Pydantic sozinho não faz isso.
+
+**Não escreva hashing de senha.** Django já traz; em Flask, use uma biblioteca dedicada (@sec-cap091). Senha em SHA-256 puro é senha em texto claro com passos extras.
+
+**Django tem `async`, mas a pilha inteira precisa acompanhar.** View `async` com ORM síncrono no meio traz de volta o problema do @sec-cap088.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-frameworks && cd lab-frameworks
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install flask django
+python -c "import flask, django; print(django.get_version())"
+```
+
+**Passo 2 — Flask do zero.** Escreva `GET /produtos/<int:produto_id>` com `jsonify` e um `@app.errorhandler(404)`. Peça `/produtos/1`, `/produtos/99` e `/produtos/abc` e explique **por que o terceiro dá 404 e não 422**:
+
+```text
+  GET  /produtos/abc    -> 404  {"erro":"The requested URL was not found on the server...
+```
+
+**Passo 3 — validação na mão.** Escreva o `POST /produtos` validando `nome` e `preco` sem biblioteca nenhuma. Conte as linhas. Depois reescreva usando um `BaseModel` do Pydantic e conte de novo.
+
+**Passo 4 — contexto.** Toque em `request.path` fora de um pedido e confirme o `RuntimeError: Working outside of request context`. Depois repita dentro de `app.test_request_context("/x?a=1")`. Por fim, escreva uma função de manutenção que precisa de `current_app` e faça-a funcionar com `app.app_context()`.
+
+**Passo 5 — blueprint.** Mova as rotas de relatório para um `Blueprint` com `url_prefix="/relatorios"` e confirme que os caminhos mudaram sem tocar nas funções.
+
+**Passo 6 — Django num arquivo.** Reproduza o `settings.configure(...)` do capítulo com SQLite em memória, declare `Autor` e `Produto` e crie as tabelas. Confirme:
+
+```text
+  count           : 3
+  agregacao       : {'preco__sum': Decimal('597.900000000000'), ...}
+```
+
+**Passo 7 — o N+1 ao vivo.** Com `DEBUG=True`, use `reset_queries()` e `len(connection.queries)` para contar consultas com e sem `select_related`:
+
+```text
+  sem select_related : 4 consultas
+  com select_related : 1 consultas
+```
+
+Depois crie 300 produtos e repita. O número da primeira linha é o que vai para produção se ninguém olhar.
+
+**Passo 8 — o SQL.** Imprima `.query` de três consultas diferentes, incluindo uma com `filter`, `order_by` e `values_list`. Confirme que o `ORDER BY` veio do `Meta.ordering` sem você pedir.
+
+**Passo 9 — `ModelForm`.** Valide um formulário com cinco erros de uma vez e localize os **dois** que exigiram ir ao banco:
+
+```text
+    autor      Select a valid choice. That choice is not one of the available choices.
+    sku        Produto with this Sku already exists.
+```
+
+Escreva o código Pydantic que faria o mesmo e note o que precisa de acesso ao banco.
+
+**Passo 10 — o que vem junto.** Crie um usuário com `create_user` e imprima `user.password`. Confirme o algoritmo e o número de iterações, e teste `check_password` com a senha certa e com uma errada. Depois acesse `/admin/` e siga o redirecionamento.
+
+**Passo 11 — a comparação honesta.** Implemente a **mesma** API de três rotas (listar, obter, criar) nos três frameworks: Flask, FastAPI e Django. Conte linhas, meça o tempo até o primeiro `curl` funcionando e liste o que cada versão ainda não faz (validação? documentação? migrações?). Esse exercício vale mais que qualquer tabela comparativa.
+
+## Resumo
+
+- O eixo é **quanto o framework decide por você**: Flask decide pouco, Django decide quase tudo, FastAPI fica no meio com foco em API.
+- Em **Flask**, rota é decorador, o corpo é `request.get_json()` e a validação é sua — dez linhas para dois campos, sem esquema e com mensagem pobre.
+- O conversor `<int:...>` do Flask faz parte do **casamento da rota**: caminho inválido dá `404`, enquanto o FastAPI dá `422` com o campo.
+- `request`, `g`, `session` e `current_app` são **proxies de contexto**, não globais. Fora do pedido, `RuntimeError: Working outside of request context`; a cura é `app.app_context()` ou `test_request_context()`.
+- `Blueprint` é o mecanismo de crescimento do Flask, análogo ao `APIRouter` e ao "app" do Django.
+- Em **Django**, o modelo é a fonte da verdade: dele saem esquema, migração, formulário, admin e validação. `DecimalField` devolve `Decimal`; `related_name` cria a navegação reversa.
+- O **N+1** é o defeito de desempenho mais comum do ORM: 4 consultas viraram **1** com `select_related`, e com 300 registros seriam 301. `.query` mostra o SQL gerado.
+- O **`ModelForm` valida forma e estado do banco** — `unique` violado e chave estrangeira inexistente são erros que o Pydantic sozinho não consegue detectar.
+- Django traz **hashing de senha, admin, permissões, sessões e CSRF ligados por padrão**; um projeto Flask novo não traz nenhum deles, e cada um é uma decisão que alguém precisa lembrar de tomar.
+- **Critério prático:** liste o que o sistema vai precisar em um ano. Se metade já vem no Django, escolha Django; se cabe em "recebo JSON, respondo JSON", escolha FastAPI ou Flask. E há meio-termo: Django REST Framework, Django Ninja, FastAPI com SQLAlchemy — assunto do próximo capítulo.
