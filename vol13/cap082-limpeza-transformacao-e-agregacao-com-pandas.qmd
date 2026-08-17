@@ -1,3 +1,659 @@
 # Limpeza, transformação e agregação com pandas {#sec-cap082}
 
-*(em elaboracao)*
+O capítulo anterior carregou uma tabela bem-comportada. Os dados de verdade não são assim. Eles chegam com a cidade escrita de quatro jeitos, o valor como `"R$ 1.240,50"`, uma linha duplicada porque o exportador rodou duas vezes, uma data em `DD/MM/AAAA` no meio de datas ISO, uma venda de quinze mil reais que ninguém sabe explicar e uma célula simplesmente vazia.
+
+Diz-se que a limpeza consome 80% do tempo de quem trabalha com dados. O número é folclore, a ordem de grandeza não é. Este capítulo é sobre esse trabalho — e sobre o que vem depois dele, que é responder perguntas com `groupby`.
+
+Continuamos com **pandas 3.0.5**.
+
+## O que chega
+
+```python
+df = pd.read_csv("vendas_sujas.csv")
+print(df)
+```
+
+```text
+   pedido        data     cidade vendedor         valor  itens
+0    1001  2026-03-01     Belem       ana   R$ 1.240,50    3.0
+1    1002  01/03/2026      belem    BRUNO     R$ 890,00    2.0
+2    1003  2026-03-02   Curitiba      ana   R$ 2.100,00    5.0
+3    1003  2026-03-02   Curitiba      ana   R$ 2.100,00    5.0
+4    1004  2026-03-02  CURITIBA     carla     R$ 340,90    1.0
+5    1005  2026-03-03     Manaus    bruno           NaN    4.0
+6    1006  2026-03-03     Manaus    carla  R$ 15.000,00    2.0
+7    1007  2026-03-04      belem      ana     R$ 780,25    NaN
+```
+
+Sete defeitos numa tabela de oito linhas. **O primeiro passo nunca é corrigir; é diagnosticar.**
+
+```python
+print("duplicadas :", df.duplicated().sum())
+print(df.isna().sum())
+print(df["cidade"].value_counts())
+```
+
+```text
+duplicadas : 1
+
+valor    1
+itens    1
+
+cidade
+Curitiba     2
+Manaus       2
+  Belem      1
+belem        1
+CURITIBA     1
+  belem      1
+```
+
+`value_counts()` numa coluna categórica é o diagnóstico mais barato que existe: seis "cidades" onde deviam ser três. Espaço à esquerda, espaço à direita, caixa alta, caixa baixa. Se você agrupar agora, terá seis grupos e conclusões erradas.
+
+## Duplicatas
+
+```python
+print(df[df.duplicated(keep=False)][["pedido", "cidade", "valor"]])
+```
+
+```text
+   pedido    cidade        valor
+2    1003  Curitiba  R$ 2.100,00
+3    1003  Curitiba  R$ 2.100,00
+```
+
+`keep=False` marca **todas** as ocorrências, não só as repetições — é o que você quer para olhar antes de apagar. Depois, `df.drop_duplicates()` remove as linhas idênticas.
+
+Dois argumentos importam. `subset=["pedido"]` considera duplicata pela chave de negócio, mesmo que as demais colunas difiram — útil quando um registro foi corrigido e reexportado. E `keep="last"` fica com a versão mais recente em vez da primeira.
+
+**Cuidado com `drop_duplicates()` sem `subset` em tabela larga:** basta um campo de *timestamp* diferindo em milissegundos para nenhuma linha ser considerada duplicada.
+
+## Texto: o acessador `.str`
+
+```python
+lim["cidade"] = lim["cidade"].str.strip().str.lower()
+lim["vendedor"] = lim["vendedor"].str.strip().str.lower()
+print(lim["cidade"].value_counts())
+```
+
+```text
+cidade
+belem       3
+curitiba    2
+manaus      2
+```
+
+Seis viraram três. O acessador `.str` aplica métodos de string à coluna inteira, vetorizado, e trata `NaN` sozinho — `"texto".strip()` num `NaN` daria `AttributeError`, mas `.str.strip()` devolve `NaN`.
+
+O repertório útil: `strip`, `lower`, `upper`, `title`, `replace`, `contains`, `startswith`, `len`, `split`, `zfill`, `cat` e `extract` — este último aplica uma expressão regular (@sec-cap061) e devolve os grupos como colunas.
+
+### Moeda brasileira
+
+```python
+lim["valor"] = (lim["valor"]
+                .str.replace("R$", "", regex=False)
+                .str.replace(".", "", regex=False)
+                .str.replace(",", ".", regex=False)
+                .str.strip()
+                .astype("float64"))
+print(lim["valor"].tolist())
+```
+
+```text
+antes : ['R$ 1.240,50', 'R$ 890,00', 'R$ 2.100,00', 'R$ 340,90', nan, 'R$ 15.000,00', 'R$ 780,25']
+depois: [1240.5, 890.0, 2100.0, 340.9, nan, 15000.0, 780.25]
+```
+
+**A ordem importa**: remover o ponto de milhar *antes* de trocar a vírgula por ponto. Invertido, `1.240,50` vira `1.240.50` e o `astype` falha.
+
+E note `regex=False`: sem ele, `.` é o metacaractere "qualquer caractere" e apagaria a string inteira. O padrão de `.str.replace` mudou justamente para evitar essa surpresa, mas escrever explícito documenta a intenção.
+
+Quando a origem é um CSV, dá para pular tudo isso: `read_csv(..., decimal=",", thousands=".")` faz a conversão na leitura.
+
+### Números que não são números
+
+```python
+serie = pd.Series(["10", "20", "trinta", "40"])
+pd.to_numeric(serie, errors="coerce")   # [10.0, 20.0, nan, 40.0]
+pd.to_numeric(serie)                    # ValueError
+```
+
+```text
+sem coerce      : ValueError: Unable to parse string "trinta" at position 2
+```
+
+`errors="coerce"` transforma o que não converte em `NaN`. É a ferramenta certa **desde que você conte os `NaN` depois**: `to_numeric(col, errors="coerce").isna().sum()` diz quantos registros você acabou de descartar em silêncio. Sem essa conferência, `coerce` é uma forma elegante de perder dados.
+
+## Datas mistas: a armadilha
+
+```python
+d1 = pd.to_datetime(lim["data"], format="ISO8601", errors="coerce")
+```
+
+```text
+0   2026-03-01
+1          NaT
+2   2026-03-02
+...
+```
+
+Uma linha não é ISO. A tentação é resolver com `format="mixed"` e `dayfirst=True`:
+
+```python
+pd.to_datetime(lim["data"], format="mixed", dayfirst=True)
+```
+
+```text
+0   2026-01-03      <- era 2026-03-01
+1   2026-03-01      <- era 01/03/2026, correto
+2   2026-02-03      <- era 2026-03-02
+5   2026-03-03
+7   2026-04-03      <- era 2026-03-04
+```
+
+**Cinco datas foram corrompidas em silêncio.** `dayfirst=True` mandou interpretar o primeiro campo como dia, e ele foi aplicado também às datas ISO, onde o primeiro campo é o ano — o resultado é um mês trocado com o dia, sem erro, sem aviso, e com todas as datas ainda parecendo válidas. Se o dia for maior que 12, o pandas "conserta" sozinho e a corrupção fica intermitente, que é pior.
+
+A forma segura é **declarar cada formato**:
+
+```python
+def datas(s):
+    """ISO primeiro; o que sobrar, pelo formato brasileiro declarado."""
+    fora = pd.to_datetime(s, format="ISO8601", errors="coerce")
+    falta = fora.isna()
+    fora[falta] = pd.to_datetime(s[falta], format="%d/%m/%Y")
+    return fora
+```
+
+```text
+0   2026-03-01
+1   2026-03-01
+2   2026-03-02
+4   2026-03-02
+5   2026-03-03
+6   2026-03-03
+7   2026-03-04
+```
+
+Se sobrar `NaT` depois disso, existe um terceiro formato que você não conhecia — e agora sabe.
+
+## Valores faltantes
+
+Três decisões, nesta ordem: **descobrir**, **entender** e só então **tratar**.
+
+```python
+lim.dropna(subset=["valor"])          # 6 linhas (de 7)
+lim["itens"].fillna(0)                # zera
+lim["itens"].fillna(lim["itens"].median())
+lim["valor"].ffill()                  # repete o último válido
+lim["valor"].interpolate()            # interpola linearmente
+```
+
+O que escolher depende do que o buraco **significa**:
+
+- **Ausência é zero?** `fillna(0)` — o pedido não teve itens registrados e isso quer dizer nenhum.
+- **Ausência é "não medido"?** Deixe `NaN`. As agregações do pandas o ignoram por padrão, e é exatamente esse o comportamento correto.
+- **Série temporal com falha do sensor?** `ffill()` (repetir a última leitura) ou `interpolate()`, sabendo que você está **inventando** dados e que isso precisa estar documentado.
+- **Faltou a chave?** `dropna(subset=[...])`, porque a linha não pode ser usada.
+
+`dropna()` sem argumento apaga toda linha com **qualquer** faltante — em tabela larga, isso costuma eliminar 90% dos dados. Use `subset` sempre, ou `thresh=n` para exigir um mínimo de colunas preenchidas.
+
+::: {.callout-warning}
+## `sum()` de um grupo só de `NaN` é zero, não `NaN`
+```text
+manaus    bruno       0.00
+          carla   15000.00
+```
+O vendedor `bruno` em `manaus` tem uma única venda, cujo valor é `NaN`. A soma deu **0.00**, e num relatório isso se lê como "vendeu zero" em vez de "não sabemos". Quando a distinção importa, use `sum(min_count=1)`, que devolve `NaN` se não houver nenhum valor válido.
+:::
+
+## Valores absurdos
+
+Faltante o pandas mostra; absurdo, não. A regra do intervalo interquartil dá um primeiro filtro barato:
+
+```python
+q1, q3 = lim["valor"].quantile([0.25, 0.75])
+iqr = q3 - q1
+suspeitos = lim[(lim["valor"] < q1 - 1.5 * iqr) | (lim["valor"] > q3 + 1.5 * iqr)]
+```
+
+```text
+Q1=807.69  Q3=1885.12  IQR=1077.44
+faixa aceita: -808.47 a 3501.28
+suspeitos:
+   pedido  cidade    valor
+6    1006  manaus  15000.0
+```
+
+**Suspeito não é errado.** Uma venda de quinze mil pode ser a maior venda do ano ou um erro de digitação com três zeros a mais. A regra dos 1,5 IQR aponta onde olhar; a decisão de excluir é do negócio, não do estatístico — e o `clip(inferior, superior)` que "resolve" o problema truncando os extremos é uma escolha, não uma limpeza.
+
+## `groupby`: dividir, aplicar, combinar
+
+::: {#fig-pandas-groupby}
+```{.tikz}
+%%| filename: pandas-groupby
+%%| alt: O modelo dividir-aplicar-combinar do groupby e as tres formas de resultado
+\begin{tikzpicture}[
+  ce/.style={draw,minimum width=1.5cm,minimum height=0.48cm,font=\tiny},
+  hd/.style={draw,fill=manualgray!25,minimum width=1.5cm,minimum height=0.48cm,
+             font=\tiny\bfseries},
+  stg/.style={font=\scriptsize\bfseries,align=center},
+  pn/.style={draw,rounded corners,align=left,text width=3.9cm,
+             minimum height=2.0cm,font=\scriptsize},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-0.7,-4.9) rectangle (14.4,3.9);
+
+  \node[stg] at (1.9,3.5) {1. dividir};
+  \node[stg] at (6.6,3.5) {2. aplicar};
+  \node[stg] at (11.3,3.5) {3. combinar};
+
+  \node[hd] at (1.15,2.9) {cidade};
+  \node[hd] at (2.65,2.9) {valor};
+  \node[ce,fill=manualblue!22]   at (1.15,2.42) {belem};
+  \node[ce,fill=manualblue!22]   at (2.65,2.42) {1240};
+  \node[ce,fill=manualblue!22]   at (1.15,1.94) {belem};
+  \node[ce,fill=manualblue!22]   at (2.65,1.94) {890};
+  \node[ce,fill=manualblue!22]   at (1.15,1.46) {belem};
+  \node[ce,fill=manualblue!22]   at (2.65,1.46) {780};
+  \node[ce,fill=manualgreen!25]  at (1.15,0.98) {curitiba};
+  \node[ce,fill=manualgreen!25]  at (2.65,0.98) {2100};
+  \node[ce,fill=manualgreen!25]  at (1.15,0.50) {curitiba};
+  \node[ce,fill=manualgreen!25]  at (2.65,0.50) {341};
+  \node[ce,fill=manualyellow!35] at (1.15,0.02) {manaus};
+  \node[ce,fill=manualyellow!35] at (2.65,0.02) {15000};
+
+  \node[ce,fill=manualblue!22]   at (5.85,2.42) {belem};
+  \node[ce,fill=manualblue!22]   at (7.35,2.42) {1240};
+  \node[ce,fill=manualblue!22]   at (5.85,1.94) {belem};
+  \node[ce,fill=manualblue!22]   at (7.35,1.94) {890};
+  \node[ce,fill=manualblue!22]   at (5.85,1.46) {belem};
+  \node[ce,fill=manualblue!22]   at (7.35,1.46) {780};
+  \node[ce,fill=manualgreen!25]  at (5.85,0.80) {curitiba};
+  \node[ce,fill=manualgreen!25]  at (7.35,0.80) {2100};
+  \node[ce,fill=manualgreen!25]  at (5.85,0.32) {curitiba};
+  \node[ce,fill=manualgreen!25]  at (7.35,0.32) {341};
+  \node[ce,fill=manualyellow!35] at (5.85,-0.34) {manaus};
+  \node[ce,fill=manualyellow!35] at (7.35,-0.34) {15000};
+
+  \node[hd] at (10.55,2.9) {cidade};
+  \node[hd] at (12.05,2.9) {soma};
+  \node[ce,fill=manualblue!22]   at (10.55,2.42) {belem};
+  \node[ce,fill=manualblue!22]   at (12.05,2.42) {2910};
+  \node[ce,fill=manualgreen!25]  at (10.55,1.94) {curitiba};
+  \node[ce,fill=manualgreen!25]  at (12.05,1.94) {2441};
+  \node[ce,fill=manualyellow!35] at (10.55,1.46) {manaus};
+  \node[ce,fill=manualyellow!35] at (12.05,1.46) {15000};
+
+  \draw[->,thick,manualgray] (3.6,1.4) -- (4.9,1.4);
+  \draw[->,thick,manualgray] (8.3,1.4) -- (9.6,1.4);
+  \node[font=\tiny] at (4.25,1.7) {\texttt{.groupby}};
+  \node[font=\tiny] at (8.95,1.7) {\texttt{.sum()}};
+
+  \node[pn,fill=manualblue!14] at (2.3,-3.0)
+    {\textbf{\texttt{.agg(...)}}\\[3pt]
+     uma linha \textbf{por grupo}\\
+     6 linhas $\rightarrow$ 3 linhas\\[3pt]
+     \textit{para relatorio e resumo}};
+
+  \node[pn,fill=manualgreen!14] at (6.9,-3.0)
+    {\textbf{\texttt{.transform(...)}}\\[3pt]
+     \textbf{mesma forma} do original\\
+     6 linhas $\rightarrow$ 6 linhas\\[3pt]
+     \textit{para criar coluna nova:\\
+     participacao, desvio do grupo}};
+
+  \node[pn,fill=manualyellow!18] at (11.5,-3.0)
+    {\textbf{\texttt{.filter(...)}}\\[3pt]
+     \textbf{subconjunto} das linhas\\
+     mantem ou descarta o grupo\\
+     \textbf{inteiro}\\[3pt]
+     \textit{para excluir grupo pequeno}};
+
+  \node[nt,text width=12.8cm] at (6.9,-4.5)
+    {As tres consomem o mesmo objeto \texttt{GroupBy}; o que muda e a forma do resultado.};
+\end{tikzpicture}
+```
+O modelo dividir-aplicar-combinar e as três formas de resultado.
+:::
+
+```python
+g = lim.groupby("cidade", observed=True)["valor"]
+print(g.agg(["count", "sum", "mean"]))
+```
+
+```text
+          count       sum      mean
+cidade
+belem         3   2910.75    970.25
+curitiba      2   2440.90   1220.45
+manaus        1  15000.00  15000.00
+```
+
+Para nomear as colunas de saída, a forma moderna é a **agregação nomeada**, que evita o índice de colunas em dois níveis:
+
+```python
+res = lim.groupby("cidade", observed=True).agg(
+    pedidos=("pedido", "count"),
+    total=("valor", "sum"),
+    ticket=("valor", "mean"),
+    itens=("itens", "sum"),
+)
+print(res)
+```
+
+```text
+          pedidos     total    ticket  itens
+cidade
+belem           3   2910.75    970.25      5
+curitiba        2   2440.90   1220.45      6
+manaus          2  15000.00  15000.00      6
+```
+
+Compare `manaus` nas duas saídas: `count` sobre `valor` deu **1**, e `pedidos` (count sobre `pedido`) deu **2**. Não é inconsistência — `count` conta **não-nulos da coluna que você nomeou**, e Manaus tem duas linhas, uma delas com valor faltante. Escolher a coluna do `count` é escolher o que "quantidade" significa.
+
+### `observed=True`
+
+Ao agrupar por uma coluna `category`, o pandas historicamente devolvia **todas** as combinações declaradas, inclusive as que não ocorrem — com duas categóricas de 100 valores, dez mil linhas vazias. `observed=True` restringe ao que existe nos dados. É o padrão no pandas 3, mas continua valendo escrever explícito enquanto houver código antigo por perto.
+
+### `transform`: o valor do grupo em cada linha
+
+```python
+lim2["total_cidade"] = lim2.groupby("cidade", observed=True)["valor"].transform("sum")
+lim2["participacao"] = lim2["valor"] / lim2["total_cidade"]
+```
+
+```text
+     cidade     valor  total_cidade  participacao
+0     belem   1240.50       2910.75        0.4262
+1     belem    890.00       2910.75        0.3058
+2  curitiba   2100.00       2440.90        0.8603
+4  curitiba    340.90       2440.90        0.1397
+6    manaus  15000.00      15000.00        1.0000
+7     belem    780.25       2910.75        0.2681
+```
+
+Este é o idioma que substitui um `merge` do resultado do `groupby` de volta na tabela original. `transform` devolve algo **com o mesmo índice e o mesmo tamanho** da entrada, então a atribuição direta funciona e o alinhamento é automático.
+
+### `filter`: descartar grupos inteiros
+
+```python
+grandes = lim.groupby("cidade", observed=True).filter(lambda g: g["valor"].sum() > 2000)
+```
+
+Diferente de `df[df["valor"] > 2000]`, que filtra linhas, `filter` avalia o grupo e mantém ou descarta **todas** as suas linhas. É como se remove a cauda de categorias com poucas observações antes de modelar.
+
+## Discretizar, pivotar, empilhar
+
+```python
+lim3["porte"] = pd.cut(lim3["valor"], bins=[0, 500, 2000, np.inf],
+                       labels=["pequeno", "medio", "grande"])
+print(lim3["porte"].value_counts().sort_index())
+```
+
+```text
+porte
+pequeno    1
+medio      3
+grande     2
+```
+
+`cut` corta em faixas **que você define**; `qcut` corta em quantis, produzindo grupos do mesmo tamanho. O resultado é uma `category` ordenada, que já ordena certo em gráfico e em `sort_index`.
+
+```python
+p = lim.pivot_table(index="cidade", columns="vendedor", values="valor",
+                    aggfunc="sum", fill_value=0, observed=True)
+print(p)
+```
+
+```text
+vendedor      ana  bruno    carla
+cidade
+belem     2020.75  890.0      0.0
+curitiba  2100.00    0.0    340.9
+manaus       0.00    0.0  15000.0
+```
+
+`pivot_table` agrega **e** reorganiza: é o `groupby(["cidade","vendedor"]).sum()` com um dos níveis virando colunas. E `melt` faz o caminho de volta:
+
+```python
+longo = p.reset_index().melt(id_vars="cidade", var_name="vendedor", value_name="valor")
+```
+
+```text
+formato largo: (3, 4) | formato longo: (9, 3)
+```
+
+**Largo é para ler, longo é para processar.** A tabela larga é a que se apresenta numa reunião; a longa (uma observação por linha) é a que gráficos, modelos e `groupby` esperam. Saber ir e voltar entre as duas é metade do trabalho com dados tabulares.
+
+## Juntar tabelas
+
+::: {#fig-pandas-merge}
+```{.tikz}
+%%| filename: pandas-merge
+%%| alt: Os tipos de junção do merge e o risco de chave duplicada
+\begin{tikzpicture}[
+  pn/.style={draw,rounded corners,align=left,text width=3.9cm,
+             minimum height=4.9cm,font=\scriptsize},
+  tt/.style={font=\small\bfseries,align=center}
+]
+  \path (-0.4,-4.8) rectangle (13.8,3.6);
+
+  \node[font=\scriptsize,align=center,text width=13.0cm] at (6.7,3.0)
+    {\textbf{esquerda:} belem, curitiba, manaus \qquad \textbf{direita:} belem, curitiba, porto alegre};
+
+  \node[pn,fill=manualblue!16] at (2.2,-0.4)
+    {\textbf{\texttt{how="inner"}}\\
+     \textit{o padrao}\\[4pt]
+     so as chaves que estao\\
+     nos \textbf{dois} lados\\[5pt]
+     \texttt{belem}\\
+     \texttt{curitiba}\\[5pt]
+     \textbf{2 linhas}\\[5pt]
+     perde \texttt{manaus} e\\
+     \texttt{porto alegre} sem avisar};
+
+  \node[pn,fill=manualgreen!16] at (6.7,-0.4)
+    {\textbf{\texttt{how="left"}}\\
+     \textit{o mais usado}\\[4pt]
+     todas as chaves da\\
+     \textbf{esquerda}; o que nao\\
+     tiver par vira \texttt{NaN}\\[5pt]
+     \texttt{belem}\\
+     \texttt{curitiba}\\
+     \texttt{manaus \ \ -> NaN}\\[5pt]
+     \textbf{3 linhas}\\[5pt]
+     enriquecer sem perder nada};
+
+  \node[pn,fill=manualyellow!20] at (11.2,-0.4)
+    {\textbf{\texttt{how="outer"}}\\
+     \textit{para conferir}\\[4pt]
+     tudo dos dois lados\\[5pt]
+     com \texttt{indicator=True}\\
+     nasce a coluna \texttt{\_merge}:\\
+     \texttt{both}, \texttt{left\_only},\\
+     \texttt{right\_only}\\[5pt]
+     \textbf{4 linhas}\\[5pt]
+     e o jeito de descobrir\\
+     o que nao casou};
+
+  \node[draw,rounded corners,fill=manualred!14,align=left,text width=12.4cm,
+        font=\scriptsize] at (6.7,-3.9)
+    {\textbf{o risco:} se a chave se repetir na direita, cada linha da esquerda vira \textit{varias} ---
+     produto cartesiano silencioso, e o total do relatorio dobra.
+     \texttt{validate="one\_to\_one"} ou \texttt{"many\_to\_one"} transforma isso em \texttt{MergeError}.};
+\end{tikzpicture}
+```
+Os tipos de junção e o defeito que nenhum deles avisa.
+:::
+
+```python
+print(tot.merge(metas, on="cidade", how="outer", indicator=True))
+```
+
+```text
+         cidade     valor    meta      _merge
+0         belem   2910.75  3000.0        both
+1      curitiba   2440.90  2000.0        both
+2        manaus  15000.00     NaN   left_only
+3  porto alegre       NaN  1500.0  right_only
+```
+
+`indicator=True` é a ferramenta de diagnóstico mais subestimada do pandas: um `value_counts()` na coluna `_merge` responde na hora quantas chaves não casaram e de que lado — antes de você descobrir isso pela soma errada no relatório.
+
+```python
+tot.merge(dup, on="cidade", validate="one_to_one")
+```
+
+```text
+MergeError : Merge keys are not unique in right dataset; not a one-to-one merge
+```
+
+**`validate=` deveria ser obrigatório.** Um `merge` com chave duplicada do lado direito multiplica linhas em silêncio — o `DataFrame` cresce, o total dobra e nada indica o motivo. As opções são `"one_to_one"`, `"one_to_many"`, `"many_to_one"` e `"many_to_many"`; declarar a que você espera converte um erro de dados num `MergeError` na linha certa.
+
+Um detalhe de tipo: **as colunas-chave precisam ter o mesmo `dtype`**. Juntar uma coluna `int64` com outra `str` de dígitos não casa nada e devolve tudo `NaN` sem reclamar.
+
+Para empilhar tabelas de mesmo formato, `pd.concat([a, b], ignore_index=True)` — `ignore_index` evita índices repetidos, que quebram operações adiante.
+
+## Séries temporais
+
+Com um índice de datas, dois métodos resolvem a maioria dos casos:
+
+```python
+ts.resample("W").sum()        # reamostra: diário -> semanal
+ts.rolling(7).mean()          # janela móvel de 7 observações
+```
+
+```text
+soma semanal (resample W):
+2026-03-01    1000.25
+2026-03-08    6817.61
+2026-03-15    6775.96
+2026-03-22    5725.18
+2026-03-29    6173.93
+2026-04-05    1022.66
+Freq: W-SUN
+```
+
+`resample` é o `groupby` do tempo: `"D"`, `"W"`, `"ME"` (fim de mês), `"h"`, `"15min"`. `rolling` mantém a frequência e suaviza — os primeiros 6 valores de uma janela de 7 são `NaN`, porque não há histórico suficiente, e isso é correto.
+
+## Escrever a limpeza como um cano
+
+Depois de descobrir as correções interativamente, o resultado precisa virar código que roda sozinho:
+
+```python
+def datas(s): ...
+
+def limpar(d):
+    d = d.drop_duplicates()
+    return d.assign(
+        cidade=d["cidade"].str.strip().str.lower().astype("category"),
+        vendedor=d["vendedor"].str.strip().str.lower(),
+        data=datas(d["data"]),
+        valor=(d["valor"].str.replace("R$", "", regex=False)
+                          .str.replace(".", "", regex=False)
+                          .str.replace(",", ".", regex=False)
+                          .str.strip().astype("float64")),
+        itens=d["itens"].fillna(0).astype("int64"),
+    )
+
+def resumir(d):
+    return (d.groupby("cidade", observed=True)
+             .agg(pedidos=("pedido", "count"), total=("valor", "sum"))
+             .sort_values("total", ascending=False))
+
+saida = pd.read_csv("vendas_sujas.csv").pipe(limpar).pipe(resumir)
+print(saida)
+```
+
+```text
+          pedidos     total
+cidade
+manaus          2  15000.00
+belem           3   2910.75
+curitiba        2   2440.90
+```
+
+`.pipe(f)` chama `f(df)` e devolve o resultado, permitindo encaixar funções suas na cadeia de métodos. Cada etapa é uma função pura, testável com `pytest` (@sec-cap070) sobre um `DataFrame` pequeno construído à mão — e é assim que a limpeza deixa de ser um notebook que só o autor sabe rodar.
+
+## 🐍 Jeito Pythônico
+
+**Diagnostique antes de corrigir.** `info()`, `isna().sum()`, `duplicated().sum()` e `value_counts()` nas colunas categóricas. Correção escrita sem diagnóstico conserta o defeito que você imaginou, não o que existe.
+
+**`errors="coerce"` sempre seguido de contagem.** Converter o que não converte em `NaN` é útil; fazê-lo sem conferir quantos viraram `NaN` é perder dados com sintaxe elegante.
+
+**Nunca `dayfirst=True` com formatos mistos.** Declare o formato de cada um. A alternativa corrompe datas válidas sem erro, e o estrago só aparece semanas depois num gráfico com sazonalidade impossível.
+
+**`transform` em vez de `merge` de volta.** Para trazer a estatística do grupo para cada linha, `groupby(...).transform("sum")` alinha sozinho pelo índice e não duplica nada.
+
+**Agregação nomeada (`total=("valor", "sum")`).** Nomes de coluna prontos, sem `MultiIndex` para desmontar depois.
+
+**`validate=` em todo `merge`, `indicator=True` quando estiver em dúvida.** Junção é a operação que mais destrói totais em silêncio, e as duas defesas custam uma palavra cada.
+
+**Longo para processar, largo para apresentar.** Deixe `pivot_table` para o final, na hora de mostrar.
+
+**A limpeza é código, não histórico de notebook.** Funções pequenas encadeadas com `.pipe`, cada uma testável — o mesmo padrão do resto do livro, aplicado a dados.
+
+## 🧪 Laboratório
+
+**Passo 1 — o arquivo sujo.** Crie `vendas_sujas.csv` com as colunas `pedido,data,cidade,vendedor,valor,itens` e oito linhas contendo, de propósito: uma linha duplicada inteira, cidade com espaço e caixa mista, valor no formato `"R$ 1.240,50"`, uma data em `DD/MM/AAAA` entre datas ISO, uma célula vazia em `valor`, outra em `itens`, e uma venda de `R$ 15.000,00`.
+
+**Passo 2 — diagnóstico.** Antes de mudar qualquer coisa, produza um relatório com `shape`, `dtypes`, `isna().sum()`, `duplicated().sum()` e `value_counts()` de `cidade` e `vendedor`. Confirme as seis "cidades":
+
+```text
+cidade
+Curitiba     2
+Manaus       2
+  Belem      1
+belem        1
+CURITIBA     1
+  belem      1
+```
+
+**Passo 3 — duplicatas.** Liste as duplicadas com `keep=False`, remova com `drop_duplicates()` e confirme a contagem. Depois teste `subset=["pedido"]` e explique quando as duas dão resultados diferentes.
+
+**Passo 4 — texto.** Normalize `cidade` e `vendedor` com `.str.strip().str.lower()` e confirme que sobraram três de cada. Depois converta `valor` para `float64` com a cadeia de `.str.replace`. **Inverta a ordem das duas primeiras substituições** e guarde o erro que aparece.
+
+**Passo 5 — a armadilha das datas.** Rode `pd.to_datetime(col, format="mixed", dayfirst=True)` e compare com o original coluna a coluna:
+
+```text
+0   2026-01-03      <- era 2026-03-01
+```
+
+Conte quantas datas foram corrompidas. Depois implemente a função `datas(s)` em duas etapas e confirme que nenhuma sobrou `NaT`.
+
+**Passo 6 — faltantes.** Para cada coluna com `NaN`, decida e **escreva num comentário** o que a ausência significa antes de tratar. Compare `dropna()` sem argumento (quantas linhas sobram?) com `dropna(subset=["valor"])`.
+
+**Passo 7 — o zero enganoso.** Agrupe por `["cidade", "vendedor"]` e some. Encontre o grupo cuja soma é `0.00` porque todos os valores são `NaN`. Refaça com `sum(min_count=1)` e compare.
+
+**Passo 8 — outliers.** Calcule Q1, Q3 e IQR de `valor` e liste o que cai fora de 1,5 IQR:
+
+```text
+faixa aceita: -808.47 a 3501.28
+suspeitos:
+   pedido  cidade    valor
+6    1006  manaus  15000.0
+```
+
+Refaça com uma janela por cidade, usando `transform("quantile")`. Um valor pode ser normal no conjunto e absurdo no seu grupo.
+
+**Passo 9 — as três formas do `groupby`.** Sobre a tabela limpa, produza: (a) com `agg`, uma linha por cidade com pedidos, total e ticket médio; (b) com `transform`, uma coluna de participação de cada venda no total da sua cidade; (c) com `filter`, apenas as cidades com mais de duas vendas. Confirme o número de linhas de cada resultado: 3, 6 e algo menor que 6.
+
+**Passo 10 — junção com defesa.** Crie uma tabela de metas com uma cidade a mais e uma a menos que a de vendas. Junte com `how="outer", indicator=True` e faça `value_counts()` em `_merge`. Depois duplique uma linha das metas, junte de novo **sem** `validate` e confira o total — ele deve ter crescido. Acrescente `validate="many_to_one"` e capture:
+
+```text
+MergeError : Merge keys are not unique in right dataset; not a one-to-one merge
+```
+
+**Passo 11 — o cano.** Reescreva tudo como `carregar`, `limpar`, `resumir`, encadeadas com `.pipe`. Escreva um teste `pytest` para `limpar` que passe um `DataFrame` de três linhas construído à mão e verifique os `dtype` de saída. Rode o cano no arquivo original e confirme que o resultado bate com o que você obteve interativamente.
+
+## Resumo
+
+- **Diagnóstico primeiro**: `isna().sum()`, `duplicated().sum()` e `value_counts()` revelam em segundos o que a inspeção visual não pega — como seis grafias da mesma cidade.
+- `.str` aplica métodos de string à coluna inteira e trata `NaN` sozinho; a conversão de moeda brasileira exige remover o milhar **antes** de trocar a vírgula, e `regex=False` para o ponto.
+- **`format="mixed"` com `dayfirst=True` corrompe datas ISO em silêncio.** Declare cada formato: ISO com `errors="coerce"`, e o resto pelo `format` explícito sobre as que sobraram.
+- Faltante se trata conforme o que a ausência **significa** — zero, não medido, falha de sensor ou linha inválida são quatro decisões diferentes. `dropna()` sem `subset` costuma apagar quase tudo.
+- **`sum()` de um grupo só de `NaN` devolve 0**, não `NaN`; `min_count=1` preserva a distinção entre "vendeu zero" e "não sabemos".
+- `groupby` tem três saídas: **`agg`** (uma linha por grupo), **`transform`** (mesma forma da entrada, ideal para criar coluna) e **`filter`** (mantém ou descarta o grupo inteiro). Agregação nomeada evita `MultiIndex` de colunas.
+- `pivot_table` agrega e alarga; `melt` estreita. **Longo para processar, largo para apresentar.**
+- Em `merge`, use **`validate=`** sempre e `indicator=True` na dúvida: chave duplicada multiplica linhas em silêncio, e `dtype` diferente entre as chaves não casa nada.
+- A limpeza final é **código encadeado com `.pipe`**, em funções puras e testáveis — não um notebook que só o autor consegue rodar.
