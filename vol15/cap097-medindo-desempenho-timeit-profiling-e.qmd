@@ -1,3 +1,358 @@
 # Medindo desempenho: timeit, profiling e otimização {#sec-cap097}
 
-*(em elaboracao)*
+Um pipeline processa 20 mil eventos: normaliza cada um, descarta os de usuários bloqueados e formata o resto. São quatro funções curtas, nenhuma delas obviamente cara, e o conjunto leva 565 ms.
+
+Antes de continuar lendo, aposte onde está o tempo. Quase todo mundo aposta na formatação de strings, que é o que mais parece trabalho.
+
+```text
+== tempo de parede
+  processa()            564.8 ms
+  processa_rapido()      13.5 ms   (42x)
+  mesmo resultado: True
+```
+
+A correção que produziu esse 42x tem uma linha, e nenhuma das apostas costuma acertá-la. É por isso que este capítulo vem antes de qualquer conselho de otimização: **a intuição sobre desempenho é confiavelmente errada**, e a única saída é medir.
+
+## Os relógios
+
+| função | mede | use para |
+|---|---|---|
+| `time.perf_counter()` | tempo de parede, alta resolução, monotônico | cronometrar trechos |
+| `time.process_time()` | CPU do processo, sem contar espera | separar cálculo de espera |
+| `time.monotonic()` | tempo de parede, nunca anda para trás | tempos limite |
+| `time.time()` | hora do relógio | registrar quando algo ocorreu |
+
+Para medir código, é sempre `perf_counter`. Nunca `time.time()`: ele pode andar para trás quando o sistema sincroniza o relógio, e já produziu duração negativa em produção.
+
+O par `perf_counter` e `process_time` responde a uma pergunta útil de graça: se o primeiro é muito maior que o segundo, o programa está **esperando**, não calculando — e o capítulo certo passa a ser o @sec-cap096, não este.
+
+## `timeit`, e por que o mínimo
+
+Para trechos curtos, um `perf_counter` em volta não serve: a granularidade do relógio, o cache do processador e o coletor de lixo produzem ruído maior que a medida. `timeit` resolve isso repetindo:
+
+```python
+import timeit
+
+t = timeit.Timer("''.join(pedacos)", "pedacos = ['abc'] * 10000")
+n, _ = t.autorange()          # quantas execucoes para o total ser mensuravel
+tempos = t.repeat(7, n)       # 7 repeticoes independentes
+melhor = min(tempos) / n
+```
+
+Por que `min` e não a média? Porque o ruído só existe numa direção:
+
+```text
+== por que se usa o MINIMO e nao a media
+  50000 execucoes por repeticao, 9 repeticoes
+  minimo    6.912 us
+  mediana   7.163 us
+  media     7.353 us
+  maximo    8.492 us  (1.23x o minimo)
+```
+
+Nada pode fazer o código rodar mais rápido do que ele é capaz; tudo — outro processo, migração entre núcleos, uma interrupção — pode fazê-lo rodar mais devagar. A **melhor** medida é a mais próxima do custo real do código; a média é o custo real mais o ruído da máquina naquele instante.
+
+Repare no 1,23x entre o melhor e o pior caso. Qualquer "otimização" que renda menos que isso está dentro do ruído da sua própria medição.
+
+::: {.callout-warning}
+## Três erros de `timeit` que produzem números falsos
+1. **Trabalho no `stmt` que deveria estar no `setup`.** Criar a lista de 10 mil elementos dentro do trecho medido mede a criação, não a operação.
+2. **Reaproveitar estado entre execuções.** Medir `lista.pop()` num laço esvazia a lista; da segunda repetição em diante você mede uma lista vazia.
+3. **Comparar números de execuções diferentes.** Como o @sec-cap095 mostrou, a mesma referência variou de 5,8 s a 9,9 s. Compare sempre dentro da mesma execução.
+:::
+
+## Onde o tempo realmente está: `cProfile`
+
+`timeit` responde "qual destas duas formas é mais rápida". Ele não responde "por que o meu programa é lento" — para isso existe o perfilador, que instrumenta **todas** as chamadas.
+
+```python
+import cProfile, pstats
+
+pr = cProfile.Profile()
+pr.enable()
+processa(EVENTOS)
+pr.disable()
+pstats.Stats(pr).sort_stats("tottime").print_stats(6)
+```
+
+```text
+== cProfile ordenado por tottime (tempo NA funcao)
+ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+ 20000    0.537    0.000    0.537    0.000 m097b.py:22(esta_bloqueado)
+     1    0.012    0.012    0.582    0.582 m097b.py:30(processa)
+ 20000    0.011    0.000    0.024    0.000 m097b.py:17(normaliza)
+ 20000    0.007    0.000    0.007    0.000 {built-in method builtins.round}
+ 14965    0.007    0.000    0.007    0.000 m097b.py:26(formata)
+ 20000    0.004    0.000    0.004    0.000 {method 'lower' of 'str' objects}
+```
+
+Está tudo ali: **`esta_bloqueado` consumiu 0,537 s dos 0,582 s — 92% do tempo**. A formatação de strings, a aposta mais comum, custou 0,007 s: 1,2%.
+
+E a função é esta:
+
+```python
+BLOQUEADOS = [f"user{i:05d}" for i in range(5_000)]     # uma LISTA
+
+def esta_bloqueado(nome):
+    return nome in BLOQUEADOS       # busca linear, 20.000 vezes
+```
+
+Vinte mil buscas lineares numa lista de cinco mil nomes: até 100 milhões de comparações. A correção é uma linha:
+
+```python
+BLOQUEADOS_SET = set(BLOQUEADOS)    # tabela hash
+
+def esta_bloqueado_rapido(nome):
+    return nome in BLOQUEADOS_SET   # tempo constante
+```
+
+```text
+== cProfile da versao corrigida, mesma ordenacao
+ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     1    0.010    0.010    0.035    0.035 m097b.py:48(processa_rapido)
+ 20000    0.008    0.000    0.017    0.000 m097b.py:17(normaliza)
+ 20000    0.006    0.000    0.006    0.000 {built-in method builtins.round}
+ 14965    0.005    0.000    0.005    0.000 m097b.py:26(formata)
+ 20000    0.003    0.000    0.003    0.000 m097b.py:44(esta_bloqueado_rapido)
+```
+
+`esta_bloqueado` saiu do topo e caiu para o quinto lugar, com 0,003 s. O perfil agora está **plano** — nenhuma função domina —, e isso é o sinal de que acabou: não há mais gargalo, só o custo distribuído do trabalho real.
+
+### `tottime` e `cumtime`
+
+::: {#fig-tottime-cumtime}
+```{.tikz}
+%%| filename: tottime-cumtime
+%%| alt: Arvore de chamadas mostrando a diferenca entre tottime e cumtime
+\begin{tikzpicture}[
+  fn/.style={draw,rounded corners,align=center,text width=3.3cm,
+             minimum height=1.05cm,font=\tiny,inner sep=4pt},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.6,-6.6) rectangle (14.4,3.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.0,3.1)
+    {as duas colunas do \texttt{cProfile}, na arvore de chamadas};
+
+  \node[fn,fill=manualgray!16] at (7.0,1.8)
+    {\textbf{processa}\\tottime 0,012 \quad cumtime 0,582};
+
+  \node[fn,fill=manualblue!14] at (2.3,-0.3)
+    {\textbf{normaliza}\\tottime 0,011 \quad cumtime 0,024};
+  \node[fn,fill=manualred!22] at (7.0,-0.3)
+    {\textbf{esta\_bloqueado}\\tottime 0,537 \quad cumtime 0,537};
+  \node[fn,fill=manualblue!14] at (11.7,-0.3)
+    {\textbf{formata}\\tottime 0,007 \quad cumtime 0,007};
+
+  \node[fn,fill=manualgreen!14,text width=2.6cm] at (1.0,-2.3)
+    {\texttt{str.lower}\\tottime 0,004};
+  \node[fn,fill=manualgreen!14,text width=2.6cm] at (4.1,-2.3)
+    {\texttt{round}\\tottime 0,007};
+
+  \draw[->,>=stealth] (7.0,1.27) -- (7.0,0.9) -- (2.3,0.9) -- (2.3,0.23);
+  \draw[->,>=stealth] (7.0,1.27) -- (7.0,0.23);
+  \draw[->,>=stealth] (7.0,1.27) -- (7.0,0.9) -- (11.7,0.9) -- (11.7,0.23);
+  \draw[->,>=stealth] (2.3,-0.83) -- (2.3,-1.2) -- (1.0,-1.2) -- (1.0,-1.78);
+  \draw[->,>=stealth] (2.3,-0.83) -- (2.3,-1.2) -- (4.1,-1.2) -- (4.1,-1.78);
+
+  \node[nt] at (-0.2,-3.9)
+    {\textbf{tottime} e o tempo gasto DENTRO da funcao, sem contar o que ela
+     chamou. \textbf{cumtime} inclui tudo que ela chamou. Em \texttt{normaliza},
+     0,011 sao dela e os 0,013 restantes sao de \texttt{lower} e \texttt{round}.};
+  \node[nt] at (-0.2,-5.2)
+    {\textbf{ordene por tottime para achar o gargalo.} Por \texttt{cumtime}, quem
+     lidera e sempre a funcao de entrada (aqui, \texttt{processa} com 0,582) ---
+     verdadeiro e inutil. \texttt{cumtime} serve para a outra pergunta: qual ramo
+     inteiro vale a pena atacar.};
+\end{tikzpicture}
+```
+`tottime` é o tempo na função; `cumtime` inclui as chamadas dela.
+:::
+
+::: {.callout-important}
+## O perfilador distorce o que ele mede
+`processa()` levou **564,8 ms** no relógio e **582 ms** sob o `cProfile` — 3% a mais. Mas a versão corrigida levou **13,5 ms** no relógio e **35 ms** sob o perfilador: **2,6 vezes**. O `cProfile` cobra por chamada, então ele penaliza exatamente o código que faz muitas chamadas baratas — e pode inverter a ordem de duas funções que você esteja comparando. Use o perfilador para **encontrar** o gargalo e o relógio para **confirmar** o ganho. Quando a distorção incomodar, `profile` amostral (`py-spy`, `austin`) mede sem instrumentar.
+:::
+
+## Memória: `tracemalloc`
+
+Tempo não é o único recurso. `tracemalloc` atribui cada alocação à linha que a fez:
+
+```python
+tracemalloc.start()
+saida = processa_rapido(EVENTOS)          # mantida viva de proposito
+atual, pico = tracemalloc.get_traced_memory()
+topo = tracemalloc.take_snapshot().statistics("lineno")[:3]
+tracemalloc.stop()
+```
+
+```text
+== tracemalloc: quem alocou mais
+  em uso ao fim: 950 KiB | pico: 950 KiB
+  m097b.py:27      831.6 KiB em 14965 blocos
+  m097b.py:54      118.5 KiB em 1 blocos
+```
+
+A linha 27 é o `return f"..."` de `formata`, e os 14.965 blocos são exatamente as strings de saída. A linha 54 é a lista que as guarda.
+
+O detalhe que custa tempo de quem usa `tracemalloc` pela primeira vez: **se o objeto já foi coletado quando você tira a foto, ele não aparece.** Medir depois do `return`, com o resultado descartado, dá 0 KiB e a falsa conclusão de que nada foi alocado.
+
+## A hierarquia dos ganhos
+
+::: {#fig-hierarquia-ganhos}
+```{.tikz}
+%%| filename: hierarquia-ganhos
+%%| alt: Escada de ganhos de otimizacao, do algoritmo a micro-otimizacao
+\begin{tikzpicture}[
+  dg/.style={draw,rounded corners,align=left,text width=9.2cm,
+             minimum height=1.15cm,font=\scriptsize,inner sep=6pt},
+  vl/.style={draw,rounded corners,align=center,text width=2.5cm,
+             minimum height=1.15cm,font=\scriptsize\bfseries,inner sep=4pt}
+]
+  \path (-0.3,-6.6) rectangle (14.4,3.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.0,3.1)
+    {ordem de grandeza do ganho, tudo medido neste capitulo};
+
+  \node[dg,fill=manualgreen!18] at (5.6,1.8)
+    {\textbf{1. algoritmo e estrutura de dados}\\
+     trocar busca linear numa lista por tabela hash num conjunto};
+  \node[vl,fill=manualgreen!30] at (12.4,1.8) {2528x};
+
+  \node[dg,fill=manualblue!16] at (5.6,0.3)
+    {\textbf{2. nao repetir trabalho}\\
+     a mesma troca aplicada ao pipeline inteiro de 20.000 eventos};
+  \node[vl,fill=manualblue!26] at (12.4,0.3) {42x};
+
+  \node[dg,fill=manualyellow!24] at (5.6,-1.2)
+    {\textbf{3. a construcao certa da linguagem}\\
+     \texttt{''.join(pedacos)} no lugar de \texttt{s += p} num laco};
+  \node[vl,fill=manualyellow!34] at (12.4,-1.2) {5,1x};
+
+  \node[dg,fill=manualred!12] at (5.6,-2.7)
+    {\textbf{4. micro-otimizacao}\\
+     compreensao no lugar de \texttt{append}; nome local no lugar de global};
+  \node[vl,fill=manualred!20] at (12.4,-2.7) {1,2x e 1,1x};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.4cm,
+        font=\scriptsize,inner sep=6pt] at (7.0,-4.9)
+    {\textbf{o degrau 4 esta dentro do ruido.} A variacao entre a melhor e a
+     pior medicao da mesma operacao foi de 1,23x --- maior que o ganho de trocar
+     um nome global por um local. Otimizacao que nao se distingue do ruido nao
+     e otimizacao, e codigo mais feio de graca.};
+\end{tikzpicture}
+```
+Os quatro degraus, com os ganhos medidos. A distância entre o primeiro e o último é de três ordens de grandeza.
+:::
+
+Os números que sustentam a escada:
+
+```text
+== montando uma string de 10.000 pedacos
+  s += p num laco                       235.39 us
+  ''.join(pedacos)                       46.37 us     5.1x
+
+== 'x in colecao' com 10.000 elementos, procurando o ultimo
+  lista (busca linear)                   51.51 us
+  conjunto (tabela hash)                  0.02 us   2528.5x
+
+== onde o interpretador acha o nome
+  math.sqrt a cada volta                353.95 us
+  raiz = math.sqrt fora do laco         324.62 us     1.1x
+
+== construindo uma lista de 10.000 quadrados
+  laco com append                       255.73 us
+  compreensao                           213.03 us     1.2x
+  map com lambda                        394.40 us     0.6x
+```
+
+Três observações que valem mais que a tabela:
+
+**A troca de estrutura de dados rendeu 2528x**; guardar `math.sqrt` numa variável local rendeu 1,1x. São três ordens de grandeza de diferença de retorno, para esforços parecidos.
+
+**`map` com `lambda` foi mais lento que a compreensão** — 0,6x. A crença de que `map` é mais rápido vem de quando ele era usado com uma função embutida (`map(str, xs)`), caso em que ainda ganha. Com `lambda`, você paga uma chamada de função por elemento e perde.
+
+**O truque do nome local perdeu quase toda a força.** Ele valia mais em versões antigas; desde o 3.11, o interpretador especializador (PEP 659) reescreve o bytecode em tempo de execução e já resolve buscas repetidas com um cache embutido. Boa parte dos conselhos de micro-otimização que circulam na internet mede um Python que não existe mais.
+
+## Quando parar
+
+Otimizar tem custo: código mais difícil de ler, mais difícil de mudar, e com mais chance de bug. A parada racional tem três testes:
+
+**O perfil ficou plano?** Se nenhuma função passa de 15–20% do tempo, não há mais gargalo — só custo distribuído. Continuar significa reescrever tudo por ganhos pequenos.
+
+**O ganho ainda é maior que o ruído?** Abaixo de ~1,3x aqui, a medição não distingue melhora de sorte.
+
+**O que sobrou é o objetivo?** Um lote noturno que caiu de 565 ms para 13 ms não precisa de mais nada. A pergunta certa nunca é "dá para acelerar?" — sempre dá —, é "isto ainda atrapalha alguém?".
+
+E vale lembrar da lei de Amdahl: se uma função responde por 30% do tempo e você a torna **infinitamente** rápida, o programa fica 1,43x mais rápido. Nunca mais que isso. Otimizar o que não é o gargalo tem teto matemático, e ele é baixo.
+
+## 🐍 Jeito Pythônico
+
+**Meça antes de mudar qualquer coisa.** A aposta comum era a formatação de strings (1,2% do tempo); o culpado era uma busca linear (92%).
+
+**`time.perf_counter()` para cronometrar**, nunca `time.time()`. Compare com `process_time()` para saber se o programa espera ou calcula.
+
+**`timeit` para trechos curtos, e use o mínimo de `repeat`**, não a média — o ruído só empurra para cima.
+
+**Todo preparo no `setup`, nada de estado reaproveitado entre execuções.**
+
+**`cProfile` ordenado por `tottime` para achar o gargalo**; `cumtime` para escolher qual ramo atacar.
+
+**Confirme o ganho no relógio, não no perfilador.** Ele cobra por chamada e distorceu 2,6x a versão rápida deste capítulo.
+
+**`tracemalloc` para memória — com o objeto ainda vivo** quando a foto for tirada.
+
+**Suba a escada de cima para baixo**: algoritmo e estrutura de dados primeiro (2528x), micro-otimização por último (1,1x, dentro do ruído).
+
+**Desconfie de conselho de otimização sem data.** O interpretador especializador do 3.11+ tornou obsoleta boa parte deles — inclusive o clássico do nome local.
+
+**Pare quando o perfil ficar plano** ou quando o tempo restante deixar de atrapalhar alguém.
+
+## 🧪 Laboratório
+
+**Passo 1 — a aposta.** Escreva o pipeline de 20 mil eventos com `normaliza`, `esta_bloqueado` (usando uma **lista** de 5 mil nomes), `formata` e `processa`. **Antes de medir**, anote no papel qual das quatro você acha que domina o tempo.
+
+**Passo 2 — o relógio.** Cronometre com `perf_counter`. Deve dar algo próximo de:
+
+```text
+  processa()            564.8 ms
+```
+
+**Passo 3 — o perfil.** Rode sob `cProfile` ordenado por `tottime` e compare com a sua aposta:
+
+```text
+ 20000    0.537    0.000    0.537    0.000 m097b.py:22(esta_bloqueado)
+```
+
+Calcule que fração do total isso representa.
+
+**Passo 4 — a correção de uma linha.** Troque a lista por um `set` e meça de novo. Confirme os 42x **e** que a saída é idêntica (`r1 == r2`) — otimização que muda o resultado não é otimização.
+
+**Passo 5 — o perfil plano.** Rode o perfilador na versão corrigida e observe que nenhuma função domina mais. Explique por que esse é o sinal de parada.
+
+**Passo 6 — a distorção do perfilador.** Compare, para as duas versões, o tempo no relógio e sob o `cProfile`. Você deve achar ~3% de sobrecarga na lenta e ~160% na rápida. Explique a assimetria a partir do número de chamadas.
+
+**Passo 7 — mínimo contra média.** Rode `Timer("sum(range(1000))").repeat(9, n)` e imprima mínimo, mediana, média e máximo. Depois rode de novo com um `yes > /dev/null` ocupando um núcleo ao fundo e compare qual das quatro estatísticas mudou menos.
+
+**Passo 8 — os três erros de `timeit`.** Reproduza cada um de propósito: (a) criar a lista dentro do `stmt`; (b) medir `lista.pop()` sem recriar a lista; (c) comparar dois números medidos em execuções separadas. Anote quanto cada erro distorce.
+
+**Passo 9 — a escada.** Reproduza as quatro medições da hierarquia (`join`, `set`, nome local, compreensão). Confirme a ordem de grandeza de cada degrau.
+
+**Passo 10 — `map` e `lambda`.** Compare `map(lambda i: i*i, xs)`, a compreensão e `map(str, xs)` contra `[str(x) for x in xs]`. Mostre em que caso `map` ganha e em qual perde, e explique com base no custo da chamada.
+
+**Passo 11 — `tracemalloc`.** Fotografe a memória do pipeline **com** e **sem** manter a saída viva. Confirme que a segunda versão reporta ~0 KiB, e explique o motivo.
+
+**Passo 12 — Amdahl.** Meça a fração do tempo gasta em `normaliza` na versão corrigida. Calcule o ganho máximo teórico de otimizá-la a zero, e decida se vale escrever o código.
+
+## Resumo
+
+- **A intuição erra.** No pipeline medido, a aposta comum (formatação de strings) era 1,2% do tempo e o culpado real, uma busca linear, era **92%**.
+- **`perf_counter` para cronometrar**, `process_time` para separar espera de cálculo, nunca `time.time()`.
+- **`timeit` com o mínimo de `repeat`**: o ruído só aumenta o tempo, nunca diminui. A dispersão medida foi de **1,23x** entre o melhor e o pior caso — o piso abaixo do qual nenhuma "otimização" é detectável.
+- **`cProfile` ordenado por `tottime` acha o gargalo**; `cumtime` diz qual ramo inteiro atacar. Ordenar por `cumtime` põe a função de entrada no topo — correto e inútil.
+- **O perfilador distorce**: 3% de sobrecarga na versão lenta e **2,6x** na rápida, porque ele cobra por chamada. Encontre com o perfilador, confirme com o relógio.
+- **`tracemalloc` só vê o que ainda está vivo** quando a foto é tirada.
+- **A escada de ganhos, medida**: estrutura de dados **2528x**, o mesmo aplicado ao pipeline **42x**, `join` no lugar de `+=` **5,1x**, compreensão **1,2x**, nome local **1,1x** — este último dentro do ruído.
+- **`map` com `lambda` é mais lento que a compreensão** (0,6x); só ganha com função embutida.
+- **Conselho de micro-otimização envelhece.** O interpretador especializador (3.11+) já resolve sozinho boa parte do que se recomendava fazer à mão.
+- **Pare quando o perfil ficar plano.** E lembre da lei de Amdahl: otimizar a zero algo que é 30% do tempo dá 1,43x, e nada mais.
