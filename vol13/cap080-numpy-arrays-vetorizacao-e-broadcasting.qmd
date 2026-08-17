@@ -1,3 +1,556 @@
 # NumPy: arrays, vetorização e broadcasting {#sec-cap080}
 
-*(em elaboracao)*
+Um sensor de temperatura gravou um milhão de leituras. Você precisa converter tudo para Fahrenheit, descartar o que veio fora de faixa e tirar a média por hora. Em Python puro isso é um laço — e o laço leva quase um décimo de segundo por operação, o que parece pouco até você descobrir que são doze operações e trinta arquivos.
+
+O problema não é o Python ser lento. É que cada `x * 2` num laço faz o interpretador buscar o objeto, descobrir o tipo, procurar o `__mul__`, alocar um objeto novo e guardar o ponteiro numa lista. Um milhão de vezes. O trabalho aritmético em si é uma fração desprezível do tempo total.
+
+**NumPy resolve isso mudando a estrutura de dados, não a linguagem.** Em vez de uma lista de ponteiros para objetos espalhados pela memória, um bloco contíguo de números do mesmo tipo — e as operações sobre esse bloco acontecem em C, num laço só, sem tocar no interpretador.
+
+Este capítulo usa **NumPy 2.5.2** no **Python 3.13**. Ele é a base de tudo que vem depois: `pandas` (@sec-cap081), `matplotlib` (@sec-cap083), `SciPy` e `scikit-learn` são todos construídos sobre o `ndarray`.
+
+```bash
+pip install numpy
+```
+
+## A diferença medida
+
+```python
+import timeit
+import numpy as np
+
+lst = list(range(1_000_000))
+arr = np.arange(1_000_000)
+
+t_lst = timeit.timeit(lambda: [x * 2 for x in lst], number=5) / 5
+t_arr = timeit.timeit(lambda: arr * 2, number=5) / 5
+print(f"lista  : {t_lst*1000:7.2f} ms")
+print(f"array  : {t_arr*1000:7.2f} ms")
+print(f"razao  : {t_lst/t_arr:7.1f}x")
+```
+
+```text
+lista  :   99.55 ms
+array  :    3.83 ms
+razao  :    26.0x
+```
+
+Vinte e seis vezes, e a compreensão de lista já é a forma rápida de fazer isso em Python puro. Com `sum` contra `.sum()` a distância é maior:
+
+```text
+sum(big)  :   69.99 ms   <- builtin, itera em Python
+big.sum() :    1.10 ms   <- reducao em C
+razao     :    63.4x
+```
+
+Os números variam com a máquina; a **ordem de grandeza** não.
+
+## Por que é mais rápido: a memória
+
+```python
+import sys
+
+py = list(range(1_000_000))
+np_ = np.arange(1_000_000, dtype=np.int64)
+
+print("vetor de ponteiros da lista :", sys.getsizeof(py), "bytes")
+print("um objeto int do Python     :", sys.getsizeof(py[999_999]), "bytes")
+print("array int64 equivalente     :", np_.nbytes, "bytes")
+```
+
+```text
+vetor de ponteiros da lista : 8000056 bytes
+um objeto int do Python     : 28 bytes
+total aproximado da lista   : 36000056 bytes
+array int64 equivalente     : 8000000 bytes
+razao                       : 4.5 x
+```
+
+Uma lista de um milhão de inteiros guarda um milhão de **ponteiros** (8 bytes cada) para um milhão de **objetos** `int` (28 bytes cada, com contador de referências, ponteiro de tipo e o valor). O array guarda um milhão de inteiros de 8 bytes, um ao lado do outro, e mais nada.
+
+::: {#fig-numpy-memoria}
+```{.tikz}
+%%| filename: numpy-memoria
+%%| alt: Layout de memoria de uma lista de inteiros comparado ao de um ndarray
+\begin{tikzpicture}[
+  bx/.style={draw,minimum width=1.05cm,minimum height=0.62cm,font=\scriptsize},
+  ob/.style={draw,rounded corners,fill=manualyellow!30,minimum width=1.15cm,
+             minimum height=0.85cm,font=\tiny,align=center},
+  tt/.style={font=\small\bfseries,align=center},
+  nt/.style={font=\scriptsize,align=center}
+]
+  \path (-0.9,-2.9) rectangle (14.6,4.6);
+
+  \node[tt] at (2.9,4.1) {\texttt{list} de 5 inteiros};
+
+  \node[bx,fill=manualblue!20] (p0) at (0.6,2.7) {ptr};
+  \node[bx,fill=manualblue!20] (p1) at (1.75,2.7) {ptr};
+  \node[bx,fill=manualblue!20] (p2) at (2.9,2.7) {ptr};
+  \node[bx,fill=manualblue!20] (p3) at (4.05,2.7) {ptr};
+  \node[bx,fill=manualblue!20] (p4) at (5.2,2.7) {ptr};
+
+  \node[ob] (o0) at (0.6,1.1) {\texttt{int}\\10};
+  \node[ob] (o1) at (2.6,1.1) {\texttt{int}\\30};
+  \node[ob] (o2) at (4.6,1.1) {\texttt{int}\\50};
+  \node[ob] (o3) at (1.6,-0.1) {\texttt{int}\\20};
+  \node[ob] (o4) at (3.6,-0.1) {\texttt{int}\\40};
+
+  \draw[->,manualgray] (p0) -- (o0);
+  \draw[->,manualgray] (p1) -- (o3);
+  \draw[->,manualgray] (p2) -- (o1);
+  \draw[->,manualgray] (p3) -- (o4);
+  \draw[->,manualgray] (p4) -- (o2);
+
+  \node[nt,text width=5.8cm] at (2.9,-1.9)
+    {5 ponteiros de 8 bytes\\+ 5 objetos de 28 bytes\\espalhados pelo \textit{heap}};
+
+  \node[tt] at (11.0,4.1) {\texttt{ndarray} de \texttt{int64}};
+
+  \node[bx,fill=manualgreen!25] at (8.9,2.7)  {10};
+  \node[bx,fill=manualgreen!25] at (9.95,2.7) {20};
+  \node[bx,fill=manualgreen!25] at (11.0,2.7) {30};
+  \node[bx,fill=manualgreen!25] at (12.05,2.7){40};
+  \node[bx,fill=manualgreen!25] at (13.1,2.7) {50};
+  \draw[manualgreen,thick] (8.36,2.39) rectangle (13.64,3.01);
+
+  \node[draw,rounded corners,fill=manualblue!12,font=\tiny,align=left,
+        text width=4.6cm] at (11.0,0.7)
+    {\textbf{cabecalho}\\
+     \texttt{dtype}: int64\\
+     \texttt{shape}: (5,)\\
+     \texttt{strides}: (8,)\\
+     ponteiro para o bloco};
+
+  \node[nt,text width=5.8cm] at (11.0,-1.9)
+    {40 bytes contiguos\\+ um cabecalho pequeno\\o laco em C percorre em linha reta};
+\end{tikzpicture}
+```
+A lista guarda ponteiros para objetos espalhados; o `ndarray` guarda os números lado a lado.
+:::
+
+Contiguidade importa por causa do *cache* do processador: ler 8 bytes traz os 64 vizinhos junto. Percorrer o array em ordem aproveita cada leitura; perseguir ponteiros pelo *heap* joga esse trabalho fora a cada elemento.
+
+## Anatomia do `ndarray`
+
+```python
+a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+print("shape   :", a.shape)
+print("ndim    :", a.ndim)
+print("dtype   :", a.dtype)
+print("itemsize:", a.itemsize, "bytes")
+print("nbytes  :", a.nbytes, "bytes")
+print("strides :", a.strides)
+```
+
+```text
+shape   : (2, 3)
+ndim    : 2
+dtype   : float64
+itemsize: 8 bytes
+nbytes  : 48 bytes
+strides : (24, 8)
+```
+
+Cinco atributos explicam quase tudo. `shape` é a forma; `ndim` é quantos eixos; `dtype` é o tipo **de todos** os elementos; `itemsize` é o tamanho de cada um; `strides` diz quantos bytes pular para andar um passo em cada eixo — 24 para descer uma linha (três `float64`), 8 para andar uma coluna.
+
+`strides` é o que permite que `reshape` e transposição sejam de graça: mudam a interpretação do mesmo bloco, sem copiar nada.
+
+### Criação
+
+```python
+np.zeros(4)                 # [0. 0. 0. 0.]
+np.ones(3, dtype=np.int32)  # [1 1 1]
+np.arange(0, 10, 2.5)       # [0.  2.5 5.  7.5]
+np.linspace(0, 1, 5)        # [0.   0.25 0.5  0.75 1.  ]
+np.full(3, 7.5)             # [7.5 7.5 7.5]
+np.eye(3, dtype=int)        # matriz identidade
+```
+
+`arange` recebe passo e **exclui** o fim; `linspace` recebe a **quantidade** de pontos e **inclui** o fim. Para valores fracionários prefira `linspace`: `np.arange(0, 1, 0.1)` pode devolver 10 ou 11 elementos dependendo do arredondamento do passo (@sec-cap010).
+
+Para números aleatórios, o gerador moderno, nunca as funções de `np.random` sem semente explícita:
+
+```python
+rng = np.random.default_rng(42)
+print("uniform  :", np.round(rng.random(4), 4))
+print("normal   :", np.round(rng.normal(20, 3, 4), 2))
+print("inteiros :", rng.integers(0, 10, 5))
+```
+
+```text
+uniform  : [0.774  0.4389 0.8586 0.6974]
+normal   : [14.15 16.09 20.38 19.05]
+inteiros : [5 1 8 4 5]
+```
+
+`default_rng(semente)` é reprodutível e não compartilha estado global — as funções antigas (`np.random.rand`, `np.random.seed`) mexem num gerador único do processo, o que quebra teste paralelo e biblioteca de terceiros.
+
+### O `dtype` não é decorativo
+
+```python
+print("limites do int8 :", np.iinfo(np.int8).min, "a", np.iinfo(np.int8).max)
+np.array([120, 125, 130], dtype=np.int8)
+```
+
+```text
+limites do int8 : -128 a 127
+OverflowError : Python integer 130 out of bounds for int8
+```
+
+Na criação, o NumPy 2 avisa alto. **Na aritmética, não:**
+
+```python
+y = np.array([120, 125, 100], dtype=np.int8)
+z = np.array([10, 10, 10], dtype=np.int8)
+print("120+10, 125+10, 100+10 =", y + z)
+```
+
+```text
+120+10, 125+10, 100+10 = [-126 -121  110]
+```
+
+O `int` do Python é ilimitado; o `int8` dá a volta em silêncio. Isso vale para qualquer inteiro de largura fixa, e é o motivo de `int64` ser o padrão. Ao escolher `int8` ou `float32` para economizar memória, você está assumindo um contrato sobre a faixa dos dados — e o NumPy não vai lembrá-lo disso.
+
+## Vetorização: escrever sem laço
+
+```python
+temps = np.array([18.4, 21.7, 25.1, 19.8, 30.2])
+print("fahrenheit :", temps * 9 / 5 + 32)
+print("comparacao :", temps > 20)
+print("quantos    :", (temps > 20).sum())
+print("media      :", temps.mean(), "| desvio:", round(temps.std(ddof=1), 4))
+```
+
+```text
+fahrenheit : [65.12 71.06 77.18 67.64 86.36]
+comparacao : [False  True  True False  True]
+quantos    : 3
+media      : 23.04 | desvio: 4.7258
+```
+
+Cada operação percorre o array inteiro em C. A comparação devolve um array de `bool`, e `sum()` sobre booleanos conta os `True` — idioma que aparece o tempo todo.
+
+Atenção ao `ddof`: `std()` do NumPy usa `ddof=0` (desvio populacional) por padrão, enquanto `statistics.stdev` (@sec-cap059) e o `pandas` usam o amostral. Comparar as duas sem perceber isso produz discrepância que ninguém encontra.
+
+### Eixos
+
+```python
+m = np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]])
+print("m.sum()        :", m.sum())
+print("m.sum(axis=0)  :", m.sum(axis=0))
+print("m.sum(axis=1)  :", m.sum(axis=1))
+```
+
+```text
+m.sum()        : 450
+m.sum(axis=0)  : [120 150 180]
+m.sum(axis=1)  : [ 60 150 240]
+```
+
+A regra que resolve a confusão permanente: **`axis=k` é o eixo que desaparece**. Em `(3, 3)`, somar com `axis=0` elimina o eixo das linhas e sobra um valor por coluna; `axis=1` elimina as colunas e sobra um por linha. Numa tabela, `axis=0` é "por coluna" e `axis=1` é "por linha" — dito de outro jeito, o eixo que você nomeia é o que é **consumido**.
+
+## Fatia é vista, máscara é cópia
+
+Esta é a diferença que mais custa depuração, e ela não existe em listas:
+
+```python
+v = np.arange(10)
+fatia = v[2:5]
+fatia[0] = 999
+print("v      :", v)
+print("fatia.base is v :", fatia.base is v)
+```
+
+```text
+v      : [  0   1 999   3   4   5   6   7   8   9]
+fatia.base is v : True
+```
+
+`v[2:5]` numa **lista** devolveria uma cópia; num array devolve uma **vista** — outra janela para o mesmo bloco de memória. Escrever na vista escreve no original. Isso é deliberado (fatiar um array de 4 GB não deve alocar outros 4 GB), mas surpreende quem vem de listas.
+
+Já indexação booleana e por lista de índices **copiam**, porque o resultado não é um recorte regular do bloco:
+
+```python
+d = np.array([3, 17, 8, 25, 11, 2])
+print("d[d > 10]  :", d[d > 10])
+print("e copia?   :", d[d > 10].base is None)
+d[d > 10] = 0
+print("d apos     :", d)
+```
+
+```text
+d[d > 10]  : [17 25 11]
+e copia?   : True
+d apos     : [3 0 8 0 0 2]
+```
+
+Note a última linha: atribuir **através** da máscara altera o original, porque aí não há intermediário. `d[d > 10]` lê uma cópia; `d[d > 10] = 0` escreve no lugar.
+
+Na dúvida, `.base` responde: `None` significa dono da própria memória. E `arr.copy()` sempre que você quiser mexer sem afetar a origem.
+
+## Broadcasting
+
+Somar arrays de formas diferentes funciona — quando as formas são compatíveis:
+
+```python
+vendas = np.array([[100.0, 200.0, 300.0],
+                   [400.0, 500.0, 600.0]])     # (2, 3)
+imposto = np.array([0.05, 0.10, 0.20])         # (3,)
+print(vendas * imposto)
+```
+
+```text
+[[  5.  20.  60.]
+ [ 20.  50. 120.]]
+```
+
+A regra tem duas linhas. **Alinhe as formas pela direita.** Em cada eixo, elas são compatíveis se forem iguais **ou** se uma delas for 1 (ou estiver ausente, o que conta como 1) — e a dimensão 1 é esticada para acompanhar a outra.
+
+::: {#fig-numpy-broadcasting}
+```{.tikz}
+%%| filename: numpy-broadcasting
+%%| alt: Tres casos de alinhamento de formas no broadcasting do NumPy
+\begin{tikzpicture}[
+  pn/.style={draw,rounded corners,align=left,text width=4.1cm,
+             minimum height=4.5cm,font=\scriptsize},
+  tt/.style={font=\small\bfseries,align=center}
+]
+  \path (-0.4,-3.6) rectangle (14.0,3.4);
+
+  \node[tt] at (6.8,2.9) {alinhar pela direita; 1 ou ausente estica};
+
+  \node[pn,fill=manualgreen!16] at (2.3,0.0)
+    {\textbf{funciona}\\[4pt]
+     \texttt{vendas\ \ (2, 3)}\\
+     \texttt{imposto\ \ \ \ (3,)}\\
+     \texttt{---------------}\\
+     \texttt{result.\ (2, 3)}\\[5pt]
+     eixo -1: 3 e 3, iguais\\
+     eixo -2: 2 e ausente\\
+     \hspace*{1.2em}ausente vira 1\\
+     \hspace*{1.2em}1 estica para 2};
+
+  \node[pn,fill=manualred!16] at (6.9,0.0)
+    {\textbf{falha}\\[4pt]
+     \texttt{vendas\ \ (2, 3)}\\
+     \texttt{taxa\ \ \ \ \ \ (2,)}\\
+     \texttt{---------------}\\
+     \texttt{ValueError}\\[5pt]
+     eixo -1: 3 contra 2\\
+     \hspace*{1.2em}nem iguais nem 1\\[5pt]
+     o erro tipico de quem\\
+     queria uma taxa por\\
+     \textit{linha}, nao por coluna};
+
+  \node[pn,fill=manualgreen!16] at (11.5,0.0)
+    {\textbf{a correcao}\\[4pt]
+     \texttt{vendas\ \ \ \ \ (2, 3)}\\
+     \texttt{taxa[:,None] (2, 1)}\\
+     \texttt{------------------}\\
+     \texttt{result.\ \ \ \ (2, 3)}\\[5pt]
+     eixo -1: 3 e 1, estica\\
+     eixo -2: 2 e 2, iguais\\[5pt]
+     \texttt{[:, None]} acrescenta\\
+     o eixo que faltava};
+
+  \node[font=\scriptsize,align=center,text width=12.4cm] at (6.9,-3.0)
+    {Nada e copiado: o \textit{stride} do eixo esticado vira 0 e o mesmo valor e lido varias vezes.};
+\end{tikzpicture}
+```
+As regras de compatibilidade de formas e o erro mais comum.
+:::
+
+O caso que falha:
+
+```python
+vendas * np.array([0.05, 0.10])
+```
+
+```text
+ValueError: operands could not be broadcast together with shapes (2,3) (2,)
+```
+
+O array de 2 elementos foi alinhado à direita, contra o eixo de tamanho 3. Se a intenção era um fator **por linha**, é preciso dizer isso explicitamente:
+
+```python
+por_linha = np.array([2.0, 3.0])
+print(vendas * por_linha[:, None])
+```
+
+```text
+[[ 200.  400.  600.]
+ [1200. 1500. 1800.]]
+```
+
+`[:, None]` (ou `np.newaxis`, o mesmo objeto com nome melhor) transforma `(2,)` em `(2, 1)`. Esse é o idioma para escolher o eixo em que o vetor deve agir.
+
+O uso mais comum de tudo isso é padronizar colunas:
+
+```python
+X = np.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0]])
+Xn = (X - X.mean(axis=0)) / X.std(axis=0)
+print(np.round(Xn, 4))
+```
+
+```text
+[[-1.3416 -1.3416]
+ [-0.4472 -0.4472]
+ [ 0.4472  0.4472]
+ [ 1.3416  1.3416]]
+```
+
+`X.mean(axis=0)` tem forma `(2,)`, alinha com o último eixo de `X` e subtrai coluna a coluna. Uma linha faz o que seria um laço duplo — e é exatamente o pré-processamento que o @sec-cap085 vai pedir.
+
+## `nan`: o valor ausente
+
+```python
+leituras = np.array([21.5, np.nan, 19.8, 22.1, np.nan])
+print("mean       :", leituras.mean())
+print("nan == nan :", np.nan == np.nan)
+print("isnan      :", np.isnan(leituras))
+print("nanmean    :", round(np.nanmean(leituras), 4))
+print("validas    :", leituras[~np.isnan(leituras)])
+```
+
+```text
+mean       : nan
+nan == nan : False
+isnan      : [False  True False False  True]
+nanmean    : 21.1333
+validas    : [21.5 19.8 22.1]
+```
+
+Três fatos que andam juntos. **`nan` contamina**: qualquer conta que o inclua devolve `nan`, e é assim que se descobre que o CSV tinha buraco. **`nan` não é igual a si mesmo** — por definição do IEEE 754 —, então `x == np.nan` é sempre `False` e a única forma de testar é `np.isnan`. E existe uma família `nan*` (`nanmean`, `nansum`, `nanmax`, `nanstd`) que ignora os ausentes.
+
+`nan` só existe em `float`. Um array de `int` não tem como representar ausência — motivo pelo qual carregar uma coluna inteira com buracos promove tudo para `float64`, comportamento que reaparece no @sec-cap082.
+
+## O erro de valor-verdade
+
+```python
+if leituras > 20:
+    ...
+```
+
+```text
+ValueError: The truth value of an array with more than one element is ambiguous.
+Use a.any() or a.all()
+```
+
+`leituras > 20` é um array de cinco booleanos, e o `if` não tem como decidir. A mensagem já dá a resposta: `.any()` para "algum", `.all()` para "todos". E, para combinar condições, os operadores são `&`, `|` e `~` **com parênteses** — `and`, `or` e `not` chamam o mesmo `__bool__` ambíguo:
+
+```python
+faixa = (leituras > 20) & (leituras < 22)
+```
+
+Os parênteses não são estilo: `&` tem precedência maior que `>`, e sem eles a expressão vira outra coisa.
+
+## Ferramentas que aparecem sempre
+
+```python
+t = np.array([18.0, 25.0, 31.0, 22.0])
+np.where(t > 24, "quente", "ameno")  # ['ameno' 'quente' 'quente' 'ameno']
+np.clip(t, 20, 28)                   # [20. 25. 28. 22.]
+t.argmax()                           # 2  -> indice do maior
+np.argsort(t)                        # [0 3 1 2]
+```
+
+`np.where` é o `if` vetorizado. `argmax`/`argsort` devolvem **índices**, não valores — o que permite ordenar um array pelos valores de outro, base de metade do trabalho com dados tabulares.
+
+E `reshape` reinterpreta sem copiar:
+
+```python
+seq = np.arange(12)
+seq.reshape(3, 4).base is seq   # True
+seq.reshape(3, -1).shape        # (3, 4)  -- o -1 e calculado
+```
+
+## 🐍 Jeito Pythônico
+
+**Laço sobre `ndarray` é sinal de erro.** Se você escreveu `for i in range(len(arr))`, quase sempre existe uma expressão vetorizada equivalente — e ela é uma ordem de grandeza mais rápida e mais curta. As exceções reais são poucas: recorrência em que cada passo depende do anterior, e chamada a código externo que não aceita array.
+
+**`axis=k` é o eixo que some.** Decorar "0 é coluna, 1 é linha" funciona até aparecer um array 3D. Pensar em qual eixo é consumido funciona sempre.
+
+**`default_rng(semente)`, nunca `np.random.seed`.** O gerador global é estado compartilhado do processo: uma biblioteca que o reajusta destrói a reprodutibilidade do seu código sem deixar rastro.
+
+**Saiba se você tem uma vista ou uma cópia.** Fatia é vista; máscara e índice-lista são cópia; `reshape` e `.T` são vistas. Quando a intenção é não afetar a origem, `.copy()` explícito — é barato escrever e caro descobrir que faltava.
+
+**`&`, `|`, `~` com parênteses** em condições sobre arrays. `and`/`or` levantam `ValueError`, o que ao menos é honesto — o perigo é `if arr.any()` escrito quando se queria `all`.
+
+**Prefira `[:, None]` a `reshape` para acrescentar eixo.** Diz exatamente o que está acontecendo (nasce um eixo aqui) em vez de fazer o leitor conferir aritmética de forma.
+
+**Escolha `dtype` conscientemente.** `float64` e `int64` são o padrão por segurança. `float32` corta a memória pela metade e é o certo para dados de imagem ou modelo grande; `int8` transborda em silêncio. A economia é real, o risco também.
+
+**Use os `nan*` em vez de limpar na mão.** `np.nanmean(x)` é mais claro e mais rápido que `x[~np.isnan(x)].mean()`, e não aloca o array intermediário.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-numpy && cd lab-numpy
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install numpy
+python -c "import numpy; print(numpy.__version__)"
+```
+
+**Passo 2 — medir a diferença.** Com `timeit`, compare `[x * 2 for x in lst]` contra `arr * 2` para um milhão de elementos, e `sum(arr)` contra `arr.sum()`. Anote as duas razões. A segunda deve ser maior — explique por quê (dica: `sum` do Python precisa desembrulhar cada `np.int64` num objeto Python).
+
+**Passo 3 — anatomia.** Crie `a = np.arange(24).reshape(2, 3, 4)` e imprima `shape`, `ndim`, `dtype`, `itemsize`, `nbytes` e `strides`. Confira na mão que `strides` bate com `itemsize` e `shape`. Depois imprima `a.T.strides` e observe que a transposição só inverteu a tupla.
+
+**Passo 4 — o transbordo silencioso.** Reproduza:
+
+```text
+limites do int8 : -128 a 127
+OverflowError : Python integer 130 out of bounds for int8
+```
+
+e depois a soma de dois `int8` que estoura:
+
+```text
+120+10, 125+10, 100+10 = [-126 -121  110]
+```
+
+Repita com `dtype=np.float32` e um valor da ordem de `1e40`. O que sai? (Resposta: `inf`, e também sem erro.)
+
+**Passo 5 — vista contra cópia.** Para `v = np.arange(10)`, confirme:
+
+```text
+v      : [  0   1 999   3   4   5   6   7   8   9]
+fatia.base is v : True
+```
+
+Depois faça o mesmo com `v[[2, 3, 4]]` e com `v[v > 5]`, checando `.base` em cada caso. Escreva uma função `eh_vista(x)` que responda isso e teste-a com `reshape`, `.T` e `.copy()`.
+
+**Passo 6 — eixos.** Com `m = np.arange(1, 13).reshape(3, 4)`, calcule soma, média, máximo e `argmax` com `axis=0`, `axis=1` e sem `axis`. Antes de rodar cada um, **escreva a forma esperada do resultado**. Confira. Depois experimente `keepdims=True` e explique para que ele serve (dica: o próximo passo).
+
+**Passo 7 — broadcasting na prática.** Monte `X = rng.normal(50, 10, size=(6, 3))` e padronize as colunas com `(X - X.mean(axis=0)) / X.std(axis=0)`. Confirme que as médias das colunas ficaram ~0 e os desvios ~1. Agora tente padronizar as **linhas** trocando para `axis=1` sem mais nada — e leia o `ValueError`:
+
+```text
+ValueError: operands could not be broadcast together with shapes (2,3) (2,)
+```
+
+Corrija com `[:, None]` (ou `keepdims=True`, que faz o mesmo).
+
+**Passo 8 — dados sujos.** Crie um array de 20 leituras com `rng.normal(21, 2, 20)`, jogue `np.nan` em três posições sorteadas e uma leitura absurda (`-300`). Calcule a média com `mean` e com `nanmean`, conte os ausentes, remova os absurdos com máscara e refaça. Registre quantos pontos sobraram.
+
+**Passo 9 — média móvel.** Suavize um sinal com `np.convolve(sinal, np.ones(3)/3, mode="valid")`:
+
+```text
+sinal : [10. 12. 11. 30. 12. 13. 12. 11.]
+media movel (3): [11.     17.6667 17.6667 18.3333 12.3333 12.    ]
+```
+
+Note que a janela de 3 espalhou o pico de 30 por três posições e que o resultado tem dois elementos a menos. Teste `mode="same"` e veja como as bordas são tratadas.
+
+**Passo 10 — o laço proibido.** Escreva a distância euclidiana entre todos os pares de 500 pontos 2D de duas formas: com laço duplo em Python, e vetorizada com `((P[:, None, :] - P[None, :, :]) ** 2).sum(axis=-1) ** 0.5`. Compare os tempos, confirme com `np.allclose` que os resultados batem, e olhe a forma intermediária `(500, 500, 2)` — 4 MB de memória para evitar 250 mil iterações. Esse é o trade-off central do NumPy: **memória por velocidade**.
+
+## Resumo
+
+- O `ndarray` é um **bloco contíguo de elementos do mesmo `dtype`** mais um cabeçalho (`shape`, `strides`). É daí que vem a velocidade: laço em C sobre memória contígua, sem objeto Python por elemento.
+- **Vetorizar é escrever a operação sobre o array inteiro.** A diferença medida contra o laço equivalente foi de 26x na multiplicação e 63x na soma; laço explícito sobre array é sinal de que existe expressão melhor.
+- `axis=k` é o **eixo que desaparece** na redução; `keepdims=True` o mantém com tamanho 1 para permitir broadcasting depois.
+- **Fatia é vista, máscara e índice-lista são cópia.** Escrever numa vista altera o original — comportamento diferente do de listas, e a fonte número um de bug silencioso. `.base` responde; `.copy()` resolve.
+- **Broadcasting**: alinhe as formas pela direita; cada eixo precisa ser igual ou 1 (ausente conta como 1). `[:, None]` acrescenta o eixo que faltava e resolve o `ValueError` de formas incompatíveis.
+- **`nan` contamina qualquer conta e não é igual a si mesmo**: teste com `np.isnan`, agregue com a família `nan*`, e lembre que `nan` só existe em `float`.
+- Array em contexto booleano levanta `ValueError`: use `.any()`/`.all()` e combine condições com `&`, `|`, `~` **entre parênteses**.
+- `dtype` é um contrato sobre a faixa dos dados: `int8` transborda em silêncio na aritmética, `float32` vira `inf`. O padrão de 64 bits existe por segurança.
