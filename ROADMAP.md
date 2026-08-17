@@ -135,7 +135,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 ### Volume 13 — Dados, Análise e Visualização
 
 - [x] **cap 080** - NumPy: arrays, vetorização e broadcasting - `vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.qmd`
-- [ ] **cap 081** - pandas: Series, DataFrame e a carga de dados - `vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.qmd`
+- [x] **cap 081** - pandas: Series, DataFrame e a carga de dados - `vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.qmd`
 - [ ] **cap 082** - Limpeza, transformação e agregação com pandas - `vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.qmd`
 - [ ] **cap 083** - Visualização de dados com Matplotlib - `vol13/cap083-visualizacao-de-dados-com-matplotlib.qmd`
 - [ ] **cap 084** - SciPy e a computação científica aplicada - `vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (80 concluidos).
+**Total:** 104 capitulos em 16 volumes (81 concluidos).
 

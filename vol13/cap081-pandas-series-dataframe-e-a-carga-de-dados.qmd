@@ -1,3 +1,581 @@
 # pandas: Series, DataFrame e a carga de dados {#sec-cap081}
 
-*(em elaboracao)*
+O `csv.DictReader` do @sec-cap062 lê a planilha. Depois disso, tudo é seu problema: converter a data que veio como texto, decidir o que fazer com a célula vazia, agrupar por cidade num `defaultdict`, calcular média sem contar os buracos, ordenar. São quarenta linhas de código correto e chato, e você vai escrevê-las de novo no próximo arquivo.
+
+**pandas é a estrutura de dados que falta.** Um `DataFrame` é uma tabela em memória onde cada coluna tem um tipo, as linhas têm rótulos, e as operações que você escreveria à mão já existem, vetorizadas sobre NumPy.
+
+Este capítulo usa **pandas 3.0.5** sobre **NumPy 2.5.2**, no Python 3.13. A versão 3.0 mudou coisas importantes em relação ao pandas 2 — o tipo padrão de texto e o comportamento de cópia — e ambas aparecem aqui, porque é o que você vai encontrar em código existente.
+
+```bash
+pip install pandas
+```
+
+## `Series`: um array com rótulos
+
+```python
+import pandas as pd
+
+s = pd.Series([31.4, 14.2, 33.1],
+              index=["Belem", "Curitiba", "Manaus"],
+              name="temperatura")
+print(s)
+```
+
+```text
+Belem       31.4
+Curitiba    14.2
+Manaus      33.1
+Name: temperatura, dtype: float64
+```
+
+Uma `Series` é um `ndarray` (@sec-cap080) mais um **índice**: rótulos para as posições. Ela mantém `dtype`, aceita as operações vetorizadas do NumPy, e acrescenta acesso por rótulo:
+
+```python
+s["Curitiba"]   # 14.2
+s.mean()        # 26.2333...
+s.values        # array([31.4, 14.2, 33.1])  -- o ndarray por baixo
+```
+
+### O índice não é decoração
+
+Esta é a diferença conceitual que separa pandas de NumPy:
+
+```python
+a = pd.Series([10, 20, 30], index=["x", "y", "z"])
+b = pd.Series([1, 2, 3], index=["z", "y", "w"])
+print(a + b)
+```
+
+```text
+w     NaN
+x     NaN
+y    22.0
+z    31.0
+dtype: float64
+```
+
+```python
+print("com numpy (posicional):", a.values + b.values)
+```
+
+```text
+com numpy (posicional): [11 22 33]
+```
+
+**pandas alinha pelo índice; NumPy soma por posição.** O `y` de `a` encontrou o `y` de `b` mesmo estando em posições diferentes. `x` e `w` existem só de um lado e viraram `NaN`.
+
+Isso é o que torna pandas útil para dados de verdade — junte duas séries temporais com datas faltando de cada lado e o alinhamento acontece sozinho. E é também a origem do resultado inesperado mais comum: uma soma que devolve `NaN` em toda parte quase sempre significa índices que não se encontram.
+
+## `DataFrame`: colunas com tipos
+
+```python
+df = pd.read_csv("leituras.csv")
+print(df)
+```
+
+```text
+         data    estacao    cidade  temperatura  umidade    status
+0  2026-03-01  onu-00043     Belem         31.4       88        ok
+1  2026-03-01  onu-00051  Curitiba         14.2       71        ok
+2  2026-03-01  onu-00077    Manaus         33.1       90        ok
+3  2026-03-02  onu-00043     Belem         30.8       86        ok
+4  2026-03-02  onu-00051  Curitiba          NaN       68     falha
+5  2026-03-02  onu-00077    Manaus         32.9       91        ok
+6  2026-03-03  onu-00043     Belem         29.5       84        ok
+7  2026-03-03  onu-00051  Curitiba         15.7       73        ok
+8  2026-03-03  onu-00077    Manaus       -999.0       89  suspeito
+```
+
+::: {#fig-pandas-anatomia}
+```{.tikz}
+%%| filename: pandas-anatomia
+%%| alt: Anatomia de um DataFrame com indice, colunas e dtypes
+\begin{tikzpicture}[
+  hd/.style={draw,fill=manualblue!22,minimum width=1.9cm,minimum height=0.6cm,
+             font=\scriptsize\bfseries},
+  ix/.style={draw,fill=manualyellow!30,minimum width=2.2cm,minimum height=0.6cm,
+             font=\scriptsize},
+  ce/.style={draw,minimum width=1.9cm,minimum height=0.6cm,font=\scriptsize},
+  nt/.style={font=\scriptsize,align=left},
+  tt/.style={font=\small\bfseries,align=center}
+]
+  \path (-0.6,-3.4) rectangle (14.8,3.6);
+
+  \node[tt] at (5.0,3.2) {um \texttt{DataFrame} de 3 linhas e 3 colunas};
+
+  \node[ix,fill=manualgray!25] at (1.1,2.4) {\bfseries index};
+  \node[hd] at (3.3,2.4) {cidade};
+  \node[hd] at (5.3,2.4) {temperatura};
+  \node[hd] at (7.3,2.4) {umidade};
+
+  \node[ix] at (1.1,1.8) {2026-03-01};
+  \node[ce] at (3.3,1.8) {Belem};
+  \node[ce] at (5.3,1.8) {31.4};
+  \node[ce] at (7.3,1.8) {88};
+
+  \node[ix] at (1.1,1.2) {2026-03-02};
+  \node[ce] at (3.3,1.2) {Curitiba};
+  \node[ce] at (5.3,1.2) {NaN};
+  \node[ce] at (7.3,1.2) {68};
+
+  \node[ix] at (1.1,0.6) {2026-03-03};
+  \node[ce] at (3.3,0.6) {Manaus};
+  \node[ce] at (5.3,0.6) {32.9};
+  \node[ce] at (7.3,0.6) {89};
+
+  \node[font=\tiny,align=center] at (3.3,0.0) {\texttt{str}};
+  \node[font=\tiny,align=center] at (5.3,0.0) {\texttt{float64}};
+  \node[font=\tiny,align=center] at (7.3,0.0) {\texttt{int64}};
+  \node[font=\tiny,align=center] at (1.1,0.0) {\texttt{datetime64}};
+
+  \draw[manualgreen,thick] (4.35,0.29) rectangle (6.25,2.71);
+  \node[nt,text width=5.4cm,anchor=west] at (9.0,1.5)
+    {\textbf{cada coluna e uma \texttt{Series}}\\
+     com seu proprio \texttt{dtype}, homogenea\\
+     por dentro --- e o \texttt{NaN} obrigou a\\
+     coluna inteira a ser \texttt{float64}};
+
+  \node[nt,text width=6.2cm,anchor=north west] at (0.4,-0.7)
+    {\textbf{o \texttt{index} rotula as linhas.}
+     Ele nao e o numero da linha: sobrevive a filtros, ordenacoes e junções,
+     e e por ele que toda operacao entre objetos do pandas se alinha.};
+
+  \node[nt,text width=5.4cm,anchor=west] at (9.0,-1.6)
+    {\textbf{as colunas tambem sao um \texttt{Index}}\\
+     por isso \texttt{df[{[}"a","b"{]}]} reordena,\\
+     e nome repetido de coluna e legal\\
+     (e uma fonte de confusao)};
+\end{tikzpicture}
+```
+Índice, colunas e o `dtype` por coluna — os três elementos que explicam o comportamento do `DataFrame`.
+:::
+
+Repare no `-999.0` da última linha e no `NaN` da linha 4. Nenhum dos dois é temperatura. Agora veja o que o `read_csv` inferiu sozinho:
+
+```python
+print(df.dtypes)
+```
+
+```text
+data               str
+estacao            str
+cidade             str
+temperatura    float64
+umidade          int64
+status             str
+dtype: object
+```
+
+A data virou texto. O `-999` virou um número que entra na média. É por isso que **`read_csv` sem argumentos é para explorar, não para carregar**.
+
+### `read_csv` como se deve
+
+```python
+df = pd.read_csv(
+    "leituras.csv",
+    parse_dates=["data"],
+    na_values=["", "-999"],
+    dtype={"estacao": "category", "status": "category"},
+)
+print(df.dtypes)
+```
+
+```text
+data           datetime64[us]
+estacao              category
+cidade                    str
+temperatura           float64
+umidade                 int64
+status               category
+dtype: object
+```
+
+Os argumentos que valem decorar:
+
+| argumento | para quê |
+|---|---|
+| `parse_dates=[...]` | converte para `datetime64` na leitura, sem passo extra |
+| `na_values=[...]` | declara os sentinelas do arquivo (`-999`, `N/A`, `--`) |
+| `dtype={...}` | fixa o tipo em vez de deixar inferir |
+| `usecols=[...]` | lê só as colunas que interessam (economia direta) |
+| `sep=";"`, `decimal=","` | o CSV brasileiro exportado do Excel |
+| `encoding="latin-1"` | quando o arquivo não é UTF-8 (@sec-cap014) |
+| `nrows=1000` | espia o começo de um arquivo grande |
+| `chunksize=100_000` | itera em pedaços em vez de carregar tudo |
+
+`category` merece atenção. Uma coluna de texto com poucos valores distintos ocupa memória absurda como texto:
+
+```text
+300 mil cidades como texto    : 16,600,132 bytes
+300 mil cidades como category :    300,298 bytes
+razao                         :       55.3 x
+```
+
+Cinquenta e cinco vezes menos, porque `category` guarda os rótulos uma vez e um código inteiro por linha.
+
+::: {.callout-note}
+## pandas 3: texto agora tem tipo próprio
+Até o pandas 2, uma coluna de texto vinha como `object` — um array de ponteiros para `str` do Python, com todas as desvantagens do @sec-cap080. O pandas 3 usa o dtype `str` nativo por padrão, mais rápido e mais econômico. Se você encontrar `dtype: object` em código ou tutorial, é pandas 2 ou anterior.
+:::
+
+### Inspecionar antes de qualquer coisa
+
+```python
+df.info()
+```
+
+```text
+<class 'pandas.DataFrame'>
+RangeIndex: 9 entries, 0 to 8
+Data columns (total 6 columns):
+ #   Column       Non-Null Count  Dtype
+---  ------       --------------  -----
+ 0   data         9 non-null      datetime64[us]
+ 1   estacao      9 non-null      category
+ 2   cidade       9 non-null      str
+ 3   temperatura  7 non-null      float64
+ 4   umidade      9 non-null      int64
+ 5   status       9 non-null      category
+dtypes: category(2), datetime64[us](1), float64(1), int64(1), str(1)
+memory usage: 594.0 bytes
+```
+
+`info()` responde três perguntas de uma vez: quantas linhas, que tipos e **quantos não-nulos por coluna**. A coluna `temperatura` tem 7 de 9 — os dois buracos que criamos com `na_values`.
+
+```python
+print(df.describe())
+```
+
+```text
+                      data  temperatura    umidade
+count                    9      7.00000   9.000000
+mean   2026-03-02 00:00:00     26.80000  82.222222
+min    2026-03-01 00:00:00     14.20000  68.000000
+25%    2026-03-01 00:00:00     22.60000  73.000000
+50%    2026-03-02 00:00:00     30.80000  86.000000
+75%    2026-03-03 00:00:00     32.15000  89.000000
+max    2026-03-03 00:00:00     33.10000  91.000000
+std                    NaN      8.19878   8.996913
+```
+
+`describe()` cobre as colunas numéricas; para as demais, `df[["estacao", "cidade", "status"]].describe()` devolve `count`, `unique`, `top` e `freq` — útil para descobrir que uma coluna que devia ter 3 valores distintos tem 47, porque alguém digitou "Belém", "belem" e "BELEM".
+
+## Selecionar: `[]`, `.loc` e `.iloc`
+
+::: {#fig-pandas-selecao}
+```{.tikz}
+%%| filename: pandas-selecao
+%%| alt: Quatro formas de selecionar dados num DataFrame do pandas
+\begin{tikzpicture}[
+  pn/.style={draw,rounded corners,align=left,text width=3.9cm,
+             minimum height=4.4cm,font=\scriptsize},
+  tt/.style={font=\small\bfseries,align=center}
+]
+  \path (-0.4,-3.4) rectangle (13.8,3.2);
+
+  \node[tt] at (6.7,2.7) {o colchete e para colunas; \texttt{.loc} e \texttt{.iloc} sao para linhas e colunas};
+
+  \node[pn,fill=manualblue!16] at (2.2,-0.2)
+    {\textbf{\texttt{df["col"]}}\\[4pt]
+     devolve uma \texttt{Series}\\[4pt]
+     \texttt{df[{[}"a","b"{]}]} devolve\\
+     um \texttt{DataFrame}\\[6pt]
+     colchete simples so\\
+     entende \textbf{coluna}\\[6pt]
+     \textit{a excecao confusa:}\\
+     \texttt{df{[}0:3{]}} fatia \textbf{linhas}};
+
+  \node[pn,fill=manualgreen!16] at (6.7,-0.2)
+    {\textbf{\texttt{df{[}mascara{]}}}\\[4pt]
+     filtra \textbf{linhas} por um\\
+     vetor de booleanos\\[6pt]
+     \texttt{df{[}df{[}"t"{]} > 30{]}}\\[6pt]
+     combine com\\
+     \texttt{\&}, \texttt{|}, \texttt{\textasciitilde} e parenteses\\[6pt]
+     \texttt{.query("t > 30")} faz\\
+     o mesmo com string};
+
+  \node[pn,fill=manualyellow!22] at (11.2,-0.2)
+    {\textbf{\texttt{.loc{[}lin, col{]}}}\\[4pt]
+     por \textbf{rotulo}\\[4pt]
+     \texttt{.loc{[}"2026-03-02"{]}}\\
+     \texttt{.loc{[}"a":"c", {[}"x"{]}{]}}\\[6pt]
+     fatia com \textbf{fim incluido}\\[6pt]
+     \textbf{\texttt{.iloc{[}lin, col{]}}}\\
+     por \textbf{posicao} inteira,\\
+     fim \textbf{excluido}, como\\
+     em lista do Python};
+
+  \node[font=\scriptsize,align=center,text width=12.6cm] at (6.7,-2.9)
+    {Regra pratica: se voce escreveu dois colchetes seguidos (\texttt{df{[}...{]}{[}...{]}}), troque por um \texttt{.loc} --- e o padrao que o pandas 3 rejeita.};
+\end{tikzpicture}
+```
+As quatro portas de entrada para os dados de um `DataFrame`.
+:::
+
+```python
+df["cidade"]                  # Series
+df[["cidade", "temperatura"]] # DataFrame
+```
+
+Com o índice trocado para a data, `.loc` seleciona por rótulo:
+
+```python
+d2 = df.set_index("data")
+print(d2.loc["2026-03-02"])
+```
+
+```text
+              estacao    cidade  temperatura  umidade status
+data
+2026-03-02  onu-00043     Belem         30.8       86     ok
+2026-03-02  onu-00051  Curitiba          NaN       68  falha
+2026-03-02  onu-00077    Manaus         32.9       91     ok
+```
+
+E `.iloc`, por posição:
+
+```python
+d2.iloc[0]      # a primeira linha, seja qual for o rótulo
+```
+
+A diferença que morde: **`.loc` inclui o fim da fatia, `.iloc` não.**
+
+```python
+srt = pd.Series([10, 20, 30, 40], index=["a", "b", "c", "d"])
+print("iloc[1:3]  :", list(srt.iloc[1:3].index))
+print("loc['b':'c']:", list(srt.loc["b":"c"].index))
+```
+
+```text
+iloc[1:3]  : ['b', 'c']  <- exclui o fim
+loc['b':'c']: ['b', 'c']  <- inclui o fim
+```
+
+Os dois deram o mesmo resultado aqui porque as fatias são diferentes: `1:3` pega duas posições, `'b':'c'` pega dois rótulos **inclusive**. Faz sentido — o rótulo `'d'` não tem sucessor conhecido, então excluir o fim seria arbitrário.
+
+### Filtrar linhas
+
+```python
+quentes = df[df["temperatura"] > 30]
+print(df[(df["temperatura"] > 30) & (df["umidade"] > 88)][["cidade", "temperatura", "umidade"]])
+```
+
+```text
+   cidade  temperatura  umidade
+2  Manaus         33.1       90
+5  Manaus         32.9       91
+```
+
+Como no NumPy: `&`, `|`, `~`, sempre com parênteses. A alternativa legível para condições longas é `query`:
+
+```python
+df.query("temperatura > 30 and umidade > 88")
+```
+
+Repare no índice do resultado: `2` e `5`, não `0` e `1`. **Filtrar não renumera.** O índice original é preservado de propósito — é assim que você sabe de que linha do arquivo aquilo veio. Quando o índice antigo não interessa mais, `reset_index(drop=True)`.
+
+## Cópia, vista e a mudança do pandas 3
+
+```python
+sub = df[df["cidade"] == "Belem"]
+sub["temperatura"] = 0.0
+print("original:", df.loc[0, "temperatura"])
+```
+
+```text
+original: 31.4
+```
+
+O recorte é uma cópia, e escrever nele **não** afeta o original. No pandas 2 esse mesmo código emitia o famoso `SettingWithCopyWarning`, cujo comportamento dependia de detalhes internos: às vezes propagava, às vezes não. O pandas 3 adotou *copy-on-write* e a regra ficou simples — **toda operação devolve algo independente do original**.
+
+O que o pandas 3 rejeita alto é a atribuição encadeada:
+
+```python
+df[df["cidade"] == "Belem"]["temperatura"] = 0.0
+```
+
+```text
+ChainedAssignmentError : A value is being set on a copy of a DataFrame or Series
+through chained assignment.
+```
+
+E o mesmo vale para método `inplace` sobre coluna extraída (`df["t"].fillna(0, inplace=True)`). A forma correta é sempre **um único `.loc`**:
+
+```python
+df.loc[df["cidade"] == "Belem", "temperatura"] = 0.0
+```
+
+## Criar colunas
+
+```python
+df["fahrenheit"] = df["temperatura"] * 9 / 5 + 32
+df["faixa"] = np.where(df["temperatura"] > 30, "quente", "ameno")
+```
+
+Vetorizado, coluna inteira de uma vez. Para encadear sem criar variável intermediária, `assign` com `lambda`:
+
+```python
+res = (df
+       .assign(fahrenheit=lambda d: d["temperatura"] * 9 / 5 + 32)
+       .loc[lambda d: d["temperatura"].notna(), ["cidade", "temperatura", "fahrenheit"]]
+       .sort_values("temperatura", ascending=False)
+       .head(3))
+print(res)
+```
+
+```text
+   cidade  temperatura  fahrenheit
+2  Manaus         33.1       91.58
+5  Manaus         32.9       91.22
+0   Belem         31.4       88.52
+```
+
+O `lambda d:` dentro de `assign` e `.loc` refere-se ao DataFrame **daquele ponto da cadeia**, o que permite escrever a transformação inteira como uma expressão. É o estilo dominante em pandas moderno, e o assunto do @sec-cap082.
+
+## O laço que você não deve escrever
+
+```python
+big = pd.DataFrame({"a": rng.random(200_000), "b": rng.random(200_000)})
+big.apply(lambda r: r["a"] + r["b"], axis=1)   # linha a linha
+big["a"] + big["b"]                            # vetorizado
+```
+
+```text
+apply(axis=1) :   1181.5 ms
+a + b         :      1.1 ms
+razao         :     1102x
+```
+
+Mil vezes. `apply(axis=1)` constrói uma `Series` Python **por linha** — duzentas mil delas. `iterrows()` é pior ainda, e tem um defeito adicional:
+
+```python
+for i, linha in df.iterrows():
+    print(i, repr(linha["n"]), linha.dtype)
+```
+
+```text
+0 1 object
+```
+
+Cada linha é uma `Series` que precisa acomodar tipos diferentes, então tudo vira `object` e você perde o `dtype`. Se precisar mesmo iterar, `itertuples()` preserva os tipos e é bem mais rápido:
+
+```text
+Pandas(Index=0, n=1, txt='a') int
+```
+
+Mas a regra continua: iterar sobre um `DataFrame` é o último recurso, não o primeiro.
+
+## De onde os dados vêm
+
+pandas lê muito mais que CSV, e a família `read_*` tem interface uniforme:
+
+| função | formato | observação |
+|---|---|---|
+| `read_csv` | CSV, TSV | o cavalo de batalha; aceita URL e arquivo comprimido |
+| `read_parquet` | Parquet | colunar, comprimido, **preserva os `dtype`** |
+| `read_excel` | XLSX | requer `openpyxl`; `sheet_name=None` lê todas as abas |
+| `read_json` | JSON | `lines=True` para JSON Lines |
+| `read_sql` | qualquer DB-API | passe a conexão do @sec-cap065 |
+| `read_html` | tabelas de página | extrai todo `<table>` numa lista |
+
+Cada uma tem a gêmea `to_*` para escrever. Duas recomendações práticas: **`index=False` em `to_csv`** quando o índice for o `RangeIndex` automático, senão nasce uma coluna `Unnamed: 0` na próxima leitura; e **Parquet em vez de CSV** para dados intermediários, porque o CSV perde todo o `dtype` e obriga a repetir o ritual de `parse_dates` e `na_values` a cada carga.
+
+Para arquivos que não cabem na memória, `chunksize` transforma a leitura num iterador:
+
+```python
+total = 0.0
+for pedaco in pd.read_csv("leituras.csv", na_values=["-999"], chunksize=100_000):
+    total += pedaco["temperatura"].sum()
+```
+
+Cada `pedaco` é um `DataFrame` completo. É o mesmo padrão de processamento em fluxo do @sec-cap050 — e, quando ele não bastar, a resposta é Polars, DuckDB ou Dask, não um `chunksize` maior.
+
+## 🐍 Jeito Pythônico
+
+**`read_csv` com `dtype`, `parse_dates` e `na_values` explícitos.** A inferência é ótima para a primeira olhada e péssima como contrato: um arquivo novo com uma célula estranha muda o tipo de uma coluna inteira, e o erro aparece três transformações adiante.
+
+**`info()` e `describe()` antes de qualquer análise.** Trinta segundos que evitam a média calculada sobre um `-999`.
+
+**Um único `.loc` para atribuir.** Dois colchetes seguidos é o padrão que o pandas 3 rejeita com `ChainedAssignmentError` — e que no pandas 2 falhava em silêncio, que era pior.
+
+**`.loc` para rótulo, `.iloc` para posição, colchete para coluna.** Não existe caso em que a ambiguidade compense; escrever `.loc` explícito é mais curto de ler do que descobrir depois qual era a intenção.
+
+**Nunca `apply(axis=1)` nem `iterrows()` para o que uma expressão vetorizada faz.** Mil vezes é a ordem de grandeza medida, e o código vetorizado ainda é mais curto.
+
+**`category` para coluna de texto com poucos valores distintos.** Cinquenta vezes menos memória, e agrupamento mais rápido de quebra.
+
+**Cadeias com `assign` e `lambda`** em vez de variáveis intermediárias numeradas. A cadeia é lida de cima para baixo como uma receita e não deixa estado pela metade.
+
+**`index=False` ao escrever CSV**, e Parquet para dados intermediários — o CSV é formato de intercâmbio, não de armazenamento.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente e dados.**
+
+```bash
+mkdir lab-pandas && cd lab-pandas
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install pandas pyarrow
+```
+
+Crie `leituras.csv` com as colunas `data,estacao,cidade,temperatura,umidade,status` e nove linhas, incluindo **uma célula vazia** na temperatura e **um `-999`**.
+
+**Passo 2 — a carga ingênua.** Leia com `pd.read_csv("leituras.csv")` e imprima `dtypes`. Confirme que a data virou texto e que `-999` entrou como número. Calcule `df["temperatura"].mean()` e guarde o valor errado.
+
+**Passo 3 — a carga correta.** Releia com `parse_dates`, `na_values=["-999"]` e `dtype={"estacao": "category"}`. Compare `dtypes` e a nova média. A diferença entre as duas médias é o custo de não declarar nada.
+
+**Passo 4 — alinhamento.** Reproduza:
+
+```text
+w     NaN
+x     NaN
+y    22.0
+z    31.0
+```
+
+Depois faça `a.add(b, fill_value=0)` e explique a diferença. Esse é o argumento que resolve 90% dos `NaN` inesperados em soma de séries.
+
+**Passo 5 — seleção.** Para cada expressão abaixo, **escreva antes** se o resultado é `Series` ou `DataFrame`, e depois confira: `df["cidade"]`, `df[["cidade"]]`, `df.loc[0]`, `df.loc[[0]]`, `df.iloc[0, 1]`, `df.loc[0:2]`, `df.iloc[0:2]`. As duas últimas devolvem números diferentes de linhas — descubra por quê.
+
+**Passo 6 — filtros.** Selecione as leituras com temperatura acima de 30 **e** umidade acima de 88, das duas formas (máscara e `query`). Depois tente sem os parênteses na máscara e leia o erro. Confirme que o índice do resultado não foi renumerado:
+
+```text
+   cidade  temperatura  umidade
+2  Manaus         33.1       90
+5  Manaus         32.9       91
+```
+
+**Passo 7 — a atribuição encadeada.** Execute `df[df["cidade"] == "Belem"]["temperatura"] = 0.0` e capture:
+
+```text
+ChainedAssignmentError : A value is being set on a copy of a DataFrame or Series
+through chained assignment.
+```
+
+Confirme que o `DataFrame` **não** mudou. Depois faça certo com um `.loc` só e confirme que mudou.
+
+**Passo 8 — memória.** Monte uma `Series` com 300 mil repetições de três cidades e compare `memory_usage(deep=True)` como texto e como `category`:
+
+```text
+300 mil cidades como texto    : 16,600,132 bytes
+300 mil cidades como category :    300,298 bytes
+```
+
+Agora rode `df.memory_usage(deep=True)` no seu DataFrame real e identifique a coluna mais cara.
+
+**Passo 9 — o laço proibido.** Com 200 mil linhas, cronometre `apply(lambda r: r["a"] + r["b"], axis=1)` contra `df["a"] + df["b"]`. Anote a razão. Depois cronometre `iterrows()` e `itertuples()` sobre as mesmas linhas e confirme que `iterrows` devolve `dtype` `object`.
+
+**Passo 10 — ida e volta.** Salve o DataFrame com `to_csv(index=False)` e com `to_parquet()`. Releia os dois **sem argumento nenhum** e compare `dtypes`. O Parquet volta idêntico; o CSV volta com a data como texto e as categorias como `str`. Compare também o tamanho dos arquivos.
+
+## Resumo
+
+- Uma `Series` é um `ndarray` **com índice**; um `DataFrame` é um conjunto de `Series` que compartilham o índice, cada uma com seu `dtype`.
+- **pandas alinha pelo índice**, NumPy opera por posição. `NaN` inesperado numa soma de séries quase sempre é índice que não se encontrou; `add(..., fill_value=0)` costuma ser a correção.
+- `read_csv` sem argumentos é para explorar. Para carregar: **`parse_dates`, `na_values` e `dtype` explícitos** — inclusive `category` para texto repetitivo, que economizou 55x de memória aqui.
+- `info()` mostra tipos e não-nulos; `describe()` mostra a distribuição. São os dois primeiros comandos sobre qualquer tabela nova.
+- **Colchete é para coluna, `.loc` para rótulo, `.iloc` para posição.** `.loc` inclui o fim da fatia; `.iloc`, não. Filtro preserva o índice original — `reset_index(drop=True)` quando ele não interessar.
+- O pandas 3 tem *copy-on-write*: recorte é sempre independente, e **atribuição encadeada levanta `ChainedAssignmentError`**. Atribuir é sempre com um único `.loc`.
+- **`apply(axis=1)` foi 1102x mais lento** que a expressão vetorizada equivalente; `iterrows()` ainda perde os `dtype`. Iterar é o último recurso, e `itertuples()` é o menos ruim.
+- A família `read_*`/`to_*` cobre CSV, Parquet, Excel, JSON, SQL e HTML. Use `index=False` ao escrever CSV e prefira **Parquet para dados intermediários**, porque ele preserva os tipos.
