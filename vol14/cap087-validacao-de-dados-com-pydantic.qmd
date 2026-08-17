@@ -1,3 +1,556 @@
 # Validação de dados com Pydantic {#sec-cap087}
 
-*(em elaboracao)*
+O JSON chegou com `"quantidade": "3"` em vez de `3`. Ninguém percebeu, porque `"3"` é verdadeiro num `if` e concatena numa string. Três telas adiante, `quantidade * preco` devolveu `"3"` repetido 249 vezes, e o pedido foi para o banco com um total de sete dígitos.
+
+Todo programa que recebe dados de fora — HTTP, arquivo, variável de ambiente, fila, banco de terceiro — tem esse problema. A solução ingênua é espalhar `if isinstance(...)` pelo código, o que produz validação incompleta em vinte lugares e nenhuma mensagem de erro decente. A solução do Pydantic é declarar a forma **uma vez**, com as anotações de tipo que você já escreveria de qualquer jeito (@sec-cap068), e deixar que ele construa o validador.
+
+Este capítulo usa **Pydantic 2.13.4**. A versão 2 reescreveu o núcleo em Rust — a API mudou o suficiente para que exemplos da v1 encontrados por aí não rodem, e é bom saber disso antes de copiar código da internet.
+
+```bash
+pip install "pydantic[email]" pydantic-settings
+```
+
+## O modelo é a declaração
+
+```python
+from pydantic import BaseModel, EmailStr
+
+class Cliente(BaseModel):
+    id: int
+    nome: str
+    email: EmailStr
+    ativo: bool = True
+    saldo: float = 0.0
+```
+
+Sem `__init__`, sem `if`, sem `raise`. A classe já sabe validar, converter, serializar e descrever a si mesma:
+
+```python
+c = Cliente(id="7", nome="Ana Prado", email="ana@exemplo.com.br", saldo="12.5")
+print(c)
+print(type(c.id).__name__, type(c.saldo).__name__)
+print(c.model_dump_json())
+```
+
+```text
+id=7 nome='Ana Prado' email='ana@exemplo.com.br' ativo=True saldo=12.5
+int float
+{"id":7,"nome":"Ana Prado","email":"ana@exemplo.com.br","ativo":true,"saldo":12.5}
+```
+
+Entrou `"7"`, saiu `7` **inteiro**. Esse é o ponto: o modelo não só rejeita o inválido, ele **normaliza** o válido. Do lado de dentro do modelo, os tipos são os que a anotação promete — e é isso que permite ao resto do programa parar de desconfiar.
+
+::: {#fig-pydantic-borda}
+```{.tikz}
+%%| filename: pydantic-borda
+%%| alt: Pydantic como fronteira entre o mundo nao confiavel e o nucleo tipado
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=3.0cm,
+             minimum height=1.5cm,font=\scriptsize},
+  bg/.style={draw,rounded corners,align=center,text width=3.4cm,
+             minimum height=4.6cm,font=\scriptsize},
+  lb/.style={font=\scriptsize\bfseries,align=center}
+]
+  \path (-0.4,-4.4) rectangle (14.2,3.6);
+
+  \node[lb,text width=13.4cm] at (7.0,3.3)
+    {valide na borda, uma vez --- o nucleo confia};
+
+  \node[bx,fill=manualred!14] at (1.9,1.9) {\textbf{HTTP}\\corpo JSON,\\parametros, cabecalhos};
+  \node[bx,fill=manualred!14] at (1.9,0.2) {\textbf{arquivo e env}\\TOML, YAML, CSV,\\\texttt{APP\_PORTA}};
+  \node[bx,fill=manualred!14] at (1.9,-1.5) {\textbf{fila e terceiros}\\mensagem, webhook,\\API que voce nao\\controla};
+
+  \node[bg,fill=manualyellow!22] at (7.0,0.2)
+    {\textbf{modelo Pydantic}\\[4pt]
+     coercao\\
+     restricoes de campo\\
+     \texttt{field\_validator}\\
+     \texttt{model\_validator}\\[4pt]
+     ou instancia valida,\\ou \texttt{ValidationError}\\com o caminho exato};
+
+  \node[bg,fill=manualgreen!16] at (12.2,0.2)
+    {\textbf{nucleo do dominio}\\[4pt]
+     tipos ja garantidos\\
+     nenhum \texttt{isinstance}\\
+     nenhum \texttt{.get(...)}\\com valor padrao\\[4pt]
+     regra de negocio\\sem defesa espalhada};
+
+  \draw[->,>=stealth,thick] (3.5,1.9) -- (5.2,0.7);
+  \draw[->,>=stealth,thick] (3.5,0.2) -- (5.2,0.2);
+  \draw[->,>=stealth,thick] (3.5,-1.5) -- (5.2,-0.3);
+  \draw[->,>=stealth,thick,manualgreen] (8.8,0.2) -- (10.4,0.2);
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.0cm,
+        font=\scriptsize] at (7.0,-3.3)
+    {\textbf{o antipadrao:} validar de novo no meio do caminho. Se cada funcao
+     interna reconfere o que ja foi validado, a defesa dobra de custo e continua
+     incompleta --- e quando a regra muda, ela muda em oito lugares. A borda e uma
+     linha, nao uma nevoa.};
+\end{tikzpicture}
+```
+O modelo fica na fronteira; o que passa dele já está no formato prometido.
+:::
+
+## O erro que serve para alguma coisa
+
+Quando a entrada não presta, o Pydantic **não para no primeiro problema**:
+
+```python
+try:
+    Cliente(id="sete", nome=None, email="nao-e-email", saldo="muito")
+except ValidationError as e:
+    for err in e.errors():
+        print(err["loc"], err["type"], err["msg"])
+```
+
+```text
+4 erros
+  campo=('id',) tipo=int_parsing
+      msg=Input should be a valid integer, unable to parse string as an integer
+  campo=('nome',) tipo=string_type
+      msg=Input should be a valid string
+  campo=('email',) tipo=value_error
+      msg=value is not a valid email address: An email address must have an @-sign.
+  campo=('saldo',) tipo=float_parsing
+      msg=Input should be a valid number, unable to parse string as a number
+```
+
+Cada erro traz `loc` (o caminho até o campo), `type` (um código estável, próprio para tradução e para testes) e `msg` (o texto para humano). Um formulário de quatro campos errados devolve os quatro problemas de uma vez em vez de obrigar o usuário a descobri-los um por um — e um teste pode afirmar `err["type"] == "int_parsing"` sem depender da redação da mensagem, que muda entre versões.
+
+## Coerção não é conversão selvagem
+
+A coerção do Pydantic é uma das fontes de surpresa mais comuns, e vale conhecê-la de perto:
+
+```text
+  id='7'      -> 7
+  id=7.0      -> 7
+  id=7.5      -> ERRO: Input should be a valid integer, got a number with a fractional part
+  id=True     -> 1
+  id='0x1f'   -> ERRO: Input should be a valid integer, unable to parse string as an integer
+```
+
+A regra é *converter quando não há perda de informação*: `"7"` e `7.0` viram `7`; `7.5` é recusado porque perderia a parte fracionária. Mas repare em `True → 1`: isso é herança de Python, onde `bool` é subclasse de `int` (@sec-cap011), e é exatamente o tipo de detalhe que se descobre em produção.
+
+Quando você quer o oposto — rejeitar tudo que não seja do tipo exato — existe o **modo estrito**:
+
+```python
+class Estrito(BaseModel):
+    model_config = ConfigDict(strict=True)
+    n: int
+```
+
+```text
+  Solto    n='7'    -> 7
+  Solto    n=7.0    -> 7
+  Solto    n=True   -> 1
+  Solto    n=7      -> 7
+  Estrito  n='7'    -> ERRO: int_type
+  Estrito  n=7.0    -> ERRO: int_type
+  Estrito  n=True   -> ERRO: int_type
+  Estrito  n=7      -> 7
+```
+
+E, quando só um campo precisa disso, `Annotated[int, Strict()]` liga o modo estrito campo a campo:
+
+```python
+class Misto(BaseModel):
+    porta: Annotated[int, Strict()]      # so aceita int de verdade
+    tempo: int                            # aceita "30"
+```
+
+**A escolha depende da origem dos dados.** Formulário HTML e *query string* mandam tudo como texto: exigir `strict` ali significa converter na mão antes, o que é o trabalho que você queria evitar. JSON de um serviço interno que deveria mandar número já tipado: `strict` pega o defeito na origem, em vez de mascará-lo.
+
+## Restrições declaradas no campo
+
+Tipo é só metade da forma. O resto vai em `Field`:
+
+```python
+class Produto(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    sku: str = Field(pattern=r"^[A-Z]{3}-\d{4}$")
+    nome: str = Field(min_length=2, max_length=60)
+    preco: float = Field(gt=0, le=1_000_000)
+    quantidade: int = Field(default=0, ge=0)
+    categoria: Literal["livro", "eletronico", "alimento"]
+    tags: list[str] = Field(default_factory=list, max_length=5)
+```
+
+```text
+{'sku': 'ABC-1234', 'nome': 'Teclado', 'preco': 249.9, 'quantidade': 0,
+ 'categoria': 'eletronico', 'tags': ['usb']}
+```
+
+O `nome` entrou como `"  Teclado  "` e saiu sem os espaços, por causa do `str_strip_whitespace`. E a entrada errada devolve o inventário completo:
+
+```text
+  sku          string_pattern_mismatch String should match pattern '^[A-Z]{3}-\d{4}$'
+  nome         string_too_short       String should have at least 2 characters
+  preco        greater_than           Input should be greater than 0
+  quantidade   greater_than_equal     Input should be greater than or equal to 0
+  categoria    literal_error          Input should be 'livro', 'eletronico' or 'alimento'
+  cor          extra_forbidden        Extra inputs are not permitted
+```
+
+Aquele último merece destaque. **`extra="forbid"` recusa campos que o modelo não declarou** — o padrão é `"ignore"`, que os descarta em silêncio. Silêncio aqui é caro: `{"quantiadde": 5}` com o erro de digitação passa como um pedido de quantidade zero, e ninguém descobre. Para entrada vinda de fora, `extra="forbid"` deveria ser reflexo.
+
+Duas notas de tipagem que economizam tempo:
+
+**`Literal[...]` é o jeito de dizer "só estes valores".** Ele aparece no esquema JSON, o verificador de tipos entende, e a mensagem de erro lista as opções. Para um conjunto que também precisa de comportamento, `Enum` (@sec-cap046) funciona do mesmo jeito.
+
+**`default_factory=list`, nunca `default=[]`.** É a mesma armadilha do argumento padrão mutável (@sec-cap019) — o Pydantic até se defende dela em muitos casos, mas escrever certo custa nada.
+
+## Validadores: quando a regra é sua
+
+Restrição de campo cobre forma. Regra de negócio precisa de código.
+
+```python
+class Assinatura(BaseModel):
+    plano: Literal["mensal", "anual"]
+    inicio: date
+    fim: date
+    cupom: str | None = None
+
+    @field_validator("cupom")
+    @classmethod
+    def cupom_maiusculo(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v.isalnum():
+            raise ValueError("cupom so aceita letras e digitos")
+        return v
+
+    @model_validator(mode="after")
+    def periodo_coerente(self):
+        if self.fim <= self.inicio:
+            raise ValueError("fim precisa ser posterior a inicio")
+        dias = (self.fim - self.inicio).days
+        if self.plano == "anual" and dias < 300:
+            raise ValueError(f"plano anual com apenas {dias} dias")
+        return self
+
+    @computed_field
+    @property
+    def dias(self) -> int:
+        return (self.fim - self.inicio).days
+```
+
+```text
+{'plano': 'anual', 'inicio': datetime.date(2026, 1, 1),
+ 'fim': datetime.date(2026, 12, 31), 'cupom': 'BEMVINDO10', 'dias': 364}
+```
+
+```text
+  ()           Value error, plano anual com apenas 59 dias
+  ()           Value error, fim precisa ser posterior a inicio
+  ('cupom',)   Value error, cupom so aceita letras e digitos
+```
+
+Três mecanismos, três papéis distintos:
+
+**`field_validator` vê um campo.** Pode **transformar** (o cupom entrou como `"  bemvindo10 "` e virou `"BEMVINDO10"`) e pode recusar. O `@classmethod` abaixo do decorador não é opcional — a ordem importa, e invertê-la produz um erro obscuro na definição da classe.
+
+**`model_validator(mode="after")` vê o modelo inteiro, já validado.** É onde moram as regras entre campos: `fim > inicio`, "se plano é anual então o período é longo", "ou CPF ou CNPJ, nunca os dois". Ele recebe e devolve `self`. Existe também `mode="before"`, que recebe os dados **crus**, antes de qualquer coerção — útil para aceitar um formato alternativo de entrada, e perigoso para qualquer outra coisa, porque ali nada tem tipo garantido ainda.
+
+**`computed_field` é campo derivado.** Não entra na validação, mas **entra no `model_dump` e no esquema JSON** — repare no `'dias': 364` da saída. É o jeito certo de expor um total, uma idade ou uma URL montada, sem duplicar o dado na entrada.
+
+Note ainda que o erro do `model_validator` tem `loc` vazio: `()`. Ele não pertence a nenhum campo, e um formulário que só sabe mostrar erro ao lado do campo vai engoli-lo. Vale tratar esse caso na camada de apresentação.
+
+A ordem em que essas etapas rodam não é detalhe: ela decide o que cada validador pode supor sobre o dado que recebe.
+
+::: {#fig-pydantic-ordem}
+```{.tikz}
+%%| filename: pydantic-ordem
+%%| alt: Ordem das etapas de validacao e de serializacao no Pydantic
+\begin{tikzpicture}[
+  et/.style={draw,rounded corners,align=left,text width=4.4cm,
+             minimum height=0.95cm,font=\scriptsize},
+  ob/.style={align=left,text width=7.0cm,font=\scriptsize\itshape,
+             color=manualgray!150}
+]
+  \path (-0.4,-6.4) rectangle (14.2,4.6);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.4cm] at (7.0,4.3)
+    {a ordem decide o que cada etapa pode supor};
+
+  \node[et,fill=manualgray!14] at (3.2,3.5) {\textbf{entrada bruta}\\
+    \texttt{dict}, JSON, \texttt{kwargs}, env};
+  \node[et,fill=manualred!14] at (3.2,2.2) {\texttt{model\_validator}\\
+    \texttt{(mode="before")}};
+  \node[et,fill=manualyellow!22] at (3.2,0.9) {\textbf{coercao de tipo}};
+  \node[et,fill=manualyellow!22] at (3.2,-0.4) {\textbf{restricoes do} \texttt{Field}};
+  \node[et,fill=manualblue!16] at (3.2,-1.7) {\texttt{field\_validator}};
+  \node[et,fill=manualblue!16] at (3.2,-3.0) {\texttt{model\_validator}\\
+    \texttt{(mode="after")}};
+  \node[et,fill=manualgreen!18] at (3.2,-4.3) {\textbf{instancia valida}};
+
+  \draw[->,>=stealth] (3.2,3.0) -- (3.2,2.75);
+  \draw[->,>=stealth] (3.2,1.7) -- (3.2,1.45);
+  \draw[->,>=stealth] (3.2,0.4) -- (3.2,0.15);
+  \draw[->,>=stealth] (3.2,-0.9) -- (3.2,-1.15);
+  \draw[->,>=stealth] (3.2,-2.2) -- (3.2,-2.45);
+  \draw[->,>=stealth] (3.2,-3.5) -- (3.2,-3.75);
+
+  \node[ob] at (10.0,3.5) {seja o que for que mandaram};
+  \node[ob] at (10.0,2.2) {nada tem tipo garantido ainda: use so para\\
+    aceitar um formato alternativo de entrada};
+  \node[ob] at (10.0,0.9) {\texttt{"7"} vira \texttt{7}; \texttt{7.5} e recusado;\\
+    \texttt{strict=True} desliga esta etapa};
+  \node[ob] at (10.0,-0.4) {\texttt{gt}, \texttt{min\_length}, \texttt{pattern}, \texttt{extra="forbid"}};
+  \node[ob] at (10.0,-1.7) {campo a campo, ja com o tipo certo:\\
+    pode transformar ou recusar};
+  \node[ob] at (10.0,-3.0) {regra entre campos; erro sai com \texttt{loc} vazio};
+  \node[ob] at (10.0,-4.3) {daqui em diante o programa confia nos tipos};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.0cm,
+        font=\scriptsize] at (7.0,-5.7)
+    {\textbf{na volta, outra fila:} \texttt{model\_dump} aplica \texttt{computed\_field},
+     depois \texttt{field\_serializer}, depois \texttt{by\_alias} e \texttt{exclude}.
+     Serializacao nao e validacao ao contrario --- por isso um \texttt{field\_serializer}
+     nao muda o valor guardado em memoria.};
+\end{tikzpicture}
+```
+As sete etapas da validação, e o que cada uma pode supor sobre o dado.
+:::
+
+## Aninhamento: onde o `loc` prova seu valor
+
+Modelos compõem-se como tipos normais:
+
+```python
+class Pedido(BaseModel):
+    numero: int
+    entrega: Endereco
+    itens: list[Produto] = Field(min_length=1)
+
+    @computed_field
+    @property
+    def total(self) -> float:
+        return round(sum(i.preco * i.quantidade for i in self.itens), 2)
+
+ped = Pedido.model_validate(bruto)     # bruto e um dict aninhado
+```
+
+```text
+total: 688.8
+{
+  "numero": 1001,
+  "entrega": {
+    "rua": "Rua das Flores",
+    "numero": 220,
+    "cep": "01310-100",
+    "cidade": "Sao Paulo"
+  },
+  ...
+```
+
+O dicionário aninhado virou objetos aninhados, e o `"220"` que veio como texto virou `220`. Quando algo falha lá no fundo, o caminho vem inteiro:
+
+```text
+  loc = ('itens', 1, 'preco') | Input should be greater than 0
+```
+
+`('itens', 1, 'preco')`: o item de índice 1, campo `preco`. Uma API pode devolver isso direto ao cliente e o cliente sabe exatamente qual campo do formulário pintar de vermelho. Esse detalhe é metade do valor do Pydantic numa API — e é o que o @sec-cap088 devolve automaticamente com status `422`.
+
+## Entrada com um nome, saída com outro
+
+O mundo externo escreve `fullName`; o seu código escreve `nome_completo`. `Field(alias=...)` liga os dois:
+
+```python
+class Usuario(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    nome_completo: str = Field(alias="fullName")
+    criado_em: str = Field(alias="createdAt")
+    senha_hash: str = Field(exclude=True)
+    apelido: str | None = None
+
+    @field_serializer("nome_completo")
+    def maiusculas(self, v: str) -> str:
+        return v.title()
+```
+
+```text
+  por alias  : ana prado
+  dump       : {'nome_completo': 'Ana Prado', 'criado_em': '2026-08-17', 'apelido': None}
+  by_alias   : {'fullName': 'Ana Prado', 'createdAt': '2026-08-17', 'apelido': None}
+  sem None   : {'nome_completo': 'Ana Prado', 'criado_em': '2026-08-17'}
+  so 2 campos: {'nome_completo': 'Ana Prado', 'apelido': None}
+  por nome   : joao silva
+```
+
+Quatro coisas nessa saída:
+
+**`senha_hash` sumiu de todas as serializações**, por causa de `Field(exclude=True)`. É o mecanismo mais direto para garantir que um campo sensível nunca vaze num `model_dump` distraído — e, como o assunto vai voltar no capítulo de segurança, vale registrar: modelo de entrada e modelo de saída podem (e muitas vezes devem) ser classes diferentes.
+
+**O `field_serializer` roda no `model_dump`, não na validação.** Por isso `u.nome_completo` continua `'ana prado'` em memória e sai `'Ana Prado'` na serialização. Confundir os dois momentos é fonte de teste que passa e API que mente.
+
+**`by_alias=True` é opcional na saída.** Sem ele, o dump usa os nomes dos campos Python. Se a API precisa devolver `camelCase`, o `by_alias` tem de estar lá — e esquecer disso num endpoint só é um clássico.
+
+**`populate_by_name=True` permite construir pelos dois nomes.** Sem ele, `Usuario(nome_completo=...)` falha, porque o alias substitui o nome em vez de acrescentar. Nos testes, isso é a diferença entre escrever o objeto de forma legível e ter que lembrar o `camelCase`.
+
+## Fora do `BaseModel`: `TypeAdapter`
+
+Nem tudo que precisa de validação é um objeto com campos. Para validar `list[int]`, `dict[str, list[float]]` ou qualquer anotação, existe o `TypeAdapter`:
+
+```python
+lista_de_int = TypeAdapter(list[int])
+lista_de_int.validate_python(["1", "2", 3])          # [1, 2, 3]
+
+mapa = TypeAdapter(dict[str, list[float]])
+mapa.validate_json('{"a": ["1.5", 2], "b": []}')     # {'a': [1.5, 2.0], 'b': []}
+```
+
+```text
+   [1, 2, 3]
+   {'a': [1.5, 2.0], 'b': []}
+   erro: (1,) Input should be a valid integer, unable to parse string as an integer
+   esquema JSON: {'items': {'type': 'integer'}, 'type': 'array'}
+```
+
+`validate_json` merece atenção: ele analisa e valida **num passo só**, dentro do Rust, sem construir os dicionários Python intermediários que o `json.loads` (@sec-cap062) criaria. Para lote grande, é a forma mais rápida.
+
+## Configuração: `BaseSettings`
+
+Ler configuração do ambiente é validação com outro nome, e `pydantic-settings` é o modelo aplicado a esse caso (comparar com a abordagem manual do @sec-cap063):
+
+```python
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="APP_", extra="ignore")
+
+    ambiente: str = "dev"
+    porta: int = 8000
+    depurar: bool = False
+    banco_url: str = "sqlite:///./dev.db"
+```
+
+```text
+  padrao : {'ambiente': 'dev', 'porta': 8000, 'depurar': False, 'banco_url': 'sqlite:///./dev.db'}
+  com env: {'ambiente': 'producao', 'porta': 9001, 'depurar': True, 'banco_url': 'sqlite:///./dev.db'}
+  env ruim -> ('porta',) Input should be a valid integer, unable to parse string as an integer
+```
+
+`APP_PORTA=9001` virou `porta=9001` **inteiro**, e `APP_DEPURAR=true` virou `True` de verdade — não a string `"true"`, que é verdadeira mesmo quando vale `"false"`. Essa conversão de booleano em variável de ambiente é um dos defeitos mais bobos e mais frequentes em implantação.
+
+O ganho maior, porém, é o momento da falha: `APP_PORTA=oitenta` derruba a aplicação **na inicialização**, com o nome da variável no erro, em vez de quebrar no primeiro pedido que precisar da porta. Configuração errada deve matar o processo cedo, não tarde.
+
+## O custo, medido
+
+Validação não é grátis. Cinquenta mil registros de três campos, melhor de cinco rodadas:
+
+```text
+  Ponto(**d) um a um        :    67.4 ms
+  isinstance na mao         :     8.6 ms
+  TypeAdapter(list[Ponto])  :    44.9 ms
+  model_construct (sem val.):   107.2 ms
+```
+
+Três leituras honestas:
+
+**Pydantic é ~8× mais lento que três `isinstance`** — e faz muito mais: coerção, restrições, mensagens estruturadas, aninhamento. Para 1,3 microssegundo por registro, é caro só quando o volume é enorme.
+
+**Validar em lote é mais rápido que um a um.** `TypeAdapter(list[Ponto])` gastou 45 ms contra 67 ms do laço Python, porque a iteração inteira acontece no Rust. Quando houver muitos registros com a mesma forma, valide a lista, não os elementos.
+
+**`model_construct` — que pula a validação — foi o mais lento.** Contraintuitivo, e por isso vale medir em vez de supor: o caminho "rápido" é implementado em Python, enquanto o validador está em Rust. Usar `model_construct` por desempenho, sem medir, é otimização que piora e ainda tira a rede de proteção.
+
+## 🐍 Jeito Pythônico
+
+**Valide na borda, uma vez.** O modelo fica onde os dados entram; depois dele, o código confia nos tipos e para de reconferir.
+
+**`extra="forbid"` em tudo que vem de fora.** O padrão `"ignore"` transforma erro de digitação em campo ausente silencioso.
+
+**`Literal[...]` para conjunto fechado de valores.** Aparece no esquema, o verificador de tipos entende e a mensagem de erro lista as opções.
+
+**Restrição de forma no `Field`, regra de negócio no validador.** `gt`, `min_length` e `pattern` são declarativos e viram documentação; `if` dentro de `field_validator` só para o que não cabe ali.
+
+**`model_validator(mode="after")` para regra entre campos**, e `mode="before"` só quando você precisa mexer no dado cru — ali nada tem tipo ainda.
+
+**`computed_field` em vez de duplicar o derivado na entrada.** Total, idade e URL montada não são dados de entrada.
+
+**Modelo de entrada e modelo de saída são classes diferentes** quando houver campo sensível. `Field(exclude=True)` ajuda, mas duas classes deixam explícito o que sai.
+
+**`TypeAdapter` para validar o que não é `BaseModel`**, e `validate_json` em vez de `json.loads` mais validação — é um passo só, dentro do Rust.
+
+**Configuração é `BaseSettings`.** Falhar na inicialização com o nome da variável errada é melhor que descobrir no primeiro pedido.
+
+**Não use `model_construct` por desempenho sem medir.** Aqui ele foi 60% mais lento que a validação completa.
+
+**Pydantic v1 e v2 são bibliotecas diferentes.** `@validator` virou `@field_validator`, `.dict()` virou `.model_dump()`, `class Config` virou `model_config`. Código antigo da internet não roda.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-pydantic && cd lab-pydantic
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install "pydantic[email]" pydantic-settings
+python -c "import pydantic; print(pydantic.VERSION)"
+```
+
+**Passo 2 — o primeiro modelo.** Escreva a classe `Cliente` do capítulo e construa uma instância passando `id="7"` e `saldo="12.5"`. Confirme com `type()` que os atributos viraram `int` e `float`. Depois chame `model_dump()`, `model_dump_json()` e `model_json_schema()` e leia as três saídas.
+
+**Passo 3 — o erro estruturado.** Construa um `Cliente` com os quatro campos errados e percorra `e.errors()`. Confirme que vieram **quatro** erros, e não um. Escreva uma função que transforme essa lista num dicionário `{campo: mensagem}` pronto para um formulário.
+
+**Passo 4 — a tabela da coerção.** Para um modelo com um único campo `n: int`, teste as entradas `"7"`, `7.0`, `7.5`, `True`, `"0x1f"`, `" 7 "` e `None`. Monte a tabela do que passa e do que não passa:
+
+```text
+  id=7.5      -> ERRO: Input should be a valid integer, got a number with a fractional part
+  id=True     -> 1
+```
+
+Depois repita tudo com `model_config = ConfigDict(strict=True)` e compare.
+
+**Passo 5 — restrições.** Escreva o `Produto` do capítulo e provoque **todos** os erros de uma vez, incluindo um campo extra. Confirme os seis `type` distintos. Depois troque `extra="forbid"` por `"ignore"` e observe o campo extra desaparecer sem aviso — é esse o comportamento padrão.
+
+**Passo 6 — validadores.** Implemente a `Assinatura`: `field_validator` que normaliza o cupom e `model_validator(mode="after")` que checa o período. Teste os três casos de falha do capítulo e confirme que o erro do modelo tem `loc` vazio:
+
+```text
+  ()           Value error, fim precisa ser posterior a inicio
+```
+
+Depois acrescente um `computed_field` `dias`, passe `dias=999` no construtor e confira o resultado:
+
+```text
+{'inicio': datetime.date(2026, 1, 1), 'fim': datetime.date(2026, 2, 1), 'dias': 31}
+model_fields: ['inicio', 'fim']
+```
+
+O `999` foi **ignorado em silêncio** (é um campo extra, e o padrão é `"ignore"`), e `dias` nem aparece em `model_fields`. Repita com `extra="forbid"` e veja o construtor recusar.
+
+**Passo 7 — aninhamento.** Monte `Pedido` com `Endereco` e `list[Produto]`, valide um dicionário aninhado e depois estrague o preço do **segundo** item. Confirme o caminho:
+
+```text
+  loc = ('itens', 1, 'preco') | Input should be greater than 0
+```
+
+**Passo 8 — alias e serialização.** Escreva o `Usuario` com `alias`, `exclude=True` e `field_serializer`. Compare `model_dump()` com `model_dump(by_alias=True)` e confirme que `senha_hash` não aparece em nenhum dos dois. Depois remova `populate_by_name=True` e veja a construção pelo nome do campo falhar.
+
+**Passo 9 — `TypeAdapter`.** Valide `list[int]`, `dict[str, list[float]]` e `tuple[str, int, bool]` sem criar nenhum `BaseModel`. Gere o esquema JSON de cada um. Depois compare o tempo de `validate_json(texto)` com o de `json.loads(texto)` seguido de `validate_python`.
+
+**Passo 10 — configuração.** Escreva a `Config` com `BaseSettings`, rode sem variáveis nenhuma, depois com `APP_PORTA=9001 APP_DEPURAR=true`, e por fim com `APP_PORTA=oitenta`. Confirme que o terceiro caso falha **na criação do objeto**. Acrescente um `.env` e um `SettingsConfigDict(env_file=".env")` e confira a precedência entre ambiente e arquivo.
+
+**Passo 11 — o custo.** Reproduza a medição com 50 000 registros, sempre melhor de cinco:
+
+```text
+  Ponto(**d) um a um        :    67.4 ms
+  TypeAdapter(list[Ponto])  :    44.9 ms
+  model_construct (sem val.):   107.2 ms
+```
+
+Os números da sua máquina serão outros; o que tem de se repetir é a **ordem**. Se `model_construct` sair mais rápido aí, escreva por que — e confie na sua medição, não na minha.
+
+## Resumo
+
+- Um `BaseModel` transforma anotações de tipo em validador, conversor, serializador e esquema JSON — **sem `__init__`, sem `if`, sem `raise`**.
+- O `ValidationError` traz **todos** os problemas de uma vez, cada um com `loc` (caminho até o campo, inclusive em estruturas aninhadas), `type` (código estável) e `msg`.
+- A **coerção** converte quando não há perda (`"7"` → `7`) e recusa quando haveria (`7.5`). `True` vira `1`, herança do `bool` ser `int`. `ConfigDict(strict=True)` ou `Annotated[int, Strict()]` desligam isso.
+- **`Field`** declara forma (`gt`, `min_length`, `pattern`, `default_factory`); **`extra="forbid"`** é o que impede erro de digitação de virar campo ausente silencioso.
+- **`field_validator`** transforma ou recusa um campo; **`model_validator(mode="after")`** aplica regra entre campos e tem `loc` vazio; **`computed_field`** expõe derivado na serialização.
+- **`alias`** separa o nome externo do interno (`by_alias=True` na saída, `populate_by_name=True` na entrada); **`Field(exclude=True)`** mantém campo sensível fora de toda serialização.
+- **`TypeAdapter`** valida qualquer anotação sem `BaseModel`, e `validate_json` analisa e valida num passo só.
+- **`BaseSettings`** aplica o mesmo mecanismo à configuração: `APP_DEPURAR=true` vira `True`, e configuração errada mata o processo na inicialização.
+- Medido: 67 ms para 50 000 registros um a um, **45 ms validando a lista inteira** e 107 ms com `model_construct` — o atalho "sem validação" foi o mais lento.
+- Pydantic é a camada de dados do FastAPI, o assunto do próximo capítulo: o mesmo modelo vira validação de requisição, resposta `422` com o caminho do erro e documentação OpenAPI.
