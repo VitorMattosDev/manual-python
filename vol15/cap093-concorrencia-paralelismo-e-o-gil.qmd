@@ -1,3 +1,432 @@
 # Concorrência, paralelismo e o GIL {#sec-cap093}
 
-*(em elaboracao)*
+Um script converte 800 imagens em 6 minutos. Você abre a documentação, descobre `ThreadPoolExecutor`, troca o laço `for` por um `ex.map`, roda de novo — e o script leva 6 minutos e 4 segundos. A máquina tem 12 núcleos, 11 deles ociosos o tempo todo.
+
+Não é erro de programação. É o comportamento correto do CPython, e ele decorre de uma decisão de projeto com nome próprio: o **GIL**, a trava global do interpretador. Este capítulo explica o que ele é, mede exatamente onde ele custa e onde não custa, e mostra que a pergunta útil nunca é "threads ou processos?" — é **"o que o meu programa fica fazendo enquanto espera?"**.
+
+As medições deste volume são de **Linux (WSL2, kernel 6.6, 12 núcleos)** com CPython 3.13.12. Número de núcleos muda os valores absolutos; não muda nenhuma das conclusões.
+
+## Três palavras que não são sinônimos
+
+**Concorrência** é estrutura: o programa tem várias tarefas em andamento, e o progresso de uma não depende de a outra ter terminado. Um garçom que atende quatro mesas é concorrente mesmo sendo uma pessoa só.
+
+**Paralelismo** é execução: duas instruções acontecem no mesmo instante físico, em unidades de processamento diferentes. Quatro garçons são paralelos.
+
+**Bloqueio** é o que uma tarefa faz quando não tem o que fazer: esperar a rede, o disco, o banco, o usuário. Enquanto espera, ela não usa CPU nenhuma — e é aí que mora quase toda a oportunidade de ganho em programa de verdade.
+
+Todo programa concorrente cai num de dois campos, e o campo decide a ferramenta:
+
+- **Limitado por CPU** (*CPU-bound*): o gargalo é calcular. Multiplicar matrizes, comprimir vídeo, somar 20 milhões de quadrados. Só ganha tempo quem consegue **paralelismo real**.
+- **Limitado por E/S** (*I/O-bound*): o gargalo é esperar. Baixar 500 páginas, consultar um banco, ler mil arquivos. Ganha tempo quem consegue **sobrepor as esperas** — e para isso não é preciso paralelismo nenhum.
+
+::: {#fig-linhas-do-tempo}
+```{.tikz}
+%%| filename: linhas-do-tempo
+%%| alt: Tres linhas do tempo comparando threads com CPU, threads com espera e processos
+\begin{tikzpicture}[
+  lb/.style={font=\scriptsize,anchor=east},
+  ti/.style={font=\scriptsize\bfseries,anchor=west},
+  fim/.style={font=\tiny,anchor=west,color=manualgray!150},
+  nt/.style={font=\tiny,anchor=west}
+]
+  \path (-2.2,-9.4) rectangle (13.6,1.5);
+
+  % ---------- painel A: CPU com threads ----------
+  \node[ti] at (-2.1,1.1) {A --- trabalho de CPU em Python puro, 2 threads};
+  \node[lb] at (-0.15,0.0) {thread 1};
+  \node[lb] at (-0.15,-0.8) {thread 2};
+
+  \draw[fill=manualblue!35,draw=manualblue] (0.0,-0.25) rectangle (1.2,0.25);
+  \draw[fill=manualblue!35,draw=manualblue] (2.4,-0.25) rectangle (3.6,0.25);
+  \draw[fill=manualblue!35,draw=manualblue] (4.8,-0.25) rectangle (6.0,0.25);
+  \draw[fill=manualblue!35,draw=manualblue] (7.2,-0.25) rectangle (8.4,0.25);
+
+  \draw[fill=manualred!35,draw=manualred] (1.2,-1.05) rectangle (2.4,-0.55);
+  \draw[fill=manualred!35,draw=manualred] (3.6,-1.05) rectangle (4.8,-0.55);
+  \draw[fill=manualred!35,draw=manualred] (6.0,-1.05) rectangle (7.2,-0.55);
+  \draw[fill=manualred!35,draw=manualred] (8.4,-1.05) rectangle (9.6,-0.55);
+
+  \draw[dashed,color=manualgray] (9.6,-1.25) -- (9.6,0.45);
+  \node[fim] at (9.75,-0.4) {termina em 9,6};
+  \node[nt] at (-2.1,-1.65)
+    {so uma fatia colorida por vez: quem calcula precisa segurar o GIL};
+
+  % ---------- painel B: espera com threads ----------
+  \node[ti] at (-2.1,-2.4) {B --- trabalho de espera (rede, disco), 2 threads};
+  \node[lb] at (-0.15,-3.5) {thread 1};
+  \node[lb] at (-0.15,-4.3) {thread 2};
+
+  \draw[fill=manualblue!35,draw=manualblue] (0.0,-3.75) rectangle (0.4,-3.25);
+  \draw[fill=manualgray!18,draw=manualgray,dashed] (0.4,-3.75) rectangle (3.2,-3.25);
+  \draw[fill=manualblue!35,draw=manualblue] (3.2,-3.75) rectangle (3.6,-3.25);
+
+  \draw[fill=manualred!35,draw=manualred] (0.4,-4.55) rectangle (0.8,-4.05);
+  \draw[fill=manualgray!18,draw=manualgray,dashed] (0.8,-4.55) rectangle (3.6,-4.05);
+  \draw[fill=manualred!35,draw=manualred] (3.6,-4.55) rectangle (4.0,-4.05);
+
+  \draw[dashed,color=manualgray] (4.0,-4.75) -- (4.0,-3.05);
+  \node[fim] at (4.15,-3.9) {termina em 4,0};
+  \node[nt] at (-2.1,-5.15)
+    {o trecho tracejado e espera: o GIL fica solto, e as esperas se sobrepoem};
+
+  % ---------- painel C: CPU com processos ----------
+  \node[ti] at (-2.1,-5.9) {C --- trabalho de CPU em Python puro, 2 processos};
+  \node[lb] at (-0.15,-7.0) {processo 1};
+  \node[lb] at (-0.15,-7.8) {processo 2};
+
+  \draw[fill=manualblue!35,draw=manualblue] (0.0,-7.25) rectangle (4.8,-6.75);
+  \draw[fill=manualgreen!35,draw=manualgreen] (0.0,-8.05) rectangle (4.8,-7.55);
+
+  \draw[dashed,color=manualgray] (4.8,-8.25) -- (4.8,-6.55);
+  \node[fim] at (4.95,-7.4) {termina em 4,8};
+  \node[nt] at (-2.1,-8.65)
+    {cada processo tem o seu proprio GIL: aqui o paralelismo e real};
+\end{tikzpicture}
+```
+O mesmo trabalho em três arranjos. Threads não aceleram cálculo (A), aceleram espera (B); processos aceleram cálculo (C).
+:::
+
+## O que é o GIL
+
+O GIL (*Global Interpreter Lock*) é um **mutex por interpretador**: para executar bytecode Python, uma thread precisa segurá-lo, e só uma thread o segura por vez. Threads existem de verdade — são threads do sistema operacional, agendadas pelo núcleo —, mas elas se revezam no interpretador em vez de correrem juntas dentro dele.
+
+Ele existe porque o CPython gerencia memória por **contagem de referências** (assunto do capítulo final deste volume). Cada objeto guarda quantas referências apontam para ele, e esse contador é alterado o tempo todo, em quase toda operação. Sem uma trava, dois `Py_INCREF` simultâneos perderiam uma contagem e o objeto seria liberado enquanto ainda em uso — o que não é um bug de programa, é corrupção de memória.
+
+As alternativas custam caro. Travar cada objeto individualmente significa milhões de operações atômicas por segundo e código de extensão C muito mais difícil de escrever. O GIL é a escolha simples: **uma trava só, barata quando não há disputa, e um modelo de extensão C trivial** — o que explica boa parte do ecossistema científico existir.
+
+O interpretador solta o GIL em dois momentos:
+
+1. **Voluntariamente, antes de qualquer operação que vá esperar.** Ler de um *socket*, dormir, escrever em disco, esperar um `subprocess`: a função da biblioteca padrão solta o GIL, chama o sistema operacional e o retoma depois. É por isso que o painel B da figura funciona.
+2. **Compulsoriamente, a cada intervalo de troca**, para que uma thread que só calcula não monopolize o interpretador. O padrão são 5 ms:
+
+```python
+>>> import sys
+>>> sys.getswitchinterval()
+0.005
+```
+
+## A medição
+
+Três cargas, oito tarefas cada, com execução sequencial, com oito threads e com oito processos:
+
+```python
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+def trabalho_cpu(_=None):          # CPU puro, em Python
+    s = 0
+    for i in range(20_000_000):
+        s += i * i
+    return s
+
+def trabalho_io(_=None):           # espera pura
+    time.sleep(0.25)
+    return 1
+
+def trabalho_hash(_=None):         # CPU, mas dentro de codigo C
+    return hashlib.pbkdf2_hmac("sha256", b"x" * 4096, b"sal", 2_000_000)
+```
+
+```text
+python 3.13.12 | nucleos: 12 | tarefas: 8
+GIL ativo: True
+intervalo de troca: 0.005 s
+
+== CPU puro em Python: soma de 20,000,000 quadrados, 8x
+  sequencial                   5.89 s
+  8 threads                    5.85 s
+  8 processos                  1.36 s
+  ganho com threads   : 1.01x
+  ganho com processos : 4.33x
+
+== I/O: time.sleep(0.25), 8x
+  sequencial                   2.00 s
+  8 threads                    0.25 s
+  8 processos                  0.26 s
+  ganho com threads   : 7.91x
+  ganho com processos : 7.64x
+
+== extensao C que solta o GIL: pbkdf2 2M iteracoes, 8x
+  sequencial                   2.04 s
+  8 threads                    0.36 s
+  ganho com threads   : 5.74x
+```
+
+Três linhas de leitura, e elas são o capítulo inteiro:
+
+**CPU puro com threads: 1,01x.** Nenhum ganho, e nem poderia haver — as oito threads dividiram o mesmo interpretador. O trabalho foi feito por inteiro, só que fatiado. É exatamente o script de imagens da abertura.
+
+**CPU puro com processos: 4,33x.** Aqui há paralelismo real. Não são os 8x teóricos: serializar a tarefa, criar oito interpretadores e devolver o resultado custa, e a máquina tem outros afazeres. Mas 4,33x é tempo de parede de verdade.
+
+**Espera com threads: 7,91x.** Praticamente perfeito — oito esperas de 250 ms que se sobrepõem terminam em 250 ms. E note que **processos não fizeram melhor** (7,64x): pagaram o custo de criação para comprar exatamente nada. Usar processos para carga de espera é gastar memória à toa.
+
+**Cálculo dentro de código C: 5,74x com threads.** O `pbkdf2_hmac` é uma função da OpenSSL que solta o GIL enquanto trabalha. As threads correram de verdade. É o mesmo motivo pelo qual uma operação grande de NumPy, uma compressão com `zlib` ou uma leitura de imagem com Pillow escalam com threads: o tempo é gasto fora do interpretador.
+
+::: {.callout-tip}
+## A pergunta que decide tudo
+"Este trabalho gasta o tempo dele **dentro** do interpretador Python?" Se sim, o GIL é um teto e você precisa de processos. Se não — porque espera, ou porque o trabalho pesado está numa biblioteca C que solta o GIL —, threads resolvem, e mais barato.
+:::
+
+## O GIL não torna o seu código seguro
+
+Existe uma crença persistente de que, com o GIL, não é preciso travar nada. Ela é falsa, e o caminho até entender por quê passa pelo bytecode.
+
+```python
+CONTADOR = 0
+
+def incrementa_direto(vezes):
+    global CONTADOR
+    for _ in range(vezes):
+        CONTADOR += 1
+```
+
+Oito threads, 200 mil incrementos cada, com o intervalo de troca reduzido a 10 microssegundos para maximizar a disputa:
+
+```text
+== CONTADOR += 1
+  tentativa 1: obtido   1600000  (ok)
+  tentativa 2: obtido   1600000  (ok)
+  tentativa 3: obtido   1600000  (ok)
+  tentativa 4: obtido   1600000  (ok)
+```
+
+Nada se perdeu. E a explicação **não** é que o GIL protege a operação:
+
+```text
+== bytecode do corpo do laco de incrementa_direto
+    24 FOR_ITER
+    28 STORE_FAST
+    30 LOAD_GLOBAL
+    40 LOAD_CONST
+    42 BINARY_OP
+    46 STORE_GLOBAL
+    48 JUMP_BACKWARD
+```
+
+O incremento são quatro instruções — `LOAD_GLOBAL`, `LOAD_CONST`, `BINARY_OP`, `STORE_GLOBAL` — e a troca de thread só pode acontecer onde o interpretador **verifica** se deve trocar. Desde o CPython 3.10 essa verificação não é feita a cada instrução: ela mora em pontos específicos, e o mais relevante aqui é o `JUMP_BACKWARD` do fim do laço. Como não há nenhum ponto de verificação **entre** o `LOAD_GLOBAL` e o `STORE_GLOBAL`, a leitura e a escrita acabam acontecendo sem interrupção possível.
+
+Ou seja: o resultado correto é um **acidente da implementação atual**, não uma garantia. Basta que exista um ponto de verificação no meio para tudo desabar. `CALL` é um desses pontos:
+
+```python
+def mais_um(x):
+    return x + 1
+
+def incrementa_com_chamada(vezes):
+    global CONTADOR
+    for _ in range(vezes):
+        CONTADOR = mais_um(CONTADOR)   # uma chamada entre ler e escrever
+```
+
+```text
+== CONTADOR = mais_um(CONTADOR)
+  tentativa 1: obtido    456969  (PERDEU 1143031)
+  tentativa 2: obtido    469320  (PERDEU 1130680)
+  tentativa 3: obtido    485834  (PERDEU 1114166)
+  tentativa 4: obtido    459810  (PERDEU 1140190)
+```
+
+**Setenta e um por cento dos incrementos desapareceram.** O código é semanticamente idêntico ao anterior; a diferença é só onde o interpretador aceita trocar de thread.
+
+Fique com a regra, não com o detalhe: **estado mutável compartilhado entre threads precisa de sincronização explícita**, sempre. O que o GIL garante é que o interpretador não corrompe a si mesmo — nunca que a sua lógica é atômica. Uma refatoração inocente, uma versão nova do CPython, ou o interpretador sem GIL da próxima seção mudam esse comportamento sem aviso. Travas e filas são o assunto do próximo capítulo.
+
+## O Python sem GIL
+
+O [PEP 703](https://peps.python.org/pep-0703/) tornou o GIL **opcional**. Desde o 3.13 existe uma variante de compilação, o *free-threaded build*, distribuída como `python3.13t`, em que a contagem de referências é atômica e o interpretador roda bytecode em várias threads ao mesmo tempo de verdade.
+
+```python
+>>> import sys
+>>> sys._is_gil_enabled()      # 3.13+; True no interpretador comum
+True
+```
+
+O que é preciso saber hoje:
+
+- **É oficialmente suportado desde o 3.14**, tendo sido experimental no 3.13.
+- **É um binário separado.** O interpretador padrão que você instala continua tendo GIL, e código escrito para um roda no outro.
+- **Programa de thread única fica mais lento** nessa variante, porque a contagem atômica de referências e as otimizações desligadas custam. A margem tem diminuído a cada versão, mas não é zero.
+- **Extensões C precisam ser adaptadas** e declarar que suportam o modo. Boa parte do ecossistema numérico já publica rodas próprias; o resto ainda não.
+- **Tudo o que a seção anterior disse sobre corrida de dados fica pior**, não melhor. Sem GIL, o intervalo entre ler e escrever deixa de ter qualquer proteção acidental — e código que "sempre funcionou" passa a perder incrementos.
+
+A leitura prática é que o *free-threading* muda o teto do paralelismo em Python, não a disciplina de escrever código concorrente correto.
+
+## Escolhendo o modelo
+
+::: {#fig-escolha-modelo}
+```{.tikz}
+%%| filename: escolha-modelo
+%%| alt: Arvore de decisao entre asyncio, threads e processos conforme o tipo de carga
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=5.0cm,
+             minimum height=1.5cm,font=\scriptsize,inner sep=6pt},
+  pg/.style={draw,rounded corners,align=center,text width=6.5cm,
+             minimum height=0.95cm,font=\scriptsize\bfseries,inner sep=5pt,
+             fill=manualgray!16},
+  rm/.style={draw,rounded corners,align=center,text width=4.4cm,
+             minimum height=0.9cm,font=\scriptsize\bfseries,inner sep=5pt}
+]
+  \path (-0.1,-8.2) rectangle (14.4,3.1);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.2,2.8)
+    {onde o programa gasta o tempo dele?};
+
+  \node[pg] at (7.2,1.9) {o trabalho e esperar, ou calcular?};
+
+  \node[rm,fill=manualgreen!20] at (3.9,0.5) {ESPERAR};
+  \node[rm,fill=manualred!18]   at (10.5,0.5) {CALCULAR};
+
+  \node[bx,fill=manualgreen!16] at (3.9,-1.2)
+    {\textbf{muitas conexoes simultaneas}\\
+     milhares de pedidos HTTP ou sockets.\\
+     \textbf{asyncio}: uma thread so, custo por\\
+     tarefa em kilobytes};
+  \node[bx,fill=manualgreen!16] at (3.9,-3.3)
+    {\textbf{codigo bloqueante que ja existe}\\
+     driver sincrono, biblioteca legada,\\
+     dezenas (nao milhares) de tarefas.\\
+     \textbf{threads}: 7,91x medido};
+
+  \node[bx,fill=manualblue!16] at (10.5,-1.2)
+    {\textbf{dentro de biblioteca C}\\
+     NumPy, zlib, hashlib, Pillow, cripto.\\
+     O GIL e solto durante a operacao.\\
+     \textbf{threads}: 5,74x medido};
+  \node[bx,fill=manualred!16] at (10.5,-3.3)
+    {\textbf{em Python puro}\\
+     laco seu, sobre estruturas suas.\\
+     \textbf{processos}: 4,33x medido\\
+     (threads dariam 1,01x)};
+
+  \draw[->,>=stealth] (7.2,1.425) -- (7.2,1.15) -- (3.9,1.15) -- (3.9,0.95);
+  \draw[->,>=stealth] (7.2,1.425) -- (7.2,1.15) -- (10.5,1.15) -- (10.5,0.95);
+
+  \draw (3.9,0.05) -- (3.9,-0.2) -- (0.45,-0.2) -- (0.45,-3.3);
+  \draw[->,>=stealth] (0.45,-1.2) -- (1.19,-1.2);
+  \draw[->,>=stealth] (0.45,-3.3) -- (1.19,-3.3);
+
+  \draw (10.5,0.05) -- (10.5,-0.2) -- (13.95,-0.2) -- (13.95,-3.3);
+  \draw[->,>=stealth] (13.95,-1.2) -- (13.21,-1.2);
+  \draw[->,>=stealth] (13.95,-3.3) -- (13.21,-3.3);
+
+  \node[bx,fill=manualyellow!22,text width=12.6cm,minimum height=1.2cm]
+       at (7.2,-5.3)
+    {\textbf{antes de qualquer uma das quatro:} meca. Um laco que gasta 40\% do
+     tempo esperando e 60\% calculando nao se resolve escolhendo bem a
+     biblioteca de concorrencia --- se resolve descobrindo, com um perfilador,
+     qual dos dois lados vale atacar primeiro.};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=12.6cm,
+        font=\scriptsize,inner sep=6pt] at (7.2,-7.2)
+    {\textbf{e o erro mais caro nao esta na arvore:} usar processos para carga de
+     espera. Medido acima, processos deram 7,64x contra 7,91x das threads --- o
+     mesmo resultado, pago com oito interpretadores na memoria e com todo objeto
+     indo e voltando serializado.};
+\end{tikzpicture}
+```
+O tipo de trabalho escolhe a ferramenta; medir vem antes de escolher.
+:::
+
+## Uma interface para os três
+
+O `concurrent.futures` é a razão pela qual essa escolha custa pouco para revisar. `ThreadPoolExecutor` e `ProcessPoolExecutor` têm a **mesma interface**, então trocar de modelo é trocar uma palavra:
+
+```python
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+
+Executor = ThreadPoolExecutor      # troque por ProcessPoolExecutor e meca
+
+with Executor(max_workers=8) as ex:
+    resultados = list(ex.map(processa, tarefas))
+```
+
+Duas armadilhas que o `map` esconde:
+
+**`ex.map` devolve os resultados na ordem das entradas**, esperando o que faltar. Se a primeira tarefa é a mais lenta, você não vê nada até ela terminar, mesmo com as outras prontas. Para reagir conforme cada uma fica pronta, use `as_completed`:
+
+```python
+from concurrent.futures import as_completed
+
+with ThreadPoolExecutor(max_workers=8) as ex:
+    futuros = {ex.submit(processa, t): t for t in tarefas}
+    for fut in as_completed(futuros):
+        tarefa = futuros[fut]
+        try:
+            print(tarefa, fut.result())
+        except Exception as erro:            # a excecao viajou ate aqui
+            print(f"{tarefa} falhou: {erro!r}")
+```
+
+**Exceção dentro de uma tarefa não aparece até você pedir o resultado.** O `Future` guarda a exceção e a relança em `fut.result()`. Um `ex.submit` cujo resultado ninguém consulta é uma falha que some sem deixar rastro — e é o defeito mais comum em código que usa executores.
+
+## 🐍 Jeito Pythônico
+
+**Classifique a carga antes de escolher a ferramenta.** Espera pede `asyncio` ou threads; cálculo em Python puro pede processos; cálculo dentro de C já escala com threads. Medido aqui: 1,01x, 4,33x, 7,91x e 5,74x — os quatro casos, com os mesmos oito trabalhos.
+
+**Não use processos para carga de espera.** Deram 7,64x contra 7,91x das threads e custaram oito interpretadores de memória.
+
+**Prefira `concurrent.futures` a `threading`/`multiprocessing` crus** quando o problema for "aplique esta função a estes itens". A interface idêntica torna a troca de modelo uma medição, não uma reescrita.
+
+**Sempre consulte o resultado do `Future`.** Sem `result()` (ou `as_completed`), exceção em tarefa desaparece em silêncio.
+
+**Use `as_completed` quando a ordem não importar** e você quiser resultado assim que ele existir; `map` quando a ordem importar.
+
+**Trate todo estado compartilhado como não protegido.** O GIL garante a integridade do interpretador, nunca a atomicidade da sua lógica — e o exemplo do `mais_um` perdeu 71% dos incrementos para provar isso.
+
+**Não mexa em `sys.setswitchinterval()` em produção.** Ele foi útil aqui para expor uma corrida; em código real, mudar o padrão dá ganho marginal e imprevisibilidade garantida.
+
+**Meça o `python3.13t` antes de adotá-lo.** O interpretador sem GIL levanta o teto do paralelismo, mas cobra em thread única e exige extensões adaptadas.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-gil && cd lab-gil
+python3.13 -m venv .venv && source .venv/bin/activate
+python -c "import os, sys; print(sys.version, os.cpu_count())"
+```
+
+**Passo 2 — as três cargas.** Escreva `cargas.py` com `trabalho_cpu` (laço de 20 milhões de quadrados), `trabalho_io` (`time.sleep(0.25)`) e `trabalho_hash` (`hashlib.pbkdf2_hmac` com 2 milhões de iterações). Cada uma precisa aceitar e ignorar um argumento, para servir a `ex.map`.
+
+::: {.callout-warning}
+## Calibre a carga antes de tirar conclusão
+Com 5 milhões de iterações em vez de 20, o cronômetro mede mais o custo de criar processos do que o trabalho, e o resultado parece ruído. Se os seus tempos sequenciais ficarem abaixo de ~2 s, aumente a carga e refaça.
+:::
+
+**Passo 3 — a tabela.** Cronometre as três cargas nos três arranjos (sequencial, `ThreadPoolExecutor(8)`, `ProcessPoolExecutor(8)`) e monte a tabela de ganhos. Confira o padrão:
+
+```text
+  CPU puro   : threads 1.01x | processos 4.33x
+  espera     : threads 7.91x | processos 7.64x
+  pbkdf2 (C) : threads 5.74x
+```
+
+**Passo 4 — por que 4,33 e não 8.** Repita a carga de CPU com 2, 4, 8, 12 e 24 processos e trace o ganho. Ache onde a curva satura e explique as duas causas: núcleos disponíveis e custo de criação mais serialização.
+
+**Passo 5 — o GIL sendo solto.** Troque `trabalho_hash` por uma versão que faça o mesmo esforço **em Python puro** (um laço de somas com o mesmo tempo sequencial) e repita com threads. O ganho de 5,74x tem de virar ~1x. Essa é a demonstração mais direta de "o tempo estava fora do interpretador".
+
+**Passo 6 — o bytecode.** Rode `dis.dis(incrementa_direto)` e localize `LOAD_GLOBAL`, `BINARY_OP`, `STORE_GLOBAL` e `JUMP_BACKWARD`. Diga, olhando só para essa lista, por onde a troca de thread pode entrar.
+
+**Passo 7 — a corrida que não acontece.** Com `sys.setswitchinterval(0.00001)`, rode oito threads incrementando um global 200 mil vezes cada. Confirme que o total bate. Não conclua daí que está seguro — o passo 8 existe para isso.
+
+**Passo 8 — a corrida que acontece.** Troque `CONTADOR += 1` por `CONTADOR = mais_um(CONTADOR)` e rode de novo:
+
+```text
+  tentativa 1: obtido    456969  (PERDEU 1143031)
+```
+
+Explique em duas frases por que dois trechos com a mesma semântica dão resultados tão diferentes.
+
+**Passo 9 — consertando.** Proteja o incremento com `threading.Lock` e confirme que o total volta a bater nas duas versões. Cronometre: quanto custou a trava?
+
+**Passo 10 — o `Future` engolido.** Submeta cinco tarefas, uma das quais levanta `ValueError`, e **não** consulte os resultados. Confirme que o programa termina com código 0 e sem imprimir nada. Depois refaça com `as_completed` e `fut.result()` dentro de `try`.
+
+**Passo 11 (opcional) — sem GIL.** Instale o interpretador *free-threaded* (`uv python install 3.13t`, ou `--disable-gil` na compilação), confirme com `sys._is_gil_enabled()` e repita os passos 3 e 8. A carga de CPU com threads deve deixar de ser 1,01x; a corrida do passo 8 deve piorar.
+
+## Resumo
+
+- **Concorrência é estrutura, paralelismo é execução.** Programa limitado por espera não precisa de paralelismo para ficar rápido; programa limitado por CPU precisa.
+- **O GIL é um mutex por interpretador**: só uma thread executa bytecode por vez. Ele existe para proteger a contagem de referências, e é o que torna extensão C em Python simples de escrever.
+- **Medido em 12 núcleos, com as mesmas oito tarefas**: CPU puro com threads **1,01x** (nada), com processos **4,33x**; espera com threads **7,91x**; `pbkdf2` com threads **5,74x**, porque a função solta o GIL.
+- **Processos para carga de espera é desperdício**: 7,64x contra 7,91x, pago com oito interpretadores na memória.
+- **O GIL não torna a sua lógica atômica.** `CONTADOR += 1` num laço não perde incrementos por acidente da implementação (não há ponto de troca entre as instruções); com uma chamada no meio, **71% dos incrementos sumiram**. Estado compartilhado sempre precisa de sincronização explícita.
+- **`concurrent.futures` dá a mesma interface para threads e processos**, o que reduz a escolha do modelo a uma medição. Mas `Future` cujo resultado ninguém lê engole a exceção.
+- **O interpretador sem GIL (PEP 703, `python3.13t`)** levanta o teto do paralelismo em troca de desempenho em thread única e de extensões adaptadas — e torna corrida de dados mais provável, não menos.
