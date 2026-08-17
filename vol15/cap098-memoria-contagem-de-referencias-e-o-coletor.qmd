@@ -1,3 +1,406 @@
 # Memória, contagem de referências e o coletor de lixo {#sec-cap098}
 
-*(em elaboracao)*
+Um serviço sobe consumindo 80 MiB. Depois de uma semana no ar, está com 6 GiB e o orquestrador o reinicia toda madrugada. Ninguém alocou 6 GiB de propósito, ninguém chamou `malloc`, e o Python "tem coletor de lixo" — então, em tese, isso não deveria acontecer.
+
+Acontece o tempo todo. Python gerencia memória por você, mas não decide o que você mantém vivo; e há uma diferença grande entre "objeto liberado" e "memória devolvida ao sistema operacional". Este capítulo fecha o volume mostrando os dois mecanismos que o CPython usa, o que cada um resolve, e como encontrar o que está segurando os seus 6 GiB.
+
+As medições são do mesmo ambiente do volume: Linux (WSL2, 12 núcleos), CPython 3.13.12.
+
+## Contagem de referências
+
+O mecanismo principal do CPython é simples: **todo objeto guarda quantas referências apontam para ele**, e é destruído no instante em que esse número chega a zero.
+
+```python
+>>> import sys
+>>> obj = ["a", "b", "c"]
+>>> sys.getrefcount(obj)
+2
+```
+
+Dois, e não um, porque passar `obj` como argumento cria mais uma referência — a do parâmetro dentro de `getrefcount`. Esse `+1` é constante e vale para toda medição:
+
+```text
+== contagem de referencias
+  apos a atribuicao          getrefcount = 2
+  apos 'outro = obj'         getrefcount = 3
+  apos entrar numa lista     getrefcount = 4
+  apos os dois 'del'         getrefcount = 2
+```
+
+A contagem de referências tem duas virtudes grandes: é **imediata** (o objeto morre na hora, não "algum dia") e é **determinística** (o arquivo fecha, a trava solta, o `__exit__` roda no momento certo). É por isso que `with open(...) as f:` funciona tão bem em CPython.
+
+E tem um custo: cada atribuição, cada passagem de argumento, cada entrada em lista mexe num contador. É exatamente esse contador que o GIL protege (@sec-cap093), e é ele que o interpretador sem GIL precisa tornar atômico.
+
+::: {.callout-note}
+## Contagem de referências é detalhe do CPython
+Não é garantia da linguagem. PyPy, Jython e GraalPy usam coletores de rastreamento, onde o objeto morre quando o coletor decidir. Código que depende de destruição imediata — confiar que o arquivo fecha ao sair do escopo — funciona em CPython e vaza descritores em PyPy. Use `with`, sempre.
+:::
+
+## O que a contagem não resolve: ciclos
+
+::: {#fig-ciclo-referencias}
+```{.tikz}
+%%| filename: ciclo-referencias
+%%| alt: Objeto sem ciclo liberado na hora e ciclo que so o coletor resolve
+\begin{tikzpicture}[
+  ob/.style={draw,rounded corners,align=center,text width=2.5cm,
+             minimum height=1.0cm,font=\tiny,inner sep=4pt},
+  vr/.style={draw,circle,minimum size=0.72cm,font=\tiny\bfseries,
+             fill=manualgray!18},
+  ti/.style={font=\scriptsize\bfseries,anchor=west},
+  et/.style={font=\tiny,anchor=center},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.3,-6.9) rectangle (14.4,3.4);
+
+  % ---------------- sem ciclo ----------------
+  \node[ti] at (-0.2,3.1) {sem ciclo --- a contagem basta};
+
+  \node[vr] at (1.0,1.7) {a};
+  \node[ob,fill=manualgreen!16] at (4.2,1.7) {objeto\\refcount = 1};
+  \draw[->,>=stealth,color=manualgreen] (1.4,1.7) -- (2.9,1.7);
+
+  \node[et] at (6.4,1.7) {\texttt{del a}};
+  \draw[->,>=stealth] (5.7,1.7) -- (5.9,1.7);
+  \draw[->,>=stealth] (6.9,1.7) -- (7.4,1.7);
+
+  \node[ob,fill=manualyellow!22] at (8.9,1.7) {objeto\\refcount = 0};
+  \draw[->,>=stealth] (10.2,1.7) -- (10.9,1.7);
+  \node[ob,fill=manualgray!14] at (12.6,1.7) {liberado\\na hora};
+
+  \node[nt] at (-0.2,0.5)
+    {Medido: \texttt{vivos = 1} antes do \texttt{del}, \texttt{vivos = 0} logo
+     depois --- sem o coletor entrar em acao.};
+
+  % ---------------- com ciclo ----------------
+  \node[ti] at (-0.2,-0.7) {com ciclo --- a contagem nunca chega a zero};
+
+  \node[vr] at (1.0,-2.3) {x};
+  \node[vr] at (1.0,-4.1) {y};
+  \node[ob,fill=manualred!16] at (4.2,-2.3) {objeto X\\refcount = 2};
+  \node[ob,fill=manualred!16] at (4.2,-4.1) {objeto Y\\refcount = 2};
+
+  \draw[->,>=stealth,color=manualgray,dashed] (1.4,-2.3) -- (2.9,-2.3);
+  \draw[->,>=stealth,color=manualgray,dashed] (1.4,-4.1) -- (2.9,-4.1);
+  \draw[->,>=stealth,color=manualred] (5.0,-2.8) -- (5.0,-3.6)
+    node[midway,right,font=\tiny]{\texttt{X.par = Y}};
+  \draw[->,>=stealth,color=manualred] (3.4,-3.6) -- (3.4,-2.8)
+    node[midway,left,font=\tiny]{\texttt{Y.par = X}};
+
+  \node[et,anchor=west] at (6.6,-3.2) {\texttt{del x, y}};
+  \draw[->,>=stealth] (8.3,-3.2) -- (9.0,-3.2);
+
+  \node[ob,fill=manualred!16,text width=3.6cm,minimum height=1.7cm]
+       at (11.2,-3.2)
+    {objetos X e Y\\refcount = 1 cada\\
+     \textbf{inalcancaveis, mas vivos}};
+
+  \node[nt] at (-0.2,-5.6)
+    {As setas tracejadas sumiram com o \texttt{del}, mas X e Y continuam
+     apontando um para o outro. Medido: \texttt{vivos = 2} apos o \texttt{del},
+     e \texttt{vivos = 0} so depois de \texttt{gc.collect()}. Sem o coletor,
+     esses 100 KiB ficariam ate o processo morrer.};
+\end{tikzpicture}
+```
+Contagem de referências libera na hora — exceto quando os objetos se apontam mutuamente.
+:::
+
+```python
+class No:
+    def __init__(self, nome):
+        self.par = None
+        self.recheio = bytes(50_000)
+
+x, y = No("x"), No("y")
+x.par, y.par = y, x            # ciclo
+del x, y                       # ninguem mais alcanca X nem Y
+```
+
+```text
+== objeto sem ciclo x objeto em ciclo
+  criado 1 objeto sem ciclo          vivos = 1
+  apos del (sem coletor)             vivos = 0
+
+  criados 2 objetos em ciclo         vivos = 2
+  apos del (sem coletor)             vivos = 2   <- a contagem nunca chega a zero
+  apos gc.collect() (2 objetos)      vivos = 0
+```
+
+Ciclos não são exóticos: uma árvore em que cada nó guarda o pai, um grafo, um observador que aponta para o observado e vice-versa, uma exceção capturada cujo *traceback* referencia o quadro que referencia a exceção. É para isso que existe o segundo mecanismo.
+
+## O coletor de gerações
+
+::: {#fig-geracoes}
+```{.tikz}
+%%| filename: geracoes
+%%| alt: As tres geracoes do coletor ciclico e a promocao dos sobreviventes
+\begin{tikzpicture}[
+  gr/.style={draw,rounded corners,align=left,text width=3.2cm,
+             minimum height=2.4cm,font=\scriptsize,inner sep=6pt}
+]
+  \path (-0.3,-5.9) rectangle (14.4,3.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.1,3.1)
+    {o coletor ciclico so procura ciclos --- o resto ja morreu por contagem};
+
+  \node[gr,fill=manualgreen!18] at (2.2,1.0)
+    {\textbf{geracao 0}\\
+     objetos recem-criados. Varrida quando as alocacoes menos as liberacoes
+     passam de \textbf{2000}.};
+  \node[gr,fill=manualyellow!22] at (7.1,1.0)
+    {\textbf{geracao 1}\\
+     quem sobreviveu a uma varredura da geracao 0. Varrida a cada \textbf{10}
+     coletas da anterior.};
+  \node[gr,fill=manualred!14] at (12.0,1.0)
+    {\textbf{geracao 2}\\
+     os veteranos: modulos, classes, caches. Varrida a cada \textbf{10} coletas
+     da geracao 1.};
+
+  \draw[->,>=stealth,thick] (3.92,1.0) -- (5.38,1.0)
+    node[midway,above,font=\tiny]{sobreviveu};
+  \draw[->,>=stealth,thick] (8.82,1.0) -- (10.28,1.0)
+    node[midway,above,font=\tiny]{sobreviveu};
+
+  \node[draw,rounded corners,fill=manualblue!14,align=left,text width=13.4cm,
+        font=\scriptsize,inner sep=6pt] at (7.1,-2.0)
+    {\textbf{a hipotese que justifica o desenho:} a maioria dos objetos morre
+     jovem. Varrer so a geracao 0 e barato e pega quase todo o lixo ciclico;
+     varrer a geracao 2 e caro e raramente encontra algo. Por isso a frequencia
+     cai a cada degrau --- e por isso uma varredura completa numa aplicacao com
+     milhoes de objetos vivos pode custar centenas de milissegundos.};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.4cm,
+        font=\scriptsize,inner sep=6pt] at (7.1,-4.6)
+    {\textbf{o que o coletor NAO faz:} ele nao libera objeto que voce ainda
+     alcanca. Cache global, lista que ninguem esvazia e registro de retornos de
+     chamada estao vivos por definicao --- e nenhum \texttt{gc.collect()} do
+     mundo vai toca-los.};
+\end{tikzpicture}
+```
+As três gerações, e a hipótese que as justifica.
+:::
+
+```text
+== as tres geracoes do coletor
+  limiares (gen0, gen1, gen2): (2000, 10, 10)
+  geracao 0:      5 coletas,     148 objetos coletados, 0 incolhiveis
+  geracao 1:      0 coletas,       0 objetos coletados, 0 incolhiveis
+  geracao 2:      2 coletas,      13 objetos coletados, 0 incolhiveis
+```
+
+O limiar da geração 0 é **2000** no Python 3.13 (era 700 até o 3.11), justamente porque varrer com frequência demais custava mais do que rendia.
+
+Duas alavancas que valem conhecer:
+
+**`gc.freeze()` antes de bifurcar.** Ele move tudo que existe hoje para uma área permanente, nunca varrida. Num servidor que usa `fork` (@sec-cap095), isso evita que o coletor toque nas páginas compartilhadas dos filhos — porque *tocar* numa página, mesmo só para atualizar um bit do coletor, quebra a cópia-na-escrita e faz a página ser duplicada de verdade. É uma economia real de memória em servidores pré-carregados.
+
+**`gc.disable()` quase nunca.** Faz sentido em processo de vida curta que aloca muito e sai (um trabalho em lote). Num serviço de vida longa, desligar o coletor troca uma pausa ocasional por um vazamento garantido.
+
+## `weakref`: o ciclo que não precisa do coletor
+
+Uma referência fraca aponta para o objeto **sem** contar como referência:
+
+```python
+import weakref
+
+x, y = No("x"), No("y")
+x._par = y                    # forte: pai -> filho
+y._par = weakref.ref(x)       # fraca: filho -> pai
+```
+
+```text
+== weakref: ciclo que a contagem de referencias resolve sozinha
+  criados 2 objetos              vivos = 2
+  y._par() devolve o x?          True
+  apos del, SEM gc.collect()     vivos = 0
+```
+
+Ambos liberados imediatamente, sem coletor. A regra de desenho: **numa relação de posse, a referência de volta é fraca.** Filho para pai, observador para observado, item de cache para o dono. `weakref.ref(x)` é chamado como função e devolve `None` quando o objeto já morreu — sempre teste antes de usar.
+
+`weakref.WeakValueDictionary` e `WeakSet` aplicam a ideia a coleções: entradas somem sozinhas quando o objeto referenciado morre, o que é exatamente o que se quer num cache de objetos vivos.
+
+## `__del__`, e por que evitar
+
+`__del__` roda quando o objeto é destruído — e vem com uma lista de armadilhas:
+
+- **Não há garantia de quando**, nem de que rodará (o interpretador pode terminar antes).
+- **Exceção dentro dele é ignorada**, apenas impressa no `stderr`.
+- **Ele pode ressuscitar o objeto**, criando uma referência nova durante a destruição.
+- **Em thread daemon, não roda** no fim do programa (@sec-cap094).
+
+Para liberar recurso, o certo é `with` e um gerenciador de contexto (@sec-cap040), ou `contextlib.closing`. Se precisar mesmo de um gancho de finalização, `weakref.finalize` é mais previsível que `__del__`.
+
+## `getsizeof` mede menos do que você pensa
+
+```text
+== sys.getsizeof e superficial
+  getsizeof(lista de 1000 ints)      8056 bytes
+  getsizeof([interna]*3)               80 bytes   <- so os 3 ponteiros
+  somando o conteudo                36136 bytes
+```
+
+Uma lista com três listas de mil inteiros "ocupa" 80 bytes. `getsizeof` é **raso**: mede o objeto contêiner, não o que ele referencia. Para tamanho real, ou você percorre o grafo à mão (cuidando de não contar duas vezes o objeto compartilhado, como acima) ou usa `tracemalloc`, que mede alocação de verdade.
+
+## `__slots__`, e a economia que encolheu
+
+```text
+== custo real por instancia, medido pelo RSS (400.000 objetos)
+  sem __slots__      36.8 MiB   (96 bytes por instancia)
+  com __slots__      24.1 MiB   (63 bytes por instancia)
+```
+
+Trinta e quatro por cento — real, mas bem abaixo dos "5x" que circulam em texto antigo. O motivo é o PEP 412, os **dicionários de chaves compartilhadas**: instâncias da mesma classe compartilham a tabela de chaves, e cada `__dict__` guarda só os valores. A maior parte da economia que `__slots__` oferecia já vem de graça desde o Python 3.3.
+
+`__slots__` continua valendo quando há **muitas** instâncias pequenas — centenas de milhares —, e traz de brinde a proteção contra atributo escrito com o nome errado. Em troca, você perde atributos dinâmicos e complica a herança múltipla. Para uma classe com dez instâncias, é ruído.
+
+## A memória liberada volta para o sistema?
+
+Aqui está o resultado mais surpreendente do capítulo. Trezentos mil objetos alocados e depois liberados, variando só o tamanho de cada um:
+
+```text
+    100 bytes x  300000 | pico   44940 KiB | sobrou    1092 KiB | devolvido  97.6%
+    600 bytes x  300000 | pico  194504 KiB | sobrou  192164 KiB | devolvido   1.2%
+   1000 bytes x  300000 | pico  311704 KiB | sobrou     120 KiB | devolvido 100.0%
+   2000 bytes x  300000 | pico  602348 KiB | sobrou     120 KiB | devolvido 100.0%
+   5000 bytes x  300000 | pico 1483640 KiB | sobrou     120 KiB | devolvido 100.0%
+```
+
+Com 1000, 2000 e 5000 bytes por objeto, **tudo** voltou. Com 100 bytes, 97,6% voltou. Com **600 bytes, praticamente nada** — 192 MiB continuaram residentes num processo sem um único objeto vivo. E o resultado é estável: repetido, dá os mesmos números.
+
+A explicação está em duas camadas de alocador. Objetos de até 512 bytes vêm do `pymalloc`, que agrupa em arenas e devolve a arena ao sistema quando ela esvazia (daí os 97,6%). Acima disso, o CPython chama o `malloc` da biblioteca C, e aí quem decide devolver é o alocador do sistema, segundo heurísticas próprias de tamanho, fragmentação e contiguidade do topo do heap.
+
+Duas conclusões práticas, e elas são o oposto de duas crenças comuns:
+
+**"Python nunca devolve memória" é falso** — devolveu 100% em três dos cinco casos.
+
+**"Se eu liberar tudo, o RSS cai" também é falso** — no caso de 600 bytes não caiu nada.
+
+O que sobra é a regra honesta: **memória residente não é medida de objetos vivos.** Para saber o que o seu programa mantém vivo, use `tracemalloc`; use o RSS para saber o que o orquestrador vai cobrar. E, quando o RSS não cede, a resposta prática costuma ser processar em lotes num processo filho descartável — que devolve tudo ao morrer, sem depender de heurística de alocador.
+
+## Achando o vazamento
+
+Vazamento em Python quase nunca é bug do interpretador. É objeto que você ainda alcança:
+
+- **Cache sem limite** — o campeão absoluto. Um `dict` que só cresce.
+- **Lista global** de eventos, métricas ou logs que ninguém esvazia.
+- **Registro de retornos de chamada** ou de observadores sem remoção.
+- **Ciclo grande** só coletado na varredura da geração 2.
+- **`functools.lru_cache` sem `maxsize`** num método — ele guarda `self` e mantém a instância viva para sempre.
+
+A ferramenta é `tracemalloc`, comparando duas fotos:
+
+```python
+tracemalloc.start(2)
+aquece()
+gc.collect()
+antes = tracemalloc.take_snapshot()
+
+regime_permanente()
+gc.collect()
+depois = tracemalloc.take_snapshot()
+
+for est in depois.compare_to(antes, "lineno")[:4]:
+    print(est)
+```
+
+```text
+== o que cresceu entre as duas fotos
+  m098e.py:10   +  10239.5 KiB em +40000 blocos
+  m098e.py:11   +   7521.7 KiB em +80000 blocos
+  m098e.py:24   +   1827.1 KiB em +40000 blocos
+
+  em uso: 19.6 MiB | CACHE tem 41000 chaves | EVENTOS tem 41000 itens
+```
+
+A linha 10 é `CACHE[pedido] = ...` e a 11 é `EVENTOS.append(...)` — as duas culpadas, apontadas pelo número da linha, com o crescimento em bytes e em blocos ao lado.
+
+O método que funciona: **tire a primeira foto depois do aquecimento**, para que a inicialização não polua o resultado, e a segunda depois de um regime permanente longo. O que crescer entre as duas é o vazamento; o que ficou igual é uso legítimo.
+
+Três correções para as três causas mais comuns: `functools.lru_cache(maxsize=1024)` ou `cachetools.TTLCache` no lugar do `dict`; uma `collections.deque(maxlen=N)` no lugar da lista; e `WeakSet` no lugar da lista de observadores.
+
+## 🐍 Jeito Pythônico
+
+**Confie no `with`, não na destruição imediata.** A contagem de referências é detalhe do CPython; em PyPy o arquivo não fecha ao sair do escopo.
+
+**Numa relação de posse, a referência de volta é fraca.** `weakref` fez o ciclo ser liberado sem coletor nenhum.
+
+**Evite `__del__`.** Sem garantia de quando roda, engole exceções e não roda em thread daemon. Use gerenciador de contexto ou `weakref.finalize`.
+
+**`getsizeof` é raso** — 80 bytes para uma lista com três listas de mil inteiros. Para tamanho real, `tracemalloc`.
+
+**`__slots__` para centenas de milhares de instâncias pequenas** (34% medido), não por hábito. As chaves compartilhadas do PEP 412 já entregaram a maior parte da economia antiga.
+
+**Não desligue o coletor** num serviço de vida longa. `gc.freeze()` antes de bifurcar é a alavanca que costuma valer a pena.
+
+**RSS não mede objetos vivos.** Medido: com objetos de 600 bytes, 192 MiB continuaram residentes com zero objeto vivo. Use `tracemalloc` para objetos e RSS para a conta do orquestrador.
+
+**Ache vazamento comparando duas fotos do `tracemalloc`**, a primeira depois do aquecimento. Ele aponta arquivo e linha.
+
+**Todo cache precisa de limite.** `lru_cache(maxsize=...)`, `TTLCache`, `deque(maxlen=...)` — cache sem limite é o vazamento mais comum que existe.
+
+**Quando o RSS não cede, processe em lotes num processo filho.** Ele devolve tudo ao morrer, sem depender do alocador.
+
+## 🧪 Laboratório
+
+**Passo 1 — a contagem.** Reproduza a sequência de `getrefcount` e explique o `+1`. Depois descubra por que `sys.getrefcount(42)` devolve um número enorme (pista: inteiros pequenos são pré-alocados).
+
+**Passo 2 — sem ciclo.** Faça uma classe com `__del__` que decrementa um contador e um recheio de 50 KiB. Crie uma instância, apague-a e confirme que `vivos` foi a zero **sem** `gc.collect()`.
+
+**Passo 3 — o ciclo.** Crie dois objetos que se apontam, apague as duas variáveis e confirme:
+
+```text
+  apos del (sem coletor)             vivos = 2
+  apos gc.collect() (2 objetos)      vivos = 0
+```
+
+**Passo 4 — o ciclo escondido.** Capture uma exceção e guarde-a num atributo de objeto. Use `gc.get_referrers` para mostrar o ciclo entre a exceção, o *traceback* e o quadro.
+
+**Passo 5 — as gerações.** Imprima `gc.get_threshold()` e `gc.get_stats()`. Depois crie 100 mil objetos cíclicos e imprima de novo, observando as contagens por geração.
+
+**Passo 6 — `weakref`.** Refaça o passo 3 com a referência de volta fraca e confirme a liberação sem coletor. Depois deixe morrer o objeto apontado e confirme que a referência devolve `None`.
+
+**Passo 7 — `getsizeof` mentindo.** Meça `getsizeof` de uma lista com três referências à mesma lista de mil inteiros. Escreva uma função que percorra o grafo somando os tamanhos **sem contar o compartilhado duas vezes** (use `id()` num conjunto de vistos).
+
+**Passo 8 — `__slots__`.** Meça 400 mil instâncias com e sem `__slots__`, pelo RSS:
+
+```text
+  sem __slots__      36.8 MiB   (96 bytes por instancia)
+  com __slots__      24.1 MiB   (63 bytes por instancia)
+```
+
+Depois acrescente um quarto atributo **fora** de `__slots__` e observe o `AttributeError`.
+
+**Passo 9 — a memória volta?** Rode a medição de devolução para 100, 600, 1000 e 2000 bytes por objeto, **cada tamanho num processo separado**:
+
+```text
+    600 bytes x  300000 | ... | devolvido   1.2%
+   1000 bytes x  300000 | ... | devolvido 100.0%
+```
+
+::: {.callout-warning}
+## Um processo por caso, obrigatoriamente
+Medir os cinco tamanhos no mesmo processo dá resultado errado: o segundo caso reaproveita a memória que o primeiro deixou residente, e o pico aparece como 3 MiB em vez de 259 MiB. Foi exatamente o erro cometido na primeira versão desta medição.
+:::
+
+**Passo 10 — o vazamento.** Escreva um `atende(pedido)` que grava num `CACHE` global e acrescenta a uma lista global. Rode mil vezes, tire a foto, rode quarenta mil, tire a segunda e compare:
+
+```text
+  m098e.py:10   +  10239.5 KiB em +40000 blocos
+```
+
+**Passo 11 — as três correções.** Troque o `dict` por `lru_cache(maxsize=1024)`, a lista por `deque(maxlen=1000)`, e confirme que o crescimento entre as duas fotos vira aproximadamente zero.
+
+**Passo 12 — `lru_cache` em método.** Decore um método de instância com `@lru_cache` sem `maxsize`, crie 10 mil instâncias, apague todas e confirme com `gc.get_objects()` que elas continuam vivas. Explique por quê e corrija.
+
+## Resumo
+
+- **Contagem de referências é o mecanismo principal**: imediata e determinística, o objeto morre quando o contador zera. É detalhe do CPython, não da linguagem — dependa de `with`, não da destruição no fim do escopo.
+- **`getrefcount` conta `+1`** pela própria chamada.
+- **Ciclos escapam da contagem.** Medido: dois objetos em ciclo continuaram vivos após o `del` e só sumiram com `gc.collect()`. Árvore com ponteiro para o pai, grafo e exceção guardada são ciclos comuns.
+- **O coletor cíclico tem três gerações**, com limiares **(2000, 10, 10)** no 3.13, baseado na hipótese de que a maioria dos objetos morre jovem. `gc.freeze()` antes do `fork` protege a cópia-na-escrita; `gc.disable()` num serviço troca pausa por vazamento.
+- **`weakref` quebra o ciclo na origem**: com a referência de volta fraca, os dois objetos foram liberados **sem** coletor.
+- **Evite `__del__`** — sem garantia de quando, engole exceções, não roda em thread daemon.
+- **`getsizeof` é raso**: 80 bytes para uma lista com três listas de mil inteiros.
+- **`__slots__` economizou 34%** (96 → 63 bytes por instância), não os "5x" do folclore: as chaves compartilhadas do PEP 412 já entregam a maior parte.
+- **RSS não mede objetos vivos.** Com 300 mil objetos de 1000, 2000 e 5000 bytes, 100% da memória voltou ao sistema; com 600 bytes, **1,2%** — 192 MiB residentes sem um objeto vivo. Duas camadas de alocador (`pymalloc` até 512 bytes, `malloc` acima) decidem isso, não o Python.
+- **Vazamento é objeto que você ainda alcança**, quase sempre um cache sem limite. `tracemalloc` comparando duas fotos aponta o arquivo e a linha; todo cache precisa de limite.
