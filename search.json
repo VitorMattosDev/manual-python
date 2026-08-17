@@ -9491,7 +9491,139 @@
     "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html",
     "title": "80  NumPy: arrays, vetorização e broadcasting",
     "section": "",
-    "text": "(em elaboracao)",
+    "text": "80.1 A diferença medida\nUm sensor de temperatura gravou um milhão de leituras. Você precisa converter tudo para Fahrenheit, descartar o que veio fora de faixa e tirar a média por hora. Em Python puro isso é um laço — e o laço leva quase um décimo de segundo por operação, o que parece pouco até você descobrir que são doze operações e trinta arquivos.\nO problema não é o Python ser lento. É que cada x * 2 num laço faz o interpretador buscar o objeto, descobrir o tipo, procurar o __mul__, alocar um objeto novo e guardar o ponteiro numa lista. Um milhão de vezes. O trabalho aritmético em si é uma fração desprezível do tempo total.\nNumPy resolve isso mudando a estrutura de dados, não a linguagem. Em vez de uma lista de ponteiros para objetos espalhados pela memória, um bloco contíguo de números do mesmo tipo — e as operações sobre esse bloco acontecem em C, num laço só, sem tocar no interpretador.\nEste capítulo usa NumPy 2.5.2 no Python 3.13. Ele é a base de tudo que vem depois: pandas (Capítulo 81), matplotlib (Capítulo 83), SciPy e scikit-learn são todos construídos sobre o ndarray.\nVinte e seis vezes, e a compreensão de lista já é a forma rápida de fazer isso em Python puro. Com sum contra .sum() a distância é maior:\nOs números variam com a máquina; a ordem de grandeza não.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#a-diferença-medida",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#a-diferença-medida",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "",
+    "text": "import timeit\nimport numpy as np\n\nlst = list(range(1_000_000))\narr = np.arange(1_000_000)\n\nt_lst = timeit.timeit(lambda: [x * 2 for x in lst], number=5) / 5\nt_arr = timeit.timeit(lambda: arr * 2, number=5) / 5\nprint(f\"lista  : {t_lst*1000:7.2f} ms\")\nprint(f\"array  : {t_arr*1000:7.2f} ms\")\nprint(f\"razao  : {t_lst/t_arr:7.1f}x\")\nlista  :   99.55 ms\narray  :    3.83 ms\nrazao  :    26.0x\n\nsum(big)  :   69.99 ms   &lt;- builtin, itera em Python\nbig.sum() :    1.10 ms   &lt;- reducao em C\nrazao     :    63.4x",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#por-que-é-mais-rápido-a-memória",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#por-que-é-mais-rápido-a-memória",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.2 Por que é mais rápido: a memória",
+    "text": "80.2 Por que é mais rápido: a memória\nimport sys\n\npy = list(range(1_000_000))\nnp_ = np.arange(1_000_000, dtype=np.int64)\n\nprint(\"vetor de ponteiros da lista :\", sys.getsizeof(py), \"bytes\")\nprint(\"um objeto int do Python     :\", sys.getsizeof(py[999_999]), \"bytes\")\nprint(\"array int64 equivalente     :\", np_.nbytes, \"bytes\")\nvetor de ponteiros da lista : 8000056 bytes\num objeto int do Python     : 28 bytes\ntotal aproximado da lista   : 36000056 bytes\narray int64 equivalente     : 8000000 bytes\nrazao                       : 4.5 x\nUma lista de um milhão de inteiros guarda um milhão de ponteiros (8 bytes cada) para um milhão de objetos int (28 bytes cada, com contador de referências, ponteiro de tipo e o valor). O array guarda um milhão de inteiros de 8 bytes, um ao lado do outro, e mais nada.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 80.1: A lista guarda ponteiros para objetos espalhados; o ndarray guarda os números lado a lado.\n\n\n\nContiguidade importa por causa do cache do processador: ler 8 bytes traz os 64 vizinhos junto. Percorrer o array em ordem aproveita cada leitura; perseguir ponteiros pelo heap joga esse trabalho fora a cada elemento.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#anatomia-do-ndarray",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#anatomia-do-ndarray",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.3 Anatomia do ndarray",
+    "text": "80.3 Anatomia do ndarray\na = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])\nprint(\"shape   :\", a.shape)\nprint(\"ndim    :\", a.ndim)\nprint(\"dtype   :\", a.dtype)\nprint(\"itemsize:\", a.itemsize, \"bytes\")\nprint(\"nbytes  :\", a.nbytes, \"bytes\")\nprint(\"strides :\", a.strides)\nshape   : (2, 3)\nndim    : 2\ndtype   : float64\nitemsize: 8 bytes\nnbytes  : 48 bytes\nstrides : (24, 8)\nCinco atributos explicam quase tudo. shape é a forma; ndim é quantos eixos; dtype é o tipo de todos os elementos; itemsize é o tamanho de cada um; strides diz quantos bytes pular para andar um passo em cada eixo — 24 para descer uma linha (três float64), 8 para andar uma coluna.\nstrides é o que permite que reshape e transposição sejam de graça: mudam a interpretação do mesmo bloco, sem copiar nada.\n\n80.3.1 Criação\nnp.zeros(4)                 # [0. 0. 0. 0.]\nnp.ones(3, dtype=np.int32)  # [1 1 1]\nnp.arange(0, 10, 2.5)       # [0.  2.5 5.  7.5]\nnp.linspace(0, 1, 5)        # [0.   0.25 0.5  0.75 1.  ]\nnp.full(3, 7.5)             # [7.5 7.5 7.5]\nnp.eye(3, dtype=int)        # matriz identidade\narange recebe passo e exclui o fim; linspace recebe a quantidade de pontos e inclui o fim. Para valores fracionários prefira linspace: np.arange(0, 1, 0.1) pode devolver 10 ou 11 elementos dependendo do arredondamento do passo (Capítulo 10).\nPara números aleatórios, o gerador moderno, nunca as funções de np.random sem semente explícita:\nrng = np.random.default_rng(42)\nprint(\"uniform  :\", np.round(rng.random(4), 4))\nprint(\"normal   :\", np.round(rng.normal(20, 3, 4), 2))\nprint(\"inteiros :\", rng.integers(0, 10, 5))\nuniform  : [0.774  0.4389 0.8586 0.6974]\nnormal   : [14.15 16.09 20.38 19.05]\ninteiros : [5 1 8 4 5]\ndefault_rng(semente) é reprodutível e não compartilha estado global — as funções antigas (np.random.rand, np.random.seed) mexem num gerador único do processo, o que quebra teste paralelo e biblioteca de terceiros.\n\n\n80.3.2 O dtype não é decorativo\nprint(\"limites do int8 :\", np.iinfo(np.int8).min, \"a\", np.iinfo(np.int8).max)\nnp.array([120, 125, 130], dtype=np.int8)\nlimites do int8 : -128 a 127\nOverflowError : Python integer 130 out of bounds for int8\nNa criação, o NumPy 2 avisa alto. Na aritmética, não:\ny = np.array([120, 125, 100], dtype=np.int8)\nz = np.array([10, 10, 10], dtype=np.int8)\nprint(\"120+10, 125+10, 100+10 =\", y + z)\n120+10, 125+10, 100+10 = [-126 -121  110]\nO int do Python é ilimitado; o int8 dá a volta em silêncio. Isso vale para qualquer inteiro de largura fixa, e é o motivo de int64 ser o padrão. Ao escolher int8 ou float32 para economizar memória, você está assumindo um contrato sobre a faixa dos dados — e o NumPy não vai lembrá-lo disso.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#vetorização-escrever-sem-laço",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#vetorização-escrever-sem-laço",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.4 Vetorização: escrever sem laço",
+    "text": "80.4 Vetorização: escrever sem laço\ntemps = np.array([18.4, 21.7, 25.1, 19.8, 30.2])\nprint(\"fahrenheit :\", temps * 9 / 5 + 32)\nprint(\"comparacao :\", temps &gt; 20)\nprint(\"quantos    :\", (temps &gt; 20).sum())\nprint(\"media      :\", temps.mean(), \"| desvio:\", round(temps.std(ddof=1), 4))\nfahrenheit : [65.12 71.06 77.18 67.64 86.36]\ncomparacao : [False  True  True False  True]\nquantos    : 3\nmedia      : 23.04 | desvio: 4.7258\nCada operação percorre o array inteiro em C. A comparação devolve um array de bool, e sum() sobre booleanos conta os True — idioma que aparece o tempo todo.\nAtenção ao ddof: std() do NumPy usa ddof=0 (desvio populacional) por padrão, enquanto statistics.stdev (Capítulo 59) e o pandas usam o amostral. Comparar as duas sem perceber isso produz discrepância que ninguém encontra.\n\n80.4.1 Eixos\nm = np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]])\nprint(\"m.sum()        :\", m.sum())\nprint(\"m.sum(axis=0)  :\", m.sum(axis=0))\nprint(\"m.sum(axis=1)  :\", m.sum(axis=1))\nm.sum()        : 450\nm.sum(axis=0)  : [120 150 180]\nm.sum(axis=1)  : [ 60 150 240]\nA regra que resolve a confusão permanente: axis=k é o eixo que desaparece. Em (3, 3), somar com axis=0 elimina o eixo das linhas e sobra um valor por coluna; axis=1 elimina as colunas e sobra um por linha. Numa tabela, axis=0 é “por coluna” e axis=1 é “por linha” — dito de outro jeito, o eixo que você nomeia é o que é consumido.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#fatia-é-vista-máscara-é-cópia",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#fatia-é-vista-máscara-é-cópia",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.5 Fatia é vista, máscara é cópia",
+    "text": "80.5 Fatia é vista, máscara é cópia\nEsta é a diferença que mais custa depuração, e ela não existe em listas:\nv = np.arange(10)\nfatia = v[2:5]\nfatia[0] = 999\nprint(\"v      :\", v)\nprint(\"fatia.base is v :\", fatia.base is v)\nv      : [  0   1 999   3   4   5   6   7   8   9]\nfatia.base is v : True\nv[2:5] numa lista devolveria uma cópia; num array devolve uma vista — outra janela para o mesmo bloco de memória. Escrever na vista escreve no original. Isso é deliberado (fatiar um array de 4 GB não deve alocar outros 4 GB), mas surpreende quem vem de listas.\nJá indexação booleana e por lista de índices copiam, porque o resultado não é um recorte regular do bloco:\nd = np.array([3, 17, 8, 25, 11, 2])\nprint(\"d[d &gt; 10]  :\", d[d &gt; 10])\nprint(\"e copia?   :\", d[d &gt; 10].base is None)\nd[d &gt; 10] = 0\nprint(\"d apos     :\", d)\nd[d &gt; 10]  : [17 25 11]\ne copia?   : True\nd apos     : [3 0 8 0 0 2]\nNote a última linha: atribuir através da máscara altera o original, porque aí não há intermediário. d[d &gt; 10] lê uma cópia; d[d &gt; 10] = 0 escreve no lugar.\nNa dúvida, .base responde: None significa dono da própria memória. E arr.copy() sempre que você quiser mexer sem afetar a origem.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#broadcasting",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#broadcasting",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.6 Broadcasting",
+    "text": "80.6 Broadcasting\nSomar arrays de formas diferentes funciona — quando as formas são compatíveis:\nvendas = np.array([[100.0, 200.0, 300.0],\n                   [400.0, 500.0, 600.0]])     # (2, 3)\nimposto = np.array([0.05, 0.10, 0.20])         # (3,)\nprint(vendas * imposto)\n[[  5.  20.  60.]\n [ 20.  50. 120.]]\nA regra tem duas linhas. Alinhe as formas pela direita. Em cada eixo, elas são compatíveis se forem iguais ou se uma delas for 1 (ou estiver ausente, o que conta como 1) — e a dimensão 1 é esticada para acompanhar a outra.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 80.2: As regras de compatibilidade de formas e o erro mais comum.\n\n\n\nO caso que falha:\nvendas * np.array([0.05, 0.10])\nValueError: operands could not be broadcast together with shapes (2,3) (2,)\nO array de 2 elementos foi alinhado à direita, contra o eixo de tamanho 3. Se a intenção era um fator por linha, é preciso dizer isso explicitamente:\npor_linha = np.array([2.0, 3.0])\nprint(vendas * por_linha[:, None])\n[[ 200.  400.  600.]\n [1200. 1500. 1800.]]\n[:, None] (ou np.newaxis, o mesmo objeto com nome melhor) transforma (2,) em (2, 1). Esse é o idioma para escolher o eixo em que o vetor deve agir.\nO uso mais comum de tudo isso é padronizar colunas:\nX = np.array([[1.0, 100.0], [2.0, 200.0], [3.0, 300.0], [4.0, 400.0]])\nXn = (X - X.mean(axis=0)) / X.std(axis=0)\nprint(np.round(Xn, 4))\n[[-1.3416 -1.3416]\n [-0.4472 -0.4472]\n [ 0.4472  0.4472]\n [ 1.3416  1.3416]]\nX.mean(axis=0) tem forma (2,), alinha com o último eixo de X e subtrai coluna a coluna. Uma linha faz o que seria um laço duplo — e é exatamente o pré-processamento que o Capítulo 85 vai pedir.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#nan-o-valor-ausente",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#nan-o-valor-ausente",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.7 nan: o valor ausente",
+    "text": "80.7 nan: o valor ausente\nleituras = np.array([21.5, np.nan, 19.8, 22.1, np.nan])\nprint(\"mean       :\", leituras.mean())\nprint(\"nan == nan :\", np.nan == np.nan)\nprint(\"isnan      :\", np.isnan(leituras))\nprint(\"nanmean    :\", round(np.nanmean(leituras), 4))\nprint(\"validas    :\", leituras[~np.isnan(leituras)])\nmean       : nan\nnan == nan : False\nisnan      : [False  True False False  True]\nnanmean    : 21.1333\nvalidas    : [21.5 19.8 22.1]\nTrês fatos que andam juntos. nan contamina: qualquer conta que o inclua devolve nan, e é assim que se descobre que o CSV tinha buraco. nan não é igual a si mesmo — por definição do IEEE 754 —, então x == np.nan é sempre False e a única forma de testar é np.isnan. E existe uma família nan* (nanmean, nansum, nanmax, nanstd) que ignora os ausentes.\nnan só existe em float. Um array de int não tem como representar ausência — motivo pelo qual carregar uma coluna inteira com buracos promove tudo para float64, comportamento que reaparece no Capítulo 82.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#o-erro-de-valor-verdade",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#o-erro-de-valor-verdade",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.8 O erro de valor-verdade",
+    "text": "80.8 O erro de valor-verdade\nif leituras &gt; 20:\n    ...\nValueError: The truth value of an array with more than one element is ambiguous.\nUse a.any() or a.all()\nleituras &gt; 20 é um array de cinco booleanos, e o if não tem como decidir. A mensagem já dá a resposta: .any() para “algum”, .all() para “todos”. E, para combinar condições, os operadores são &, | e ~ com parênteses — and, or e not chamam o mesmo __bool__ ambíguo:\nfaixa = (leituras &gt; 20) & (leituras &lt; 22)\nOs parênteses não são estilo: & tem precedência maior que &gt;, e sem eles a expressão vira outra coisa.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#ferramentas-que-aparecem-sempre",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#ferramentas-que-aparecem-sempre",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.9 Ferramentas que aparecem sempre",
+    "text": "80.9 Ferramentas que aparecem sempre\nt = np.array([18.0, 25.0, 31.0, 22.0])\nnp.where(t &gt; 24, \"quente\", \"ameno\")  # ['ameno' 'quente' 'quente' 'ameno']\nnp.clip(t, 20, 28)                   # [20. 25. 28. 22.]\nt.argmax()                           # 2  -&gt; indice do maior\nnp.argsort(t)                        # [0 3 1 2]\nnp.where é o if vetorizado. argmax/argsort devolvem índices, não valores — o que permite ordenar um array pelos valores de outro, base de metade do trabalho com dados tabulares.\nE reshape reinterpreta sem copiar:\nseq = np.arange(12)\nseq.reshape(3, 4).base is seq   # True\nseq.reshape(3, -1).shape        # (3, 4)  -- o -1 e calculado",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#jeito-pythônico",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#jeito-pythônico",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.10 🐍 Jeito Pythônico",
+    "text": "80.10 🐍 Jeito Pythônico\nLaço sobre ndarray é sinal de erro. Se você escreveu for i in range(len(arr)), quase sempre existe uma expressão vetorizada equivalente — e ela é uma ordem de grandeza mais rápida e mais curta. As exceções reais são poucas: recorrência em que cada passo depende do anterior, e chamada a código externo que não aceita array.\naxis=k é o eixo que some. Decorar “0 é coluna, 1 é linha” funciona até aparecer um array 3D. Pensar em qual eixo é consumido funciona sempre.\ndefault_rng(semente), nunca np.random.seed. O gerador global é estado compartilhado do processo: uma biblioteca que o reajusta destrói a reprodutibilidade do seu código sem deixar rastro.\nSaiba se você tem uma vista ou uma cópia. Fatia é vista; máscara e índice-lista são cópia; reshape e .T são vistas. Quando a intenção é não afetar a origem, .copy() explícito — é barato escrever e caro descobrir que faltava.\n&, |, ~ com parênteses em condições sobre arrays. and/or levantam ValueError, o que ao menos é honesto — o perigo é if arr.any() escrito quando se queria all.\nPrefira [:, None] a reshape para acrescentar eixo. Diz exatamente o que está acontecendo (nasce um eixo aqui) em vez de fazer o leitor conferir aritmética de forma.\nEscolha dtype conscientemente. float64 e int64 são o padrão por segurança. float32 corta a memória pela metade e é o certo para dados de imagem ou modelo grande; int8 transborda em silêncio. A economia é real, o risco também.\nUse os nan* em vez de limpar na mão. np.nanmean(x) é mais claro e mais rápido que x[~np.isnan(x)].mean(), e não aloca o array intermediário.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#laboratório",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#laboratório",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.11 🧪 Laboratório",
+    "text": "80.11 🧪 Laboratório\nPasso 1 — ambiente.\nmkdir lab-numpy && cd lab-numpy\npython3.13 -m venv .venv\nsource .venv/bin/activate        # Windows: .venv\\Scripts\\activate\npython -m pip install numpy\npython -c \"import numpy; print(numpy.__version__)\"\nPasso 2 — medir a diferença. Com timeit, compare [x * 2 for x in lst] contra arr * 2 para um milhão de elementos, e sum(arr) contra arr.sum(). Anote as duas razões. A segunda deve ser maior — explique por quê (dica: sum do Python precisa desembrulhar cada np.int64 num objeto Python).\nPasso 3 — anatomia. Crie a = np.arange(24).reshape(2, 3, 4) e imprima shape, ndim, dtype, itemsize, nbytes e strides. Confira na mão que strides bate com itemsize e shape. Depois imprima a.T.strides e observe que a transposição só inverteu a tupla.\nPasso 4 — o transbordo silencioso. Reproduza:\nlimites do int8 : -128 a 127\nOverflowError : Python integer 130 out of bounds for int8\ne depois a soma de dois int8 que estoura:\n120+10, 125+10, 100+10 = [-126 -121  110]\nRepita com dtype=np.float32 e um valor da ordem de 1e40. O que sai? (Resposta: inf, e também sem erro.)\nPasso 5 — vista contra cópia. Para v = np.arange(10), confirme:\nv      : [  0   1 999   3   4   5   6   7   8   9]\nfatia.base is v : True\nDepois faça o mesmo com v[[2, 3, 4]] e com v[v &gt; 5], checando .base em cada caso. Escreva uma função eh_vista(x) que responda isso e teste-a com reshape, .T e .copy().\nPasso 6 — eixos. Com m = np.arange(1, 13).reshape(3, 4), calcule soma, média, máximo e argmax com axis=0, axis=1 e sem axis. Antes de rodar cada um, escreva a forma esperada do resultado. Confira. Depois experimente keepdims=True e explique para que ele serve (dica: o próximo passo).\nPasso 7 — broadcasting na prática. Monte X = rng.normal(50, 10, size=(6, 3)) e padronize as colunas com (X - X.mean(axis=0)) / X.std(axis=0). Confirme que as médias das colunas ficaram ~0 e os desvios ~1. Agora tente padronizar as linhas trocando para axis=1 sem mais nada — e leia o ValueError:\nValueError: operands could not be broadcast together with shapes (2,3) (2,)\nCorrija com [:, None] (ou keepdims=True, que faz o mesmo).\nPasso 8 — dados sujos. Crie um array de 20 leituras com rng.normal(21, 2, 20), jogue np.nan em três posições sorteadas e uma leitura absurda (-300). Calcule a média com mean e com nanmean, conte os ausentes, remova os absurdos com máscara e refaça. Registre quantos pontos sobraram.\nPasso 9 — média móvel. Suavize um sinal com np.convolve(sinal, np.ones(3)/3, mode=\"valid\"):\nsinal : [10. 12. 11. 30. 12. 13. 12. 11.]\nmedia movel (3): [11.     17.6667 17.6667 18.3333 12.3333 12.    ]\nNote que a janela de 3 espalhou o pico de 30 por três posições e que o resultado tem dois elementos a menos. Teste mode=\"same\" e veja como as bordas são tratadas.\nPasso 10 — o laço proibido. Escreva a distância euclidiana entre todos os pares de 500 pontos 2D de duas formas: com laço duplo em Python, e vetorizada com ((P[:, None, :] - P[None, :, :]) ** 2).sum(axis=-1) ** 0.5. Compare os tempos, confirme com np.allclose que os resultados batem, e olhe a forma intermediária (500, 500, 2) — 4 MB de memória para evitar 250 mil iterações. Esse é o trade-off central do NumPy: memória por velocidade.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#resumo",
+    "href": "vol13/cap080-numpy-arrays-vetorizacao-e-broadcasting.html#resumo",
+    "title": "80  NumPy: arrays, vetorização e broadcasting",
+    "section": "80.12 Resumo",
+    "text": "80.12 Resumo\n\nO ndarray é um bloco contíguo de elementos do mesmo dtype mais um cabeçalho (shape, strides). É daí que vem a velocidade: laço em C sobre memória contígua, sem objeto Python por elemento.\nVetorizar é escrever a operação sobre o array inteiro. A diferença medida contra o laço equivalente foi de 26x na multiplicação e 63x na soma; laço explícito sobre array é sinal de que existe expressão melhor.\naxis=k é o eixo que desaparece na redução; keepdims=True o mantém com tamanho 1 para permitir broadcasting depois.\nFatia é vista, máscara e índice-lista são cópia. Escrever numa vista altera o original — comportamento diferente do de listas, e a fonte número um de bug silencioso. .base responde; .copy() resolve.\nBroadcasting: alinhe as formas pela direita; cada eixo precisa ser igual ou 1 (ausente conta como 1). [:, None] acrescenta o eixo que faltava e resolve o ValueError de formas incompatíveis.\nnan contamina qualquer conta e não é igual a si mesmo: teste com np.isnan, agregue com a família nan*, e lembre que nan só existe em float.\nArray em contexto booleano levanta ValueError: use .any()/.all() e combine condições com &, |, ~ entre parênteses.\ndtype é um contrato sobre a faixa dos dados: int8 transborda em silêncio na aritmética, float32 vira inf. O padrão de 64 bits existe por segurança.",
     "crumbs": [
       "Volume 13 — Dados, Análise e Visualização\n",
       "<span class='chapter-number'>80</span>  <span class='chapter-title'>NumPy: arrays, vetorização e broadcasting</span>"
@@ -9502,7 +9634,117 @@
     "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html",
     "title": "81  pandas: Series, DataFrame e a carga de dados",
     "section": "",
-    "text": "(em elaboracao)",
+    "text": "81.1 Series: um array com rótulos\nO csv.DictReader do Capítulo 62 lê a planilha. Depois disso, tudo é seu problema: converter a data que veio como texto, decidir o que fazer com a célula vazia, agrupar por cidade num defaultdict, calcular média sem contar os buracos, ordenar. São quarenta linhas de código correto e chato, e você vai escrevê-las de novo no próximo arquivo.\npandas é a estrutura de dados que falta. Um DataFrame é uma tabela em memória onde cada coluna tem um tipo, as linhas têm rótulos, e as operações que você escreveria à mão já existem, vetorizadas sobre NumPy.\nEste capítulo usa pandas 3.0.5 sobre NumPy 2.5.2, no Python 3.13. A versão 3.0 mudou coisas importantes em relação ao pandas 2 — o tipo padrão de texto e o comportamento de cópia — e ambas aparecem aqui, porque é o que você vai encontrar em código existente.\nUma Series é um ndarray (Capítulo 80) mais um índice: rótulos para as posições. Ela mantém dtype, aceita as operações vetorizadas do NumPy, e acrescenta acesso por rótulo:",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#series-um-array-com-rótulos",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#series-um-array-com-rótulos",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "",
+    "text": "import pandas as pd\n\ns = pd.Series([31.4, 14.2, 33.1],\n              index=[\"Belem\", \"Curitiba\", \"Manaus\"],\n              name=\"temperatura\")\nprint(s)\nBelem       31.4\nCuritiba    14.2\nManaus      33.1\nName: temperatura, dtype: float64\n\ns[\"Curitiba\"]   # 14.2\ns.mean()        # 26.2333...\ns.values        # array([31.4, 14.2, 33.1])  -- o ndarray por baixo\n\n81.1.1 O índice não é decoração\nEsta é a diferença conceitual que separa pandas de NumPy:\na = pd.Series([10, 20, 30], index=[\"x\", \"y\", \"z\"])\nb = pd.Series([1, 2, 3], index=[\"z\", \"y\", \"w\"])\nprint(a + b)\nw     NaN\nx     NaN\ny    22.0\nz    31.0\ndtype: float64\nprint(\"com numpy (posicional):\", a.values + b.values)\ncom numpy (posicional): [11 22 33]\npandas alinha pelo índice; NumPy soma por posição. O y de a encontrou o y de b mesmo estando em posições diferentes. x e w existem só de um lado e viraram NaN.\nIsso é o que torna pandas útil para dados de verdade — junte duas séries temporais com datas faltando de cada lado e o alinhamento acontece sozinho. E é também a origem do resultado inesperado mais comum: uma soma que devolve NaN em toda parte quase sempre significa índices que não se encontram.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#dataframe-colunas-com-tipos",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#dataframe-colunas-com-tipos",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.2 DataFrame: colunas com tipos",
+    "text": "81.2 DataFrame: colunas com tipos\ndf = pd.read_csv(\"leituras.csv\")\nprint(df)\n         data    estacao    cidade  temperatura  umidade    status\n0  2026-03-01  onu-00043     Belem         31.4       88        ok\n1  2026-03-01  onu-00051  Curitiba         14.2       71        ok\n2  2026-03-01  onu-00077    Manaus         33.1       90        ok\n3  2026-03-02  onu-00043     Belem         30.8       86        ok\n4  2026-03-02  onu-00051  Curitiba          NaN       68     falha\n5  2026-03-02  onu-00077    Manaus         32.9       91        ok\n6  2026-03-03  onu-00043     Belem         29.5       84        ok\n7  2026-03-03  onu-00051  Curitiba         15.7       73        ok\n8  2026-03-03  onu-00077    Manaus       -999.0       89  suspeito\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 81.1: Índice, colunas e o dtype por coluna — os três elementos que explicam o comportamento do DataFrame.\n\n\n\nRepare no -999.0 da última linha e no NaN da linha 4. Nenhum dos dois é temperatura. Agora veja o que o read_csv inferiu sozinho:\nprint(df.dtypes)\ndata               str\nestacao            str\ncidade             str\ntemperatura    float64\numidade          int64\nstatus             str\ndtype: object\nA data virou texto. O -999 virou um número que entra na média. É por isso que read_csv sem argumentos é para explorar, não para carregar.\n\n81.2.1 read_csv como se deve\ndf = pd.read_csv(\n    \"leituras.csv\",\n    parse_dates=[\"data\"],\n    na_values=[\"\", \"-999\"],\n    dtype={\"estacao\": \"category\", \"status\": \"category\"},\n)\nprint(df.dtypes)\ndata           datetime64[us]\nestacao              category\ncidade                    str\ntemperatura           float64\numidade                 int64\nstatus               category\ndtype: object\nOs argumentos que valem decorar:\n\n\n\n\n\n\n\nargumento\npara quê\n\n\n\n\nparse_dates=[...]\nconverte para datetime64 na leitura, sem passo extra\n\n\nna_values=[...]\ndeclara os sentinelas do arquivo (-999, N/A, --)\n\n\ndtype={...}\nfixa o tipo em vez de deixar inferir\n\n\nusecols=[...]\nlê só as colunas que interessam (economia direta)\n\n\nsep=\";\", decimal=\",\"\no CSV brasileiro exportado do Excel\n\n\nencoding=\"latin-1\"\nquando o arquivo não é UTF-8 (Capítulo 14)\n\n\nnrows=1000\nespia o começo de um arquivo grande\n\n\nchunksize=100_000\nitera em pedaços em vez de carregar tudo\n\n\n\ncategory merece atenção. Uma coluna de texto com poucos valores distintos ocupa memória absurda como texto:\n300 mil cidades como texto    : 16,600,132 bytes\n300 mil cidades como category :    300,298 bytes\nrazao                         :       55.3 x\nCinquenta e cinco vezes menos, porque category guarda os rótulos uma vez e um código inteiro por linha.\n\n\n\n\n\n\nNotapandas 3: texto agora tem tipo próprio\n\n\n\nAté o pandas 2, uma coluna de texto vinha como object — um array de ponteiros para str do Python, com todas as desvantagens do Capítulo 80. O pandas 3 usa o dtype str nativo por padrão, mais rápido e mais econômico. Se você encontrar dtype: object em código ou tutorial, é pandas 2 ou anterior.\n\n\n\n\n81.2.2 Inspecionar antes de qualquer coisa\ndf.info()\n&lt;class 'pandas.DataFrame'&gt;\nRangeIndex: 9 entries, 0 to 8\nData columns (total 6 columns):\n #   Column       Non-Null Count  Dtype\n---  ------       --------------  -----\n 0   data         9 non-null      datetime64[us]\n 1   estacao      9 non-null      category\n 2   cidade       9 non-null      str\n 3   temperatura  7 non-null      float64\n 4   umidade      9 non-null      int64\n 5   status       9 non-null      category\ndtypes: category(2), datetime64[us](1), float64(1), int64(1), str(1)\nmemory usage: 594.0 bytes\ninfo() responde três perguntas de uma vez: quantas linhas, que tipos e quantos não-nulos por coluna. A coluna temperatura tem 7 de 9 — os dois buracos que criamos com na_values.\nprint(df.describe())\n                      data  temperatura    umidade\ncount                    9      7.00000   9.000000\nmean   2026-03-02 00:00:00     26.80000  82.222222\nmin    2026-03-01 00:00:00     14.20000  68.000000\n25%    2026-03-01 00:00:00     22.60000  73.000000\n50%    2026-03-02 00:00:00     30.80000  86.000000\n75%    2026-03-03 00:00:00     32.15000  89.000000\nmax    2026-03-03 00:00:00     33.10000  91.000000\nstd                    NaN      8.19878   8.996913\ndescribe() cobre as colunas numéricas; para as demais, df[[\"estacao\", \"cidade\", \"status\"]].describe() devolve count, unique, top e freq — útil para descobrir que uma coluna que devia ter 3 valores distintos tem 47, porque alguém digitou “Belém”, “belem” e “BELEM”.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#selecionar-.loc-e-.iloc",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#selecionar-.loc-e-.iloc",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.3 Selecionar: [], .loc e .iloc",
+    "text": "81.3 Selecionar: [], .loc e .iloc\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 81.2: As quatro portas de entrada para os dados de um DataFrame.\n\n\n\ndf[\"cidade\"]                  # Series\ndf[[\"cidade\", \"temperatura\"]] # DataFrame\nCom o índice trocado para a data, .loc seleciona por rótulo:\nd2 = df.set_index(\"data\")\nprint(d2.loc[\"2026-03-02\"])\n              estacao    cidade  temperatura  umidade status\ndata\n2026-03-02  onu-00043     Belem         30.8       86     ok\n2026-03-02  onu-00051  Curitiba          NaN       68  falha\n2026-03-02  onu-00077    Manaus         32.9       91     ok\nE .iloc, por posição:\nd2.iloc[0]      # a primeira linha, seja qual for o rótulo\nA diferença que morde: .loc inclui o fim da fatia, .iloc não.\nsrt = pd.Series([10, 20, 30, 40], index=[\"a\", \"b\", \"c\", \"d\"])\nprint(\"iloc[1:3]  :\", list(srt.iloc[1:3].index))\nprint(\"loc['b':'c']:\", list(srt.loc[\"b\":\"c\"].index))\niloc[1:3]  : ['b', 'c']  &lt;- exclui o fim\nloc['b':'c']: ['b', 'c']  &lt;- inclui o fim\nOs dois deram o mesmo resultado aqui porque as fatias são diferentes: 1:3 pega duas posições, 'b':'c' pega dois rótulos inclusive. Faz sentido — o rótulo 'd' não tem sucessor conhecido, então excluir o fim seria arbitrário.\n\n81.3.1 Filtrar linhas\nquentes = df[df[\"temperatura\"] &gt; 30]\nprint(df[(df[\"temperatura\"] &gt; 30) & (df[\"umidade\"] &gt; 88)][[\"cidade\", \"temperatura\", \"umidade\"]])\n   cidade  temperatura  umidade\n2  Manaus         33.1       90\n5  Manaus         32.9       91\nComo no NumPy: &, |, ~, sempre com parênteses. A alternativa legível para condições longas é query:\ndf.query(\"temperatura &gt; 30 and umidade &gt; 88\")\nRepare no índice do resultado: 2 e 5, não 0 e 1. Filtrar não renumera. O índice original é preservado de propósito — é assim que você sabe de que linha do arquivo aquilo veio. Quando o índice antigo não interessa mais, reset_index(drop=True).",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#cópia-vista-e-a-mudança-do-pandas-3",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#cópia-vista-e-a-mudança-do-pandas-3",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.4 Cópia, vista e a mudança do pandas 3",
+    "text": "81.4 Cópia, vista e a mudança do pandas 3\nsub = df[df[\"cidade\"] == \"Belem\"]\nsub[\"temperatura\"] = 0.0\nprint(\"original:\", df.loc[0, \"temperatura\"])\noriginal: 31.4\nO recorte é uma cópia, e escrever nele não afeta o original. No pandas 2 esse mesmo código emitia o famoso SettingWithCopyWarning, cujo comportamento dependia de detalhes internos: às vezes propagava, às vezes não. O pandas 3 adotou copy-on-write e a regra ficou simples — toda operação devolve algo independente do original.\nO que o pandas 3 rejeita alto é a atribuição encadeada:\ndf[df[\"cidade\"] == \"Belem\"][\"temperatura\"] = 0.0\nChainedAssignmentError : A value is being set on a copy of a DataFrame or Series\nthrough chained assignment.\nE o mesmo vale para método inplace sobre coluna extraída (df[\"t\"].fillna(0, inplace=True)). A forma correta é sempre um único .loc:\ndf.loc[df[\"cidade\"] == \"Belem\", \"temperatura\"] = 0.0",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#criar-colunas",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#criar-colunas",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.5 Criar colunas",
+    "text": "81.5 Criar colunas\ndf[\"fahrenheit\"] = df[\"temperatura\"] * 9 / 5 + 32\ndf[\"faixa\"] = np.where(df[\"temperatura\"] &gt; 30, \"quente\", \"ameno\")\nVetorizado, coluna inteira de uma vez. Para encadear sem criar variável intermediária, assign com lambda:\nres = (df\n       .assign(fahrenheit=lambda d: d[\"temperatura\"] * 9 / 5 + 32)\n       .loc[lambda d: d[\"temperatura\"].notna(), [\"cidade\", \"temperatura\", \"fahrenheit\"]]\n       .sort_values(\"temperatura\", ascending=False)\n       .head(3))\nprint(res)\n   cidade  temperatura  fahrenheit\n2  Manaus         33.1       91.58\n5  Manaus         32.9       91.22\n0   Belem         31.4       88.52\nO lambda d: dentro de assign e .loc refere-se ao DataFrame daquele ponto da cadeia, o que permite escrever a transformação inteira como uma expressão. É o estilo dominante em pandas moderno, e o assunto do Capítulo 82.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#o-laço-que-você-não-deve-escrever",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#o-laço-que-você-não-deve-escrever",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.6 O laço que você não deve escrever",
+    "text": "81.6 O laço que você não deve escrever\nbig = pd.DataFrame({\"a\": rng.random(200_000), \"b\": rng.random(200_000)})\nbig.apply(lambda r: r[\"a\"] + r[\"b\"], axis=1)   # linha a linha\nbig[\"a\"] + big[\"b\"]                            # vetorizado\napply(axis=1) :   1181.5 ms\na + b         :      1.1 ms\nrazao         :     1102x\nMil vezes. apply(axis=1) constrói uma Series Python por linha — duzentas mil delas. iterrows() é pior ainda, e tem um defeito adicional:\nfor i, linha in df.iterrows():\n    print(i, repr(linha[\"n\"]), linha.dtype)\n0 1 object\nCada linha é uma Series que precisa acomodar tipos diferentes, então tudo vira object e você perde o dtype. Se precisar mesmo iterar, itertuples() preserva os tipos e é bem mais rápido:\nPandas(Index=0, n=1, txt='a') int\nMas a regra continua: iterar sobre um DataFrame é o último recurso, não o primeiro.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#de-onde-os-dados-vêm",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#de-onde-os-dados-vêm",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.7 De onde os dados vêm",
+    "text": "81.7 De onde os dados vêm\npandas lê muito mais que CSV, e a família read_* tem interface uniforme:\n\n\n\n\n\n\n\n\nfunção\nformato\nobservação\n\n\n\n\nread_csv\nCSV, TSV\no cavalo de batalha; aceita URL e arquivo comprimido\n\n\nread_parquet\nParquet\ncolunar, comprimido, preserva os dtype\n\n\nread_excel\nXLSX\nrequer openpyxl; sheet_name=None lê todas as abas\n\n\nread_json\nJSON\nlines=True para JSON Lines\n\n\nread_sql\nqualquer DB-API\npasse a conexão do Capítulo 65\n\n\nread_html\ntabelas de página\nextrai todo &lt;table&gt; numa lista\n\n\n\nCada uma tem a gêmea to_* para escrever. Duas recomendações práticas: index=False em to_csv quando o índice for o RangeIndex automático, senão nasce uma coluna Unnamed: 0 na próxima leitura; e Parquet em vez de CSV para dados intermediários, porque o CSV perde todo o dtype e obriga a repetir o ritual de parse_dates e na_values a cada carga.\nPara arquivos que não cabem na memória, chunksize transforma a leitura num iterador:\ntotal = 0.0\nfor pedaco in pd.read_csv(\"leituras.csv\", na_values=[\"-999\"], chunksize=100_000):\n    total += pedaco[\"temperatura\"].sum()\nCada pedaco é um DataFrame completo. É o mesmo padrão de processamento em fluxo do Capítulo 50 — e, quando ele não bastar, a resposta é Polars, DuckDB ou Dask, não um chunksize maior.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#jeito-pythônico",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#jeito-pythônico",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.8 🐍 Jeito Pythônico",
+    "text": "81.8 🐍 Jeito Pythônico\nread_csv com dtype, parse_dates e na_values explícitos. A inferência é ótima para a primeira olhada e péssima como contrato: um arquivo novo com uma célula estranha muda o tipo de uma coluna inteira, e o erro aparece três transformações adiante.\ninfo() e describe() antes de qualquer análise. Trinta segundos que evitam a média calculada sobre um -999.\nUm único .loc para atribuir. Dois colchetes seguidos é o padrão que o pandas 3 rejeita com ChainedAssignmentError — e que no pandas 2 falhava em silêncio, que era pior.\n.loc para rótulo, .iloc para posição, colchete para coluna. Não existe caso em que a ambiguidade compense; escrever .loc explícito é mais curto de ler do que descobrir depois qual era a intenção.\nNunca apply(axis=1) nem iterrows() para o que uma expressão vetorizada faz. Mil vezes é a ordem de grandeza medida, e o código vetorizado ainda é mais curto.\ncategory para coluna de texto com poucos valores distintos. Cinquenta vezes menos memória, e agrupamento mais rápido de quebra.\nCadeias com assign e lambda em vez de variáveis intermediárias numeradas. A cadeia é lida de cima para baixo como uma receita e não deixa estado pela metade.\nindex=False ao escrever CSV, e Parquet para dados intermediários — o CSV é formato de intercâmbio, não de armazenamento.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#laboratório",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#laboratório",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.9 🧪 Laboratório",
+    "text": "81.9 🧪 Laboratório\nPasso 1 — ambiente e dados.\nmkdir lab-pandas && cd lab-pandas\npython3.13 -m venv .venv\nsource .venv/bin/activate        # Windows: .venv\\Scripts\\activate\npython -m pip install pandas pyarrow\nCrie leituras.csv com as colunas data,estacao,cidade,temperatura,umidade,status e nove linhas, incluindo uma célula vazia na temperatura e um -999.\nPasso 2 — a carga ingênua. Leia com pd.read_csv(\"leituras.csv\") e imprima dtypes. Confirme que a data virou texto e que -999 entrou como número. Calcule df[\"temperatura\"].mean() e guarde o valor errado.\nPasso 3 — a carga correta. Releia com parse_dates, na_values=[\"-999\"] e dtype={\"estacao\": \"category\"}. Compare dtypes e a nova média. A diferença entre as duas médias é o custo de não declarar nada.\nPasso 4 — alinhamento. Reproduza:\nw     NaN\nx     NaN\ny    22.0\nz    31.0\nDepois faça a.add(b, fill_value=0) e explique a diferença. Esse é o argumento que resolve 90% dos NaN inesperados em soma de séries.\nPasso 5 — seleção. Para cada expressão abaixo, escreva antes se o resultado é Series ou DataFrame, e depois confira: df[\"cidade\"], df[[\"cidade\"]], df.loc[0], df.loc[[0]], df.iloc[0, 1], df.loc[0:2], df.iloc[0:2]. As duas últimas devolvem números diferentes de linhas — descubra por quê.\nPasso 6 — filtros. Selecione as leituras com temperatura acima de 30 e umidade acima de 88, das duas formas (máscara e query). Depois tente sem os parênteses na máscara e leia o erro. Confirme que o índice do resultado não foi renumerado:\n   cidade  temperatura  umidade\n2  Manaus         33.1       90\n5  Manaus         32.9       91\nPasso 7 — a atribuição encadeada. Execute df[df[\"cidade\"] == \"Belem\"][\"temperatura\"] = 0.0 e capture:\nChainedAssignmentError : A value is being set on a copy of a DataFrame or Series\nthrough chained assignment.\nConfirme que o DataFrame não mudou. Depois faça certo com um .loc só e confirme que mudou.\nPasso 8 — memória. Monte uma Series com 300 mil repetições de três cidades e compare memory_usage(deep=True) como texto e como category:\n300 mil cidades como texto    : 16,600,132 bytes\n300 mil cidades como category :    300,298 bytes\nAgora rode df.memory_usage(deep=True) no seu DataFrame real e identifique a coluna mais cara.\nPasso 9 — o laço proibido. Com 200 mil linhas, cronometre apply(lambda r: r[\"a\"] + r[\"b\"], axis=1) contra df[\"a\"] + df[\"b\"]. Anote a razão. Depois cronometre iterrows() e itertuples() sobre as mesmas linhas e confirme que iterrows devolve dtype object.\nPasso 10 — ida e volta. Salve o DataFrame com to_csv(index=False) e com to_parquet(). Releia os dois sem argumento nenhum e compare dtypes. O Parquet volta idêntico; o CSV volta com a data como texto e as categorias como str. Compare também o tamanho dos arquivos.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#resumo",
+    "href": "vol13/cap081-pandas-series-dataframe-e-a-carga-de-dados.html#resumo",
+    "title": "81  pandas: Series, DataFrame e a carga de dados",
+    "section": "81.10 Resumo",
+    "text": "81.10 Resumo\n\nUma Series é um ndarray com índice; um DataFrame é um conjunto de Series que compartilham o índice, cada uma com seu dtype.\npandas alinha pelo índice, NumPy opera por posição. NaN inesperado numa soma de séries quase sempre é índice que não se encontrou; add(..., fill_value=0) costuma ser a correção.\nread_csv sem argumentos é para explorar. Para carregar: parse_dates, na_values e dtype explícitos — inclusive category para texto repetitivo, que economizou 55x de memória aqui.\ninfo() mostra tipos e não-nulos; describe() mostra a distribuição. São os dois primeiros comandos sobre qualquer tabela nova.\nColchete é para coluna, .loc para rótulo, .iloc para posição. .loc inclui o fim da fatia; .iloc, não. Filtro preserva o índice original — reset_index(drop=True) quando ele não interessar.\nO pandas 3 tem copy-on-write: recorte é sempre independente, e atribuição encadeada levanta ChainedAssignmentError. Atribuir é sempre com um único .loc.\napply(axis=1) foi 1102x mais lento que a expressão vetorizada equivalente; iterrows() ainda perde os dtype. Iterar é o último recurso, e itertuples() é o menos ruim.\nA família read_*/to_* cobre CSV, Parquet, Excel, JSON, SQL e HTML. Use index=False ao escrever CSV e prefira Parquet para dados intermediários, porque ele preserva os tipos.",
     "crumbs": [
       "Volume 13 — Dados, Análise e Visualização\n",
       "<span class='chapter-number'>81</span>  <span class='chapter-title'>pandas: Series, DataFrame e a carga de dados</span>"
@@ -9513,7 +9755,161 @@
     "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html",
     "title": "82  Limpeza, transformação e agregação com pandas",
     "section": "",
-    "text": "(em elaboracao)",
+    "text": "82.1 O que chega\nO capítulo anterior carregou uma tabela bem-comportada. Os dados de verdade não são assim. Eles chegam com a cidade escrita de quatro jeitos, o valor como \"R$ 1.240,50\", uma linha duplicada porque o exportador rodou duas vezes, uma data em DD/MM/AAAA no meio de datas ISO, uma venda de quinze mil reais que ninguém sabe explicar e uma célula simplesmente vazia.\nDiz-se que a limpeza consome 80% do tempo de quem trabalha com dados. O número é folclore, a ordem de grandeza não é. Este capítulo é sobre esse trabalho — e sobre o que vem depois dele, que é responder perguntas com groupby.\nContinuamos com pandas 3.0.5.\nSete defeitos numa tabela de oito linhas. O primeiro passo nunca é corrigir; é diagnosticar.\nvalue_counts() numa coluna categórica é o diagnóstico mais barato que existe: seis “cidades” onde deviam ser três. Espaço à esquerda, espaço à direita, caixa alta, caixa baixa. Se você agrupar agora, terá seis grupos e conclusões erradas.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#o-que-chega",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#o-que-chega",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "",
+    "text": "df = pd.read_csv(\"vendas_sujas.csv\")\nprint(df)\n   pedido        data     cidade vendedor         valor  itens\n0    1001  2026-03-01     Belem       ana   R$ 1.240,50    3.0\n1    1002  01/03/2026      belem    BRUNO     R$ 890,00    2.0\n2    1003  2026-03-02   Curitiba      ana   R$ 2.100,00    5.0\n3    1003  2026-03-02   Curitiba      ana   R$ 2.100,00    5.0\n4    1004  2026-03-02  CURITIBA     carla     R$ 340,90    1.0\n5    1005  2026-03-03     Manaus    bruno           NaN    4.0\n6    1006  2026-03-03     Manaus    carla  R$ 15.000,00    2.0\n7    1007  2026-03-04      belem      ana     R$ 780,25    NaN\n\nprint(\"duplicadas :\", df.duplicated().sum())\nprint(df.isna().sum())\nprint(df[\"cidade\"].value_counts())\nduplicadas : 1\n\nvalor    1\nitens    1\n\ncidade\nCuritiba     2\nManaus       2\n  Belem      1\nbelem        1\nCURITIBA     1\n  belem      1",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#duplicatas",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#duplicatas",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.2 Duplicatas",
+    "text": "82.2 Duplicatas\nprint(df[df.duplicated(keep=False)][[\"pedido\", \"cidade\", \"valor\"]])\n   pedido    cidade        valor\n2    1003  Curitiba  R$ 2.100,00\n3    1003  Curitiba  R$ 2.100,00\nkeep=False marca todas as ocorrências, não só as repetições — é o que você quer para olhar antes de apagar. Depois, df.drop_duplicates() remove as linhas idênticas.\nDois argumentos importam. subset=[\"pedido\"] considera duplicata pela chave de negócio, mesmo que as demais colunas difiram — útil quando um registro foi corrigido e reexportado. E keep=\"last\" fica com a versão mais recente em vez da primeira.\nCuidado com drop_duplicates() sem subset em tabela larga: basta um campo de timestamp diferindo em milissegundos para nenhuma linha ser considerada duplicada.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#texto-o-acessador-.str",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#texto-o-acessador-.str",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.3 Texto: o acessador .str",
+    "text": "82.3 Texto: o acessador .str\nlim[\"cidade\"] = lim[\"cidade\"].str.strip().str.lower()\nlim[\"vendedor\"] = lim[\"vendedor\"].str.strip().str.lower()\nprint(lim[\"cidade\"].value_counts())\ncidade\nbelem       3\ncuritiba    2\nmanaus      2\nSeis viraram três. O acessador .str aplica métodos de string à coluna inteira, vetorizado, e trata NaN sozinho — \"texto\".strip() num NaN daria AttributeError, mas .str.strip() devolve NaN.\nO repertório útil: strip, lower, upper, title, replace, contains, startswith, len, split, zfill, cat e extract — este último aplica uma expressão regular (Capítulo 61) e devolve os grupos como colunas.\n\n82.3.1 Moeda brasileira\nlim[\"valor\"] = (lim[\"valor\"]\n                .str.replace(\"R$\", \"\", regex=False)\n                .str.replace(\".\", \"\", regex=False)\n                .str.replace(\",\", \".\", regex=False)\n                .str.strip()\n                .astype(\"float64\"))\nprint(lim[\"valor\"].tolist())\nantes : ['R$ 1.240,50', 'R$ 890,00', 'R$ 2.100,00', 'R$ 340,90', nan, 'R$ 15.000,00', 'R$ 780,25']\ndepois: [1240.5, 890.0, 2100.0, 340.9, nan, 15000.0, 780.25]\nA ordem importa: remover o ponto de milhar antes de trocar a vírgula por ponto. Invertido, 1.240,50 vira 1.240.50 e o astype falha.\nE note regex=False: sem ele, . é o metacaractere “qualquer caractere” e apagaria a string inteira. O padrão de .str.replace mudou justamente para evitar essa surpresa, mas escrever explícito documenta a intenção.\nQuando a origem é um CSV, dá para pular tudo isso: read_csv(..., decimal=\",\", thousands=\".\") faz a conversão na leitura.\n\n\n82.3.2 Números que não são números\nserie = pd.Series([\"10\", \"20\", \"trinta\", \"40\"])\npd.to_numeric(serie, errors=\"coerce\")   # [10.0, 20.0, nan, 40.0]\npd.to_numeric(serie)                    # ValueError\nsem coerce      : ValueError: Unable to parse string \"trinta\" at position 2\nerrors=\"coerce\" transforma o que não converte em NaN. É a ferramenta certa desde que você conte os NaN depois: to_numeric(col, errors=\"coerce\").isna().sum() diz quantos registros você acabou de descartar em silêncio. Sem essa conferência, coerce é uma forma elegante de perder dados.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#datas-mistas-a-armadilha",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#datas-mistas-a-armadilha",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.4 Datas mistas: a armadilha",
+    "text": "82.4 Datas mistas: a armadilha\nd1 = pd.to_datetime(lim[\"data\"], format=\"ISO8601\", errors=\"coerce\")\n0   2026-03-01\n1          NaT\n2   2026-03-02\n...\nUma linha não é ISO. A tentação é resolver com format=\"mixed\" e dayfirst=True:\npd.to_datetime(lim[\"data\"], format=\"mixed\", dayfirst=True)\n0   2026-01-03      &lt;- era 2026-03-01\n1   2026-03-01      &lt;- era 01/03/2026, correto\n2   2026-02-03      &lt;- era 2026-03-02\n5   2026-03-03\n7   2026-04-03      &lt;- era 2026-03-04\nCinco datas foram corrompidas em silêncio. dayfirst=True mandou interpretar o primeiro campo como dia, e ele foi aplicado também às datas ISO, onde o primeiro campo é o ano — o resultado é um mês trocado com o dia, sem erro, sem aviso, e com todas as datas ainda parecendo válidas. Se o dia for maior que 12, o pandas “conserta” sozinho e a corrupção fica intermitente, que é pior.\nA forma segura é declarar cada formato:\ndef datas(s):\n    \"\"\"ISO primeiro; o que sobrar, pelo formato brasileiro declarado.\"\"\"\n    fora = pd.to_datetime(s, format=\"ISO8601\", errors=\"coerce\")\n    falta = fora.isna()\n    fora[falta] = pd.to_datetime(s[falta], format=\"%d/%m/%Y\")\n    return fora\n0   2026-03-01\n1   2026-03-01\n2   2026-03-02\n4   2026-03-02\n5   2026-03-03\n6   2026-03-03\n7   2026-03-04\nSe sobrar NaT depois disso, existe um terceiro formato que você não conhecia — e agora sabe.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#valores-faltantes",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#valores-faltantes",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.5 Valores faltantes",
+    "text": "82.5 Valores faltantes\nTrês decisões, nesta ordem: descobrir, entender e só então tratar.\nlim.dropna(subset=[\"valor\"])          # 6 linhas (de 7)\nlim[\"itens\"].fillna(0)                # zera\nlim[\"itens\"].fillna(lim[\"itens\"].median())\nlim[\"valor\"].ffill()                  # repete o último válido\nlim[\"valor\"].interpolate()            # interpola linearmente\nO que escolher depende do que o buraco significa:\n\nAusência é zero? fillna(0) — o pedido não teve itens registrados e isso quer dizer nenhum.\nAusência é “não medido”? Deixe NaN. As agregações do pandas o ignoram por padrão, e é exatamente esse o comportamento correto.\nSérie temporal com falha do sensor? ffill() (repetir a última leitura) ou interpolate(), sabendo que você está inventando dados e que isso precisa estar documentado.\nFaltou a chave? dropna(subset=[...]), porque a linha não pode ser usada.\n\ndropna() sem argumento apaga toda linha com qualquer faltante — em tabela larga, isso costuma eliminar 90% dos dados. Use subset sempre, ou thresh=n para exigir um mínimo de colunas preenchidas.\n\n\n\n\n\n\nAvisosum() de um grupo só de NaN é zero, não NaN\n\n\n\nmanaus    bruno       0.00\n          carla   15000.00\nO vendedor bruno em manaus tem uma única venda, cujo valor é NaN. A soma deu 0.00, e num relatório isso se lê como “vendeu zero” em vez de “não sabemos”. Quando a distinção importa, use sum(min_count=1), que devolve NaN se não houver nenhum valor válido.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#valores-absurdos",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#valores-absurdos",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.6 Valores absurdos",
+    "text": "82.6 Valores absurdos\nFaltante o pandas mostra; absurdo, não. A regra do intervalo interquartil dá um primeiro filtro barato:\nq1, q3 = lim[\"valor\"].quantile([0.25, 0.75])\niqr = q3 - q1\nsuspeitos = lim[(lim[\"valor\"] &lt; q1 - 1.5 * iqr) | (lim[\"valor\"] &gt; q3 + 1.5 * iqr)]\nQ1=807.69  Q3=1885.12  IQR=1077.44\nfaixa aceita: -808.47 a 3501.28\nsuspeitos:\n   pedido  cidade    valor\n6    1006  manaus  15000.0\nSuspeito não é errado. Uma venda de quinze mil pode ser a maior venda do ano ou um erro de digitação com três zeros a mais. A regra dos 1,5 IQR aponta onde olhar; a decisão de excluir é do negócio, não do estatístico — e o clip(inferior, superior) que “resolve” o problema truncando os extremos é uma escolha, não uma limpeza.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#groupby-dividir-aplicar-combinar",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#groupby-dividir-aplicar-combinar",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.7 groupby: dividir, aplicar, combinar",
+    "text": "82.7 groupby: dividir, aplicar, combinar\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 82.1: O modelo dividir-aplicar-combinar e as três formas de resultado.\n\n\n\ng = lim.groupby(\"cidade\", observed=True)[\"valor\"]\nprint(g.agg([\"count\", \"sum\", \"mean\"]))\n          count       sum      mean\ncidade\nbelem         3   2910.75    970.25\ncuritiba      2   2440.90   1220.45\nmanaus        1  15000.00  15000.00\nPara nomear as colunas de saída, a forma moderna é a agregação nomeada, que evita o índice de colunas em dois níveis:\nres = lim.groupby(\"cidade\", observed=True).agg(\n    pedidos=(\"pedido\", \"count\"),\n    total=(\"valor\", \"sum\"),\n    ticket=(\"valor\", \"mean\"),\n    itens=(\"itens\", \"sum\"),\n)\nprint(res)\n          pedidos     total    ticket  itens\ncidade\nbelem           3   2910.75    970.25      5\ncuritiba        2   2440.90   1220.45      6\nmanaus          2  15000.00  15000.00      6\nCompare manaus nas duas saídas: count sobre valor deu 1, e pedidos (count sobre pedido) deu 2. Não é inconsistência — count conta não-nulos da coluna que você nomeou, e Manaus tem duas linhas, uma delas com valor faltante. Escolher a coluna do count é escolher o que “quantidade” significa.\n\n82.7.1 observed=True\nAo agrupar por uma coluna category, o pandas historicamente devolvia todas as combinações declaradas, inclusive as que não ocorrem — com duas categóricas de 100 valores, dez mil linhas vazias. observed=True restringe ao que existe nos dados. É o padrão no pandas 3, mas continua valendo escrever explícito enquanto houver código antigo por perto.\n\n\n82.7.2 transform: o valor do grupo em cada linha\nlim2[\"total_cidade\"] = lim2.groupby(\"cidade\", observed=True)[\"valor\"].transform(\"sum\")\nlim2[\"participacao\"] = lim2[\"valor\"] / lim2[\"total_cidade\"]\n     cidade     valor  total_cidade  participacao\n0     belem   1240.50       2910.75        0.4262\n1     belem    890.00       2910.75        0.3058\n2  curitiba   2100.00       2440.90        0.8603\n4  curitiba    340.90       2440.90        0.1397\n6    manaus  15000.00      15000.00        1.0000\n7     belem    780.25       2910.75        0.2681\nEste é o idioma que substitui um merge do resultado do groupby de volta na tabela original. transform devolve algo com o mesmo índice e o mesmo tamanho da entrada, então a atribuição direta funciona e o alinhamento é automático.\n\n\n82.7.3 filter: descartar grupos inteiros\ngrandes = lim.groupby(\"cidade\", observed=True).filter(lambda g: g[\"valor\"].sum() &gt; 2000)\nDiferente de df[df[\"valor\"] &gt; 2000], que filtra linhas, filter avalia o grupo e mantém ou descarta todas as suas linhas. É como se remove a cauda de categorias com poucas observações antes de modelar.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#discretizar-pivotar-empilhar",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#discretizar-pivotar-empilhar",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.8 Discretizar, pivotar, empilhar",
+    "text": "82.8 Discretizar, pivotar, empilhar\nlim3[\"porte\"] = pd.cut(lim3[\"valor\"], bins=[0, 500, 2000, np.inf],\n                       labels=[\"pequeno\", \"medio\", \"grande\"])\nprint(lim3[\"porte\"].value_counts().sort_index())\nporte\npequeno    1\nmedio      3\ngrande     2\ncut corta em faixas que você define; qcut corta em quantis, produzindo grupos do mesmo tamanho. O resultado é uma category ordenada, que já ordena certo em gráfico e em sort_index.\np = lim.pivot_table(index=\"cidade\", columns=\"vendedor\", values=\"valor\",\n                    aggfunc=\"sum\", fill_value=0, observed=True)\nprint(p)\nvendedor      ana  bruno    carla\ncidade\nbelem     2020.75  890.0      0.0\ncuritiba  2100.00    0.0    340.9\nmanaus       0.00    0.0  15000.0\npivot_table agrega e reorganiza: é o groupby([\"cidade\",\"vendedor\"]).sum() com um dos níveis virando colunas. E melt faz o caminho de volta:\nlongo = p.reset_index().melt(id_vars=\"cidade\", var_name=\"vendedor\", value_name=\"valor\")\nformato largo: (3, 4) | formato longo: (9, 3)\nLargo é para ler, longo é para processar. A tabela larga é a que se apresenta numa reunião; a longa (uma observação por linha) é a que gráficos, modelos e groupby esperam. Saber ir e voltar entre as duas é metade do trabalho com dados tabulares.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#juntar-tabelas",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#juntar-tabelas",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.9 Juntar tabelas",
+    "text": "82.9 Juntar tabelas\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 82.2: Os tipos de junção e o defeito que nenhum deles avisa.\n\n\n\nprint(tot.merge(metas, on=\"cidade\", how=\"outer\", indicator=True))\n         cidade     valor    meta      _merge\n0         belem   2910.75  3000.0        both\n1      curitiba   2440.90  2000.0        both\n2        manaus  15000.00     NaN   left_only\n3  porto alegre       NaN  1500.0  right_only\nindicator=True é a ferramenta de diagnóstico mais subestimada do pandas: um value_counts() na coluna _merge responde na hora quantas chaves não casaram e de que lado — antes de você descobrir isso pela soma errada no relatório.\ntot.merge(dup, on=\"cidade\", validate=\"one_to_one\")\nMergeError : Merge keys are not unique in right dataset; not a one-to-one merge\nvalidate= deveria ser obrigatório. Um merge com chave duplicada do lado direito multiplica linhas em silêncio — o DataFrame cresce, o total dobra e nada indica o motivo. As opções são \"one_to_one\", \"one_to_many\", \"many_to_one\" e \"many_to_many\"; declarar a que você espera converte um erro de dados num MergeError na linha certa.\nUm detalhe de tipo: as colunas-chave precisam ter o mesmo dtype. Juntar uma coluna int64 com outra str de dígitos não casa nada e devolve tudo NaN sem reclamar.\nPara empilhar tabelas de mesmo formato, pd.concat([a, b], ignore_index=True) — ignore_index evita índices repetidos, que quebram operações adiante.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#séries-temporais",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#séries-temporais",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.10 Séries temporais",
+    "text": "82.10 Séries temporais\nCom um índice de datas, dois métodos resolvem a maioria dos casos:\nts.resample(\"W\").sum()        # reamostra: diário -&gt; semanal\nts.rolling(7).mean()          # janela móvel de 7 observações\nsoma semanal (resample W):\n2026-03-01    1000.25\n2026-03-08    6817.61\n2026-03-15    6775.96\n2026-03-22    5725.18\n2026-03-29    6173.93\n2026-04-05    1022.66\nFreq: W-SUN\nresample é o groupby do tempo: \"D\", \"W\", \"ME\" (fim de mês), \"h\", \"15min\". rolling mantém a frequência e suaviza — os primeiros 6 valores de uma janela de 7 são NaN, porque não há histórico suficiente, e isso é correto.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#escrever-a-limpeza-como-um-cano",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#escrever-a-limpeza-como-um-cano",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.11 Escrever a limpeza como um cano",
+    "text": "82.11 Escrever a limpeza como um cano\nDepois de descobrir as correções interativamente, o resultado precisa virar código que roda sozinho:\ndef datas(s): ...\n\ndef limpar(d):\n    d = d.drop_duplicates()\n    return d.assign(\n        cidade=d[\"cidade\"].str.strip().str.lower().astype(\"category\"),\n        vendedor=d[\"vendedor\"].str.strip().str.lower(),\n        data=datas(d[\"data\"]),\n        valor=(d[\"valor\"].str.replace(\"R$\", \"\", regex=False)\n                          .str.replace(\".\", \"\", regex=False)\n                          .str.replace(\",\", \".\", regex=False)\n                          .str.strip().astype(\"float64\")),\n        itens=d[\"itens\"].fillna(0).astype(\"int64\"),\n    )\n\ndef resumir(d):\n    return (d.groupby(\"cidade\", observed=True)\n             .agg(pedidos=(\"pedido\", \"count\"), total=(\"valor\", \"sum\"))\n             .sort_values(\"total\", ascending=False))\n\nsaida = pd.read_csv(\"vendas_sujas.csv\").pipe(limpar).pipe(resumir)\nprint(saida)\n          pedidos     total\ncidade\nmanaus          2  15000.00\nbelem           3   2910.75\ncuritiba        2   2440.90\n.pipe(f) chama f(df) e devolve o resultado, permitindo encaixar funções suas na cadeia de métodos. Cada etapa é uma função pura, testável com pytest (Capítulo 70) sobre um DataFrame pequeno construído à mão — e é assim que a limpeza deixa de ser um notebook que só o autor sabe rodar.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#jeito-pythônico",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#jeito-pythônico",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.12 🐍 Jeito Pythônico",
+    "text": "82.12 🐍 Jeito Pythônico\nDiagnostique antes de corrigir. info(), isna().sum(), duplicated().sum() e value_counts() nas colunas categóricas. Correção escrita sem diagnóstico conserta o defeito que você imaginou, não o que existe.\nerrors=\"coerce\" sempre seguido de contagem. Converter o que não converte em NaN é útil; fazê-lo sem conferir quantos viraram NaN é perder dados com sintaxe elegante.\nNunca dayfirst=True com formatos mistos. Declare o formato de cada um. A alternativa corrompe datas válidas sem erro, e o estrago só aparece semanas depois num gráfico com sazonalidade impossível.\ntransform em vez de merge de volta. Para trazer a estatística do grupo para cada linha, groupby(...).transform(\"sum\") alinha sozinho pelo índice e não duplica nada.\nAgregação nomeada (total=(\"valor\", \"sum\")). Nomes de coluna prontos, sem MultiIndex para desmontar depois.\nvalidate= em todo merge, indicator=True quando estiver em dúvida. Junção é a operação que mais destrói totais em silêncio, e as duas defesas custam uma palavra cada.\nLongo para processar, largo para apresentar. Deixe pivot_table para o final, na hora de mostrar.\nA limpeza é código, não histórico de notebook. Funções pequenas encadeadas com .pipe, cada uma testável — o mesmo padrão do resto do livro, aplicado a dados.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#laboratório",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#laboratório",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.13 🧪 Laboratório",
+    "text": "82.13 🧪 Laboratório\nPasso 1 — o arquivo sujo. Crie vendas_sujas.csv com as colunas pedido,data,cidade,vendedor,valor,itens e oito linhas contendo, de propósito: uma linha duplicada inteira, cidade com espaço e caixa mista, valor no formato \"R$ 1.240,50\", uma data em DD/MM/AAAA entre datas ISO, uma célula vazia em valor, outra em itens, e uma venda de R$ 15.000,00.\nPasso 2 — diagnóstico. Antes de mudar qualquer coisa, produza um relatório com shape, dtypes, isna().sum(), duplicated().sum() e value_counts() de cidade e vendedor. Confirme as seis “cidades”:\ncidade\nCuritiba     2\nManaus       2\n  Belem      1\nbelem        1\nCURITIBA     1\n  belem      1\nPasso 3 — duplicatas. Liste as duplicadas com keep=False, remova com drop_duplicates() e confirme a contagem. Depois teste subset=[\"pedido\"] e explique quando as duas dão resultados diferentes.\nPasso 4 — texto. Normalize cidade e vendedor com .str.strip().str.lower() e confirme que sobraram três de cada. Depois converta valor para float64 com a cadeia de .str.replace. Inverta a ordem das duas primeiras substituições e guarde o erro que aparece.\nPasso 5 — a armadilha das datas. Rode pd.to_datetime(col, format=\"mixed\", dayfirst=True) e compare com o original coluna a coluna:\n0   2026-01-03      &lt;- era 2026-03-01\nConte quantas datas foram corrompidas. Depois implemente a função datas(s) em duas etapas e confirme que nenhuma sobrou NaT.\nPasso 6 — faltantes. Para cada coluna com NaN, decida e escreva num comentário o que a ausência significa antes de tratar. Compare dropna() sem argumento (quantas linhas sobram?) com dropna(subset=[\"valor\"]).\nPasso 7 — o zero enganoso. Agrupe por [\"cidade\", \"vendedor\"] e some. Encontre o grupo cuja soma é 0.00 porque todos os valores são NaN. Refaça com sum(min_count=1) e compare.\nPasso 8 — outliers. Calcule Q1, Q3 e IQR de valor e liste o que cai fora de 1,5 IQR:\nfaixa aceita: -808.47 a 3501.28\nsuspeitos:\n   pedido  cidade    valor\n6    1006  manaus  15000.0\nRefaça com uma janela por cidade, usando transform(\"quantile\"). Um valor pode ser normal no conjunto e absurdo no seu grupo.\nPasso 9 — as três formas do groupby. Sobre a tabela limpa, produza: (a) com agg, uma linha por cidade com pedidos, total e ticket médio; (b) com transform, uma coluna de participação de cada venda no total da sua cidade; (c) com filter, apenas as cidades com mais de duas vendas. Confirme o número de linhas de cada resultado: 3, 6 e algo menor que 6.\nPasso 10 — junção com defesa. Crie uma tabela de metas com uma cidade a mais e uma a menos que a de vendas. Junte com how=\"outer\", indicator=True e faça value_counts() em _merge. Depois duplique uma linha das metas, junte de novo sem validate e confira o total — ele deve ter crescido. Acrescente validate=\"many_to_one\" e capture:\nMergeError : Merge keys are not unique in right dataset; not a one-to-one merge\nPasso 11 — o cano. Reescreva tudo como carregar, limpar, resumir, encadeadas com .pipe. Escreva um teste pytest para limpar que passe um DataFrame de três linhas construído à mão e verifique os dtype de saída. Rode o cano no arquivo original e confirme que o resultado bate com o que você obteve interativamente.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#resumo",
+    "href": "vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.html#resumo",
+    "title": "82  Limpeza, transformação e agregação com pandas",
+    "section": "82.14 Resumo",
+    "text": "82.14 Resumo\n\nDiagnóstico primeiro: isna().sum(), duplicated().sum() e value_counts() revelam em segundos o que a inspeção visual não pega — como seis grafias da mesma cidade.\n.str aplica métodos de string à coluna inteira e trata NaN sozinho; a conversão de moeda brasileira exige remover o milhar antes de trocar a vírgula, e regex=False para o ponto.\nformat=\"mixed\" com dayfirst=True corrompe datas ISO em silêncio. Declare cada formato: ISO com errors=\"coerce\", e o resto pelo format explícito sobre as que sobraram.\nFaltante se trata conforme o que a ausência significa — zero, não medido, falha de sensor ou linha inválida são quatro decisões diferentes. dropna() sem subset costuma apagar quase tudo.\nsum() de um grupo só de NaN devolve 0, não NaN; min_count=1 preserva a distinção entre “vendeu zero” e “não sabemos”.\ngroupby tem três saídas: agg (uma linha por grupo), transform (mesma forma da entrada, ideal para criar coluna) e filter (mantém ou descarta o grupo inteiro). Agregação nomeada evita MultiIndex de colunas.\npivot_table agrega e alarga; melt estreita. Longo para processar, largo para apresentar.\nEm merge, use validate= sempre e indicator=True na dúvida: chave duplicada multiplica linhas em silêncio, e dtype diferente entre as chaves não casa nada.\nA limpeza final é código encadeado com .pipe, em funções puras e testáveis — não um notebook que só o autor consegue rodar.",
     "crumbs": [
       "Volume 13 — Dados, Análise e Visualização\n",
       "<span class='chapter-number'>82</span>  <span class='chapter-title'>Limpeza, transformação e agregação com pandas</span>"
@@ -9524,7 +9920,139 @@
     "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html",
     "title": "83  Visualização de dados com Matplotlib",
     "section": "",
-    "text": "(em elaboracao)",
+    "text": "83.1 A escolha que determina tudo: pyplot ou objetos\nO groupby do Capítulo 82 devolveu uma tabela com sessenta linhas de faturamento diário. Olhando os números, ninguém responde “está subindo?”, “aquela queda foi feriado ou defeito?”, “Manaus destoa das outras?”. Um gráfico responde as três em dois segundos.\nMatplotlib é a biblioteca de gráficos do Python desde 2003. Ela é a base sobre a qual pandas.plot, seaborn e boa parte do ecossistema científico foram construídos — o que significa que, mesmo usando uma camada mais alta, é a Matplotlib que você vai ajustar quando o resultado não sair como queria.\nEste capítulo usa Matplotlib 3.11.1 com pandas 3.0.5.\nMatplotlib tem duas interfaces, e a confusão entre elas é a causa da maioria dos problemas de quem está começando.\nA regra é curta: use plt.subplots() para obter os objetos e trabalhe com eles.\nplt.subplots() faz duas coisas: cria uma Figure e cria os Axes dentro dela. E ax.plot devolve uma lista de Line2D porque um plot pode desenhar várias linhas de uma vez — daí o linha, = ax.plot(...) com vírgula que você vê por aí.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#a-escolha-que-determina-tudo-pyplot-ou-objetos",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#a-escolha-que-determina-tudo-pyplot-ou-objetos",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "",
+    "text": "Figura 83.1: As duas interfaces da Matplotlib. Só uma delas escala.\n\n\n\n\nimport matplotlib.pyplot as plt\n\nfig, ax = plt.subplots(figsize=(6, 3))\nprint(\"type(fig)      :\", type(fig).__name__)\nprint(\"type(ax)       :\", type(ax).__name__)\nlinhas = ax.plot([1, 2, 3], [2, 4, 3])\nprint(\"ax.plot devolve:\", type(linhas).__name__, \"de\", type(linhas[0]).__name__)\ntype(fig)      : Figure\ntype(ax)       : Axes\nax.plot devolve: list de Line2D",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#anatomia",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#anatomia",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.2 Anatomia",
+    "text": "83.2 Anatomia\n\n\n\n\n\n\nFigura 83.2: A Figure é a tela; o Axes é o sistema de coordenadas dentro dela; tudo que aparece é um Artist.\n\n\n\nTrês palavras explicam a API inteira:\n\nFigure — a tela, o que vira arquivo. Tem tamanho (figsize, em polegadas) e resolução (dpi).\nAxes — uma área de plotagem com seus eixos, escalas, título e legenda. Uma Figure pode ter vários. Cuidado com o nome: Axes (plural em inglês) é o gráfico inteiro; axis (singular) é um eixo, o x ou o y.\nArtist — todo o resto. Cada linha, marcador, texto, borda e tique é um objeto que você pode pegar e modificar.\n\nOs métodos seguem o padrão ax.set_&lt;coisa&gt;(): set_title, set_xlabel, set_ylabel, set_xlim, set_yscale. Quando não lembrar o nome, ax.set(title=\"...\", xlabel=\"...\") aceita vários de uma vez.\n\n83.2.1 Vários gráficos\nfig, axs = plt.subplots(2, 3, figsize=(10.5, 5.6))\nsubplots()      -&gt; ax e um Axes\nsubplots(1,3)   -&gt; ndarray de forma (3,)\nsubplots(2,3)   -&gt; ndarray de forma (2, 3)\nCom mais de um, subplots devolve um array NumPy de Axes — indexado como qualquer array (Capítulo 80), inclusive com axs.flat para percorrer todos num laço. Com um só, devolve o objeto direto. Essa diferença de tipo quebra código genérico; squeeze=False força sempre a forma 2D.\nfig.tight_layout() no final ajusta os espaçamentos para que rótulos não se sobreponham. É praticamente obrigatório em figura com vários painéis.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#os-tipos-e-quando-usar-cada-um",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#os-tipos-e-quando-usar-cada-um",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.3 Os tipos e quando usar cada um",
+    "text": "83.3 Os tipos e quando usar cada um\n\n\n\n\n\n\nFigura 83.3: Seis tipos de gráfico e a pergunta que cada um responde.\n\n\n\nA escolha do tipo é a decisão de visualização mais importante, e ela decorre da pergunta:\n\n\n\n\n\n\n\n\npergunta\ngráfico\nmétodo\n\n\n\n\ncomo evoluiu no tempo?\nlinha\nax.plot\n\n\nduas variáveis se relacionam?\ndispersão\nax.scatter\n\n\ncomo as categorias se comparam?\nbarras\nax.bar, ax.barh\n\n\ncomo os valores se distribuem?\nhistograma\nax.hist\n\n\ncomo a distribuição varia por grupo?\ncaixa, violino\nax.boxplot, ax.violinplot\n\n\ncomo se comporta uma matriz?\nmapa de calor\nax.imshow, ax.pcolormesh\n\n\n\nTrês observações que economizam retrabalho:\n\nbarh em vez de bar quando os rótulos são longos. Nome de cidade na horizontal se lê; na vertical, vira texto inclinado a 45 graus.\nBarra sempre começa no zero. Comprimento é a codificação visual, e truncar o eixo mente sobre a proporção. Linha e dispersão não têm essa obrigação.\nHistograma depende do bins. O padrão de 10 esconde estrutura; teste bins=30, bins=\"auto\" e olhe os dois. Um histograma com poucos intervalos é um resumo, não um diagnóstico.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#do-padrão-ao-publicável",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#do-padrão-ao-publicável",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.4 Do padrão ao publicável",
+    "text": "83.4 Do padrão ao publicável\n\n\n\n\n\n\nFigura 83.4: À esquerda, dois bar() no mesmo Axes: o segundo cobre o primeiro por inteiro. À direita, o mesmo dado legível.\n\n\n\nO painel da esquerda tem um defeito que a Matplotlib não avisa: duas chamadas a ax.bar com as mesmas posições desenham uma barra em cima da outra, e a série de 2025 desapareceu inteira sob a de 2026. O gráfico está errado e parece certo.\nA correção é deslocar as posições à mão:\nlarg = 0.38\npos = np.arange(len(dados))\nax.bar(pos - larg / 2, dados[\"2025\"], larg, label=\"2025\", color=\"#a0aec0\")\nax.bar(pos + larg / 2, dados[\"2026\"], larg, label=\"2026\", color=\"#2b6cb0\")\nax.set_xticks(pos, dados[\"cidade\"])\nax.set_ylabel(\"faturamento (R$ mil)\")\nax.legend(frameon=False)\nax.spines[[\"top\", \"right\"]].set_visible(False)\nax.grid(axis=\"y\", alpha=0.3)\nax.set_axisbelow(True)\nAs últimas quatro linhas são o acabamento que separa um gráfico de rascunho de um apresentável, e valem para praticamente qualquer figura:\n\nset_ylabel com unidade. Um eixo sem unidade obriga quem lê a adivinhar.\nlegend(frameon=False) — a moldura da legenda quase nunca acrescenta.\nspines[[\"top\",\"right\"]].set_visible(False) — remove as duas bordas que não codificam nada.\ngrid(axis=\"y\", alpha=0.3) com set_axisbelow(True) — grade discreta, e atrás dos dados, não por cima.\n\nE, para rotular valores diretamente nas barras, ax.bar_label(barras, fmt=\"%.0f\") faz o que o annotate da figura fez, com uma linha.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#escalas",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#escalas",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.5 Escalas",
+    "text": "83.5 Escalas\n\n\n\n\n\n\nFigura 83.5: O mesmo par de curvas em escala linear e logarítmica.\n\n\n\nQuando as grandezas diferem por ordens de magnitude, a escala linear esconde tudo: no painel da esquerda a curva linear parece constante em zero, porque o eixo precisa acomodar dezessete milhões. ax.set_yscale(\"log\") resolve, e ainda tem uma propriedade útil — em escala log, crescimento exponencial vira reta, e a inclinação é a taxa.\nOutras conversões do mesmo tipo: set_xscale(\"log\") para distribuições de cauda longa e symlog quando os dados incluem zero e negativos, que o log puro não representa.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#salvar",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#salvar",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.6 Salvar",
+    "text": "83.6 Salvar\nfig.savefig(\"grafico.png\", dpi=150, bbox_inches=\"tight\")\npng dpi=150       27,684 bytes\npng dpi=300       63,151 bytes\nsvg dpi=-         16,001 bytes\npdf dpi=-          8,083 bytes\nO formato decorre do destino:\n\nPNG para tela, e-mail e apresentação. dpi=150 para tela, dpi=300 para impressão.\nSVG ou PDF para publicação — são vetoriais, ampliam sem borrar, e no caso deste gráfico ainda ficaram menores que o PNG.\nbbox_inches=\"tight\" corta a margem branca em excesso; sem ele, um rótulo longo pode sair cortado do arquivo mesmo aparecendo na tela.\n\nDuas notas de ambiente. Em script sem interface gráfica (servidor, CI), defina o backend não interativo antes de importar o pyplot:\nimport matplotlib\nmatplotlib.use(\"Agg\")\nimport matplotlib.pyplot as plt\nE feche as figuras:\nfiguras abertas depois de 5 subplots sem close: 5\ndepois de plt.close('all')                    : 0\nCada plt.subplots() registra a figura no gerenciador do pyplot, e ela não é coletada pelo GC enquanto estiver lá. Um laço que gera mil gráficos sem plt.close(fig) consome memória até o processo morrer — e a Matplotlib avisa só depois de vinte figuras abertas.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#o-atalho-dataframe.plot",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#o-atalho-dataframe.plot",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.7 O atalho: DataFrame.plot",
+    "text": "83.7 O atalho: DataFrame.plot\neixo = df.plot(figsize=(6, 3))\nd.plot() devolve: Axes\nmesmo objeto do ax de plt.subplots: True\nO pandas embute uma camada sobre a Matplotlib que entende índice, colunas e nomes: df.plot() desenha todas as colunas numéricas contra o índice, com legenda pronta. Aceita kind=\"bar\", \"barh\", \"hist\", \"box\", \"scatter\", \"area\", e ainda df.plot(subplots=True).\nO ponto que torna isso útil de verdade: plot devolve o Axes, e aceita ax= como argumento. Ou seja, você usa o atalho para o traçado e a API de objetos para o acabamento:\nfig, ax = plt.subplots(figsize=(7, 3.5))\ndf.plot(ax=ax, lw=1.6)\nax.set_ylabel(\"faturamento (R$)\")\nax.spines[[\"top\", \"right\"]].set_visible(False)\nfig.savefig(\"vendas.png\", dpi=150, bbox_inches=\"tight\")\nPara gráficos estatísticos (distribuição por grupo, matriz de correlação, facetas), seaborn é a camada seguinte — e ela também trabalha sobre Axes da Matplotlib, então tudo deste capítulo continua valendo.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#estilo-e-configuração",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#estilo-e-configuração",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.8 Estilo e configuração",
+    "text": "83.8 Estilo e configuração\ntotal de estilos: 28\nalguns: Solarize_Light2, bmh, classic, dark_background, fast, fivethirtyeight\nfigure.figsize : [6.4, 4.8]\nfigure.dpi     : 100.0\nfont.size      : 10.0\nplt.style.use(\"seaborn-v0_8-whitegrid\") troca a aparência inteira numa linha. Para ajustes finos, plt.rcParams é o dicionário de configuração global:\nplt.rcParams.update({\"figure.dpi\": 120, \"font.size\": 11, \"axes.grid\": True})\nMelhor ainda é with plt.rc_context({...}):, que restringe a mudança ao bloco (Capítulo 40) em vez de deixar estado global alterado para o resto do processo.\nO ciclo de cores padrão tem dez cores escolhidas para serem distinguíveis. Duas cautelas: cerca de 8% dos homens têm alguma deficiência na percepção de cores, e vermelho contra verde é justamente o par que some — use viridis, cividis ou marcadores diferentes. E nunca use o mapa jet: ele cria fronteiras que não existem nos dados e some quando impresso em cinza.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#o-gráfico-honesto",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#o-gráfico-honesto",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.9 O gráfico honesto",
+    "text": "83.9 O gráfico honesto\nUm gráfico é um argumento, e ele pode mentir sem que uma única linha de código esteja errada:\n\nEixo y truncado num gráfico de barras transforma 3% de diferença em “o dobro”. Barra começa no zero, sempre.\nEscala dupla no eixo y (dois twinx) permite fazer duas séries quaisquer parecerem correlacionadas, escolhendo os limites convenientemente.\nOrdenação por conveniência. Categorias em ordem alfabética quando ordená-las por valor mudaria a conclusão.\nExcesso de tinta. Sombra, 3D, gradiente e fundo escuro não acrescentam informação e atrapalham a leitura de valores.\nMédia sem dispersão. Quatro grupos com a mesma média podem ter distribuições completamente diferentes — é o que o boxplot mostra e o gráfico de barras esconde.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#jeito-pythônico",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#jeito-pythônico",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.10 🐍 Jeito Pythônico",
+    "text": "83.10 🐍 Jeito Pythônico\nfig, ax = plt.subplots() sempre. A interface pyplot com estado global funciona no REPL e falha em tudo o mais: função, laço, notebook reexecutado fora de ordem, teste. Se você escreveu plt.title(...), troque por ax.set_title(...).\nFunção que desenha recebe ax como parâmetro. def grafico_vendas(df, ax): é composta, testada e reaproveitada; def grafico_vendas(df): que cria e salva a própria figura não é nenhuma das três.\nplt.close(fig) em qualquer laço que gera figuras. O pyplot segura a referência, o coletor de lixo não pode fazer nada, e o vazamento só aparece na centésima iteração.\nmatplotlib.use(\"Agg\") antes do import pyplot em script, servidor ou CI. Depois do import não tem efeito, e o erro que aparece fala de display, não de ordem de import.\nbbox_inches=\"tight\" ao salvar, e formato vetorial (SVG/PDF) quando o destino é publicação. É gratuito e evita o rótulo cortado que só se descobre no arquivo final.\nRótulo com unidade em todo eixo, e legenda só quando há mais de uma série. Legenda com um item é ruído; eixo sem unidade é adivinhação.\nrc_context em vez de mexer no rcParams global. Mudança global de configuração é estado escondido — o mesmo problema que a API de objetos resolve, um nível acima.\nBarra começa no zero. Não é preciosismo: é a diferença entre um gráfico e um argumento capcioso.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#laboratório",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#laboratório",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.11 🧪 Laboratório",
+    "text": "83.11 🧪 Laboratório\nPasso 1 — ambiente.\nmkdir lab-plot && cd lab-plot\npython3.13 -m venv .venv\nsource .venv/bin/activate        # Windows: .venv\\Scripts\\activate\npython -m pip install matplotlib pandas\npython -c \"import matplotlib; print(matplotlib.__version__, matplotlib.get_backend())\"\nPasso 2 — os objetos. Crie fig, ax = plt.subplots() e imprima os tipos, fig.axes, e confirme que ax.get_figure() is fig:\ntype(fig)      : Figure\ntype(ax)       : Axes\nax.plot devolve: list de Line2D\nDepois faça subplots(1, 3) e subplots(2, 3) e imprima axs.shape em cada caso.\nPasso 3 — a série temporal. Com uma Series de 60 dias (use cumsum de ruído para ter tendência), desenhe a linha e acrescente, um de cada vez: título, rótulo dos dois eixos, grade com alpha=0.3, rotação dos tiques do x. Salve depois de cada acréscimo e compare os arquivos.\nPasso 4 — a grade de tipos. Monte um subplots(2, 3) com linha, dispersão, barras horizontais, histograma, boxplot e imshow, cada um com título. Use fig.tight_layout() e observe o que muda se você tirá-lo.\nPasso 5 — o bug das barras. Chame ax.bar duas vezes com as mesmas posições e séries diferentes. Confirme que uma sumiu. Depois corrija com o deslocamento de ±larg/2 e o set_xticks. Este é o único passo do laboratório em que o código errado não gera nenhum aviso.\nPasso 6 — acabamento. Sobre o gráfico corrigido, aplique legend(frameon=False), remoção das spines de cima e da direita, grid(axis=\"y\") com set_axisbelow(True) e bar_label. Salve as duas versões lado a lado e compare.\nPasso 7 — escala. Plote 40*t e 2**t para t de 1 a 24 no mesmo Axes, com escala linear e depois com set_yscale(\"log\"). Na versão log, confirme que a exponencial virou uma reta e meça a inclinação.\nPasso 8 — formatos. Salve o mesmo gráfico como PNG a 150 e 300 dpi, SVG e PDF, e compare os tamanhos:\npng dpi=150       27,684 bytes\npng dpi=300       63,151 bytes\nsvg dpi=-         16,001 bytes\npdf dpi=-          8,083 bytes\nDepois amplie o PNG e o SVG a 400% e olhe as bordas. Refaça um dos salvamentos sem bbox_inches=\"tight\" com um rótulo de eixo bem longo.\nPasso 9 — o vazamento. Escreva um laço que cria 30 figuras sem fechar e imprima len(plt.get_fignums()) a cada dez. Observe o aviso da Matplotlib a partir da vigésima. Refaça com plt.close(fig) no fim de cada volta e confirme que o número fica em zero.\nPasso 10 — função composta. Escreva def barras_por_cidade(df, ax, ano): que desenha num Axes recebido e não cria figura nem salva nada. Use-a para preencher um subplots(1, 2) com dois anos diferentes, e depois de novo para gerar uma figura de painel único. A mesma função serviu aos dois casos — é isso que a interface de objetos compra.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#resumo",
+    "href": "vol13/cap083-visualizacao-de-dados-com-matplotlib.html#resumo",
+    "title": "83  Visualização de dados com Matplotlib",
+    "section": "83.12 Resumo",
+    "text": "83.12 Resumo\n\nMatplotlib tem duas interfaces. Use a orientada a objetos: fig, ax = plt.subplots() e depois ax.set_*. A pyplot com estado global só serve para um gráfico rápido no REPL.\nFigure é a tela, Axes é a área de plotagem (pode haver várias por figura) e Artist é cada elemento desenhado. Com mais de um painel, subplots devolve um array NumPy de Axes.\nA escolha do tipo decorre da pergunta: linha para tempo, dispersão para relação, barras para comparação, histograma para distribuição, caixa para distribuição por grupo, imshow para matriz.\nDuas chamadas a ax.bar nas mesmas posições sobrepõem as barras sem nenhum aviso. Barras agrupadas exigem deslocar as posições à mão.\nO acabamento que sempre vale: rótulo com unidade, legend(frameon=False), remover as spines de cima e da direita, grade discreta com set_axisbelow(True).\nset_yscale(\"log\") quando as grandezas diferem por ordens de magnitude — e em log, exponencial vira reta.\nAo salvar: PNG para tela (dpi=150) ou impressão (dpi=300), SVG/PDF para publicação, sempre com bbox_inches=\"tight\". Em servidor, matplotlib.use(\"Agg\") antes do import do pyplot.\nplt.close(fig) em laço: o pyplot segura as figuras e elas não são coletadas sozinhas.\nDataFrame.plot é o atalho e devolve o Axes, aceitando ax= — combine o atalho com a API de objetos para o acabamento.\nUm gráfico é um argumento: barra começa no zero, ordene pelo que importa, escolha paletas seguras para daltonismo e nunca jet.",
     "crumbs": [
       "Volume 13 — Dados, Análise e Visualização\n",
       "<span class='chapter-number'>83</span>  <span class='chapter-title'>Visualização de dados com Matplotlib</span>"
@@ -9535,7 +10063,128 @@
     "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html",
     "title": "84  SciPy e a computação científica aplicada",
     "section": "",
-    "text": "(em elaboracao)",
+    "text": "84.1 O mapa\nO sensor registrou a resposta de um sistema decaindo ao longo de dez segundos. Você tem os pontos e sabe que a física é exponencial. Qual é a constante de tempo? Com que incerteza? E aquela diferença de nove pontos entre o grupo de controle e o tratado — é efeito ou é ruído?\nNumPy dá o array e as operações elementares. SciPy dá os algoritmos: ajuste de curva, testes de hipótese, integração numérica, otimização, filtros, interpolação, álgebra linear avançada. É a camada onde o Python deixa de ser uma linguagem que manipula números e passa a ser uma ferramenta de análise numérica.\nEste capítulo usa SciPy 1.18.0 sobre NumPy 2.5.2.\nSciPy é grande, e a primeira dificuldade é saber onde procurar. Não existe import scipy que sirva de algo: cada submódulo é importado separadamente.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#o-mapa",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#o-mapa",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "",
+    "text": "Figura 84.1: Os submódulos mais usados do SciPy e a fronteira do que ele resolve.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#stats-distribuições",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#stats-distribuições",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.2 stats: distribuições",
+    "text": "84.2 stats: distribuições\nToda distribuição tem a mesma interface, e aprendê-la uma vez serve para as setenta:\nfrom scipy import stats\n\nd = stats.norm(loc=20.0, scale=3.0)\nprint(\"pdf(20)      :\", round(d.pdf(20), 6))\nprint(\"cdf(23)      :\", round(d.cdf(23), 6))\nprint(\"sf(23)       :\", round(d.sf(23), 6))\nprint(\"ppf(0.975)   :\", round(d.ppf(0.975), 6))\nprint(\"intervalo 95%:\", np.round(d.interval(0.95), 4))\nprint(\"rvs(5)       :\", np.round(d.rvs(size=5, random_state=42), 4))\npdf(20)      : 0.132981\ncdf(23)      : 0.841345  &lt;- P(X &lt;= 23)\nsf(23)       : 0.158655  &lt;- P(X &gt; 23), mais preciso que 1-cdf\nppf(0.975)   : 25.879892  &lt;- o quantil\nintervalo 95%: [14.1201 25.8799]\nrvs(5)       : [21.4901 19.5852 21.9431 24.5691 19.2975]\n\n\n\n\n\n\nFigura 84.2: À esquerda, os três métodos que respondem “qual a chance” e “a partir de qual valor”. À direita, o teste t entre dois grupos.\n\n\n\nOs nomes valem decorar: pdf é a densidade, cdf acumula à esquerda, sf acumula à direita (a survival function), ppf é a inversa da cdf (dado o percentil, devolve o valor) e rvs sorteia.\nDuas notas práticas. sf(x) é numericamente mais preciso que 1 - cdf(x) na cauda, onde a subtração perde dígitos significativos (Capítulo 10) — para probabilidades da ordem de 1e-16, 1 - cdf devolve zero e sf devolve o valor certo. E random_state= aceita o gerador do Capítulo 80, o que mantém a reprodutibilidade sob controle.\nA mesma interface serve para as demais:\nstats.binom(10, 0.3).pmf(3)     # 0.266828  -- discreta usa pmf, nao pdf\nstats.poisson(4).cdf(2)         # 0.238103\nstats.t(9).ppf(0.975)           # 2.262157  -- o valor crítico da tabela t\nstats.chi2(3).sf(7.815)         # 0.049994",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#stats-testes-de-hipótese",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#stats-testes-de-hipótese",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.3 stats: testes de hipótese",
+    "text": "84.3 stats: testes de hipótese\nt, p = stats.ttest_ind(antes, depois)\nmedia antes : 99.018\nmedia depois: 108.389\nt = -4.0200   p = 0.000133\nrejeita H0 a 5%? True\nCom 40 observações por grupo e diferença real de sete pontos, o teste detecta. Com 8 observações e diferença de três:\nt = -1.7388   p = 0.104006  -&gt; rejeita? False\nO mesmo efeito, dados insuficientes, conclusão oposta. Isso é poder estatístico, e é o motivo de “não deu significativo” nunca significar “não há efeito”.\n\n\n\n\n\n\nImportanteO que o p-valor não é\n\n\n\nO p-valor é a probabilidade de observar um efeito ao menos tão extremo quanto este, supondo que a hipótese nula seja verdadeira. Ele não é:\n\na probabilidade de a hipótese nula ser verdadeira;\na probabilidade de o resultado ser um acaso;\numa medida do tamanho do efeito — com n grande, diferenças irrelevantes dão p minúsculo.\n\nRelate sempre o tamanho do efeito e um intervalo de confiança ao lado do p. E não teste vinte hipóteses procurando uma abaixo de 0,05: a 5%, uma em vinte passa por sorte, e é isso que statsmodels.stats.multitest corrige.\n\n\nOs testes mais usados, e a pergunta de cada um:\n\n\n\nfunção\npergunta\n\n\n\n\nttest_ind\nduas amostras independentes têm médias diferentes?\n\n\nttest_rel\no mesmo sujeito mudou entre antes e depois?\n\n\nmannwhitneyu\nidem ttest_ind, sem supor normalidade\n\n\nchi2_contingency\nduas variáveis categóricas são associadas?\n\n\nshapiro, normaltest\nesta amostra parece normal?\n\n\npearsonr, spearmanr\nas duas variáveis são correlacionadas?\n\n\n\nUm detalhe que muda resultados: ttest_ind supõe variâncias iguais por padrão. Quando os grupos têm dispersões muito diferentes, equal_var=False (o teste de Welch) é o correto — e, na dúvida, Welch é a escolha mais segura, porque perde pouco quando as variâncias são iguais.\n\n84.3.1 Correlação: qual usar\nr_pearson  = stats.pearsonr(u, w).statistic\nr_spearman = stats.spearmanr(u, w).statistic\npearson (u,v)  r=0.9601  p=4.877e-56\npearson (u,w)  r=0.8144  &lt;- relacao monotona nao linear\nspearman(u,w)  r=1.0000  &lt;- pega a monotonia\nw é exatamente exp(u) — relação perfeita, mas curva. Pearson mede associação linear e viu 0,81; Spearman mede associação monotônica (trabalha com os postos) e viu 1,00. Quando a relação não é reta, ou quando há valores extremos, Spearman é mais informativo.\nE, sempre: correlação de 0,96 com p de 1e-56 não diz nada sobre causa. Diz que, nestes dados, as duas variáveis andam juntas.\n\n\n84.3.2 Tabela de contingência\nchi2, p, gl, esperado = stats.chi2_contingency(tabela)\nobservado:\n[[45 15]\n [30 30]]\nesperado :\n[[37.5 22.5]\n [37.5 22.5]]\nchi2=6.9689  gl=1  p=0.008294\nA matriz esperado é a parte mais útil da saída: é o que se veria se não houvesse associação nenhuma. Comparar observado com esperado célula a célula diz onde está a diferença, o que o p-valor sozinho não diz.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#optimize-ajustar-um-modelo-aos-dados",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#optimize-ajustar-um-modelo-aos-dados",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.4 optimize: ajustar um modelo aos dados",
+    "text": "84.4 optimize: ajustar um modelo aos dados\nEsta é, na prática, a função mais usada do SciPy inteiro:\nfrom scipy import optimize\n\ndef modelo(t, a, tau, c):\n    return a * np.exp(-t / tau) + c\n\npopt, pcov = optimize.curve_fit(modelo, t_obs, y_obs, p0=(10.0, 1.0, 1.0))\nerros = np.sqrt(np.diag(pcov))\nparametro   verdadeiro   estimado   erro-padrao\na              12.0000    12.1788        0.1751\ntau             2.5000     2.4739        0.0906\nc               3.0000     2.8448        0.1105\n\nresiduo: media=0.00000  desvio=0.29078\nR2 = 0.992633\n\n\n\n\n\n\nFigura 84.3: O ajuste recuperou os três parâmetros, e os resíduos não mostram padrão.\n\n\n\nTrês coisas para levar deste exemplo:\nA primeira letra do modelo é a variável independente; o resto são parâmetros a ajustar. É essa convenção que permite escrever o modelo como uma função Python comum.\npcov é a matriz de covariância, e sqrt(diag(pcov)) são os erros-padrão. Um ajuste sem incerteza não é um resultado — tau = 2.47 significa pouco; tau = 2.47 ± 0.09 significa algo. Se a matriz vier cheia de inf, o ajuste não convergiu de verdade, mesmo que popt tenha números plausíveis.\nOlhe os resíduos, não o R². Um R² de 0,99 pode conviver com resíduos em forma de U — sinal de que o modelo está errado, ainda que ajuste bem. Resíduo bom é o que parece ruído: média zero e nenhum padrão visível.\n\n84.4.1 p0 não é opcional\noptimize.curve_fit(logistica, xs, ys)              # sem chute inicial\noptimize.curve_fit(logistica, xs, ys, p0=(90.0, 1.0, 10.0))\nsem p0  : [  40.007  -181.8341  126.0381]\ncom p0  : [99.8702  0.7193 11.9926]\nOs valores verdadeiros eram (100, 0.7, 12). Sem p0, o SciPy chuta 1.0 para tudo, o otimizador cai num mínimo local e devolve parâmetros absurdos — com aviso apenas sobre a covariância, não sobre o resultado. Ajuste não linear sem chute inicial informado é loteria; e a ordem de grandeza de cada parâmetro geralmente se lê no próprio gráfico dos dados.\n\n\n84.4.2 Minimizar e achar raiz\nr = optimize.minimize(custo, x0=[0.0, 0.0])\nprint(\"minimo em:\", np.round(r.x, 8))\nsucesso : True\nminimo em: [ 3.00000004 -1.00000007]\nvalor    : 2.0\nminimize recebe uma função que devolve um escalar e procura o mínimo. Aceita bounds= para restringir a busca e constraints= para restrições mais gerais:\ncom bounds [(0,1),(0,1)]: [1. 0.] valor 7.0\nSempre confira r.success e r.message. Um resultado de minimize que não convergiu vem com números do mesmo tipo dos de um que convergiu.\nE, para raiz de uma equação de uma variável:\noptimize.root_scalar(lambda x: x**3 - 2*x - 5, bracket=[2, 3])\nraiz de x^3-2x-5 em [2,3]: 2.0945514815\nf(raiz) = 3.55e-15 | convergiu: True\nO bracket=[a, b] exige que a função troque de sinal no intervalo, e com isso a convergência é garantida — bem mais robusto que dar um chute e esperar o Newton achar.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#interpolate-entre-os-pontos-sim-fora-não",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#interpolate-entre-os-pontos-sim-fora-não",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.5 interpolate: entre os pontos, sim; fora, não",
+    "text": "84.5 interpolate: entre os pontos, sim; fora, não\nfrom scipy import interpolate\n\nspl = interpolate.CubicSpline(xk, yk)\nprint(\"np.interp(2.5)   :\", np.interp(2.5, xk, yk))\nprint(\"CubicSpline(2.5) :\", float(spl(2.5)))\nprint(\"derivada em 2.5  :\", float(spl(2.5, 1)))\nprint(\"extrapolacao em 7:\", float(spl(7.0)))\nnp.interp(2.5)   : 0.525\nCubicSpline(2.5) : 0.596875\nderivada em 2.5  : -0.80875\nextrapolacao em 7: 3.98  &lt;- CUIDADO, invencao\n\n\n\n\n\n\nFigura 84.4: Dentro dos dados as duas interpolações concordam; fora deles, a spline dispara.\n\n\n\nnp.interp faz interpolação linear e resolve a maioria dos casos sem importar SciPy. CubicSpline dá uma curva suave, com derivadas contínuas — e por isso mesmo serve para estimar taxa de variação a partir de pontos discretos.\nMas note o último número. Os dados vão de 0 a 5; em x = 7 a spline devolveu 3,98, quando a função de origem (um seno) nunca passa de 1. Extrapolar com spline não é estimar, é inventar — a cúbica que passa suavemente pelos últimos pontos continua subindo indefinidamente. Se precisar de valores fora do domínio, use um modelo com justificativa física e curve_fit, não interpolação.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#integrate-integrais-e-equações-diferenciais",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#integrate-integrais-e-equações-diferenciais",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.6 integrate: integrais e equações diferenciais",
+    "text": "84.6 integrate: integrais e equações diferenciais\nfrom scipy import integrate\n\nval, err = integrate.quad(lambda x: np.exp(-x**2), 0, np.inf)\nintegral de exp(-x^2) de 0 a inf = 0.8862269255\nvalor exato sqrt(pi)/2           = 0.8862269255\nerro estimado                    = 7.10e-09\nDez casas corretas, com limite infinito, numa linha. E quad devolve o valor e a estimativa de erro — o segundo elemento existe para ser conferido, não descartado.\nPara equações diferenciais ordinárias, solve_ivp:\ndef decaimento(t, y):\n    return -0.5 * y\n\nsol = integrate.solve_ivp(decaimento, [0, 10], [100.0], t_eval=[0, 2, 5, 10])\nt     : [ 0  2  5 10]\ny(t)  : [100.        36.767016   8.216648   0.67539 ]\nexato : [100.        36.787944   8.2085     0.673795]\nA solução numérica bate com a analítica na terceira casa. Se precisar de mais precisão, rtol e atol controlam a tolerância; e method=\"Radau\" ou \"BDF\" resolvem sistemas stiff, em que o passo adaptativo do método padrão fica lento demais.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#signal-filtrar-e-encontrar",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#signal-filtrar-e-encontrar",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.7 signal: filtrar e encontrar",
+    "text": "84.7 signal: filtrar e encontrar\n\n\n\n\n\n\nFigura 84.5: Um sinal de 2 Hz e 5 Hz enterrado em ruído, o mesmo sinal filtrado, e o espectro que mostra as duas componentes.\n\n\n\nfrom scipy import signal\n\nb, a = signal.butter(4, 8, btype=\"low\", fs=fs)\nfiltrado = signal.filtfilt(b, a, ruidoso)\npicos, props = signal.find_peaks(filtrado, height=0.8, distance=40)\ndesvio do ruido residual (bruto)   : 0.6071\ndesvio do ruido residual (filtrado): 0.1691\npicos encontrados : 6\nnos instantes     : [0.065 0.64  1.085 1.65  2.075]\nO filtro reduziu o ruído a 28% do original preservando o sinal. Dois pontos técnicos que importam:\nUse filtfilt, não lfilter. Ambos aplicam o filtro; lfilter introduz atraso de fase (o sinal filtrado sai deslocado no tempo), e filtfilt aplica o filtro nos dois sentidos, cancelando o atraso. Para análise de dados já gravados, filtfilt é o certo; lfilter serve para processamento em tempo real, onde não se pode olhar o futuro.\nfind_peaks sem parâmetros encontra ruído. height descarta picos pequenos e distance impede que duas amostras vizinhas contem como dois picos. Sem os dois, um sinal ruidoso tem centenas de “picos”.\nE o espectro, com a FFT do próprio NumPy:\nespectro = np.fft.rfft(sinal)\nfreqs = np.fft.rfftfreq(sinal.size, 1 / fs)\nfrequencias dominantes detectadas: [2. 5.] Hz\n(o sinal foi construido com 2 Hz e 5 Hz)\nrfft (em vez de fft) para sinal real: devolve só metade do espectro, que é toda a informação, e é duas vezes mais rápido. E rfftfreq produz o eixo de frequências — sem ele você tem amplitudes sem saber a que frequência correspondem.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#spatial-linalg-e-sparse",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#spatial-linalg-e-sparse",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.8 spatial, linalg e sparse",
+    "text": "84.8 spatial, linalg e sparse\nfrom scipy import spatial\n\narvore = spatial.KDTree(pontos)      # 1000 pontos 2D\ndist, idx = arvore.query([0.5, 0.5], k=3)\n3 vizinhos de (0.5, 0.5):\n  indice  320  dist 0.012102  em [0.5097 0.5072]\n  indice  697  dist 0.015511  em [0.4916 0.487 ]\n  indice  699  dist 0.020996  em [0.497  0.4792]\npares a menos de 0.02: 649\nUma KDTree responde “quais são os k vizinhos mais próximos” em tempo logarítmico, em vez das n distâncias da força bruta. É a estrutura por trás de busca geográfica, de KNeighbors (Capítulo 85) e de qualquer coisa que precise de proximidade.\nfrom scipy import linalg\n\nlinalg.solve(A, b)      # resolve Ax = b\nlinalg.det(A)\nlinalg.eigvals(A)\nSobre a sobreposição com numpy.linalg: o scipy.linalg é mais completo (mais decomposições, mais rotinas LAPACK expostas) e é o que se deve usar quando a rotina existe nos dois. Mas não espere ganho automático de velocidade:\nnp.linalg.inv    :  100.48 ms\nscipy.linalg.inv :  147.26 ms\nNesta máquina o NumPy foi mais rápido. As duas chamam LAPACK; a diferença está nas verificações e na cópia de entrada, e varia com a compilação. Meça antes de trocar por desempenho.\nE, quando a matriz é quase toda zeros:\nfrom scipy import sparse\nM = sparse.random_array((5000, 5000), density=0.0005, format=\"csr\")\nmatriz 5000x5000\ndensa (float64) :     200,000,000 bytes\nesparsa CSR     :         170,004 bytes\nnao-zeros       :          12,500\nDuzentos megabytes contra cento e setenta kilobytes — mil vezes menos, porque a esparsa guarda apenas os não-zeros e seus índices. Matriz de adjacência de grafo, matriz termo-documento de texto e sistema de elementos finitos são todos esparsos, e tratá-los como densos é a diferença entre rodar e estourar a memória.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#jeito-pythônico",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#jeito-pythônico",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.9 🐍 Jeito Pythônico",
+    "text": "84.9 🐍 Jeito Pythônico\nImporte o submódulo, não o pacote. from scipy import stats, optimize — import scipy sozinho não dá acesso a nada, e essa é a primeira confusão de quem chega.\nsf(x) em vez de 1 - cdf(x) na cauda da distribuição. A subtração perde precisão exatamente onde você precisa dela.\np0 informado em todo curve_fit não trivial. O chute padrão de 1,0 para tudo cai em mínimo local e devolve parâmetros absurdos com aviso só sobre a covariância.\nSempre relate a incerteza. np.sqrt(np.diag(pcov)) para ajuste, r.success e r.message para otimização, o erro estimado do quad. Resultado numérico sem incerteza é opinião com casas decimais.\nOlhe os resíduos, não o R². R² alto com resíduo estruturado significa modelo errado que ajusta bem.\nfiltfilt para dados gravados, lfilter para tempo real. A diferença é atraso de fase, e ele desloca todos os picos que você for medir depois.\nequal_var=False no ttest_ind quando as dispersões diferem — e, na dúvida, também. Welch perde pouco no caso simétrico.\nNão extrapole com spline. Fora do domínio dos dados, interpolação vira invenção. Extrapolação exige modelo com justificativa.\nMatriz quase vazia é scipy.sparse. Mil vezes menos memória não é otimização prematura; é a diferença entre o programa rodar e não rodar.\nSaiba onde SciPy termina. Regressão com diagnóstico é statsmodels; aprendizado de máquina é scikit-learn. Forçar scipy.optimize nesses papéis funciona e é a escolha errada.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#laboratório",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#laboratório",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.10 🧪 Laboratório",
+    "text": "84.10 🧪 Laboratório\nPasso 1 — ambiente.\nmkdir lab-scipy && cd lab-scipy\npython3.13 -m venv .venv\nsource .venv/bin/activate        # Windows: .venv\\Scripts\\activate\npython -m pip install scipy matplotlib\npython -c \"import scipy; print(scipy.__version__)\"\nPasso 2 — a interface das distribuições. Para stats.norm(20, 3), calcule pdf(20), cdf(23), sf(23), ppf(0.975) e interval(0.95). Confirme que cdf(23) + sf(23) == 1.0 e que ppf(cdf(23)) volta a 23. Depois compare sf(50) com 1 - cdf(50) e explique o resultado.\nPasso 3 — poder estatístico. Gere dois grupos com diferença real de 3 unidades e desvio 12. Rode ttest_ind com n = 8, 20, 50, 200 e 1000, e monte uma tabela de p-valores. Descubra em que tamanho o teste passa a detectar. Depois repita 200 vezes com n = 20 e conte em quantas o p ficou abaixo de 0,05 — essa fração é o poder do teste.\nPasso 4 — o erro do p-valor. Gere dois grupos idênticos (mesma distribuição) 100 vezes e conte quantas vezes o p ficou abaixo de 0,05. O resultado deve ficar perto de 5. Essa é a taxa de falso positivo, e é por isso que testar muitas hipóteses sem correção produz descobertas falsas.\nPasso 5 — correlação. Com u = rng.normal(0, 1, 100) e w = np.exp(u), compare pearsonr e spearmanr:\npearson (u,w)  r=0.8144\nspearman(u,w)  r=1.0000\nDepois acrescente um ponto extremo em u e recalcule os dois. Qual dos dois se mexeu mais?\nPasso 6 — ajuste de curva. Gere dados de a*exp(-t/tau) + c com ruído, ajuste com curve_fit e imprima os parâmetros com seus erros-padrão:\na              12.0000    12.1788        0.1751\ntau             2.5000     2.4739        0.0906\nc               3.0000     2.8448        0.1105\nDepois plote os resíduos. Em seguida ajuste um modelo errado (uma reta) aos mesmos dados, plote os resíduos e compare: o padrão em U é o diagnóstico.\nPasso 7 — o p0. Ajuste uma logística sem p0 e com p0:\nsem p0  : [  40.007  -181.8341  126.0381]\ncom p0  : [99.8702  0.7193 11.9926]\nDepois inspecione pcov no caso sem p0 e confirme que ela é inútil.\nPasso 8 — otimização. Minimize (x-3)² + (y+1)² + 2 e confirme o mínimo em (3, -1). Depois acrescente bounds=[(0,1),(0,1)] e explique por que o resultado é (1, 0). Por fim, minimize uma função com vários mínimos locais (por exemplo x**4 - 3*x**3 + 2 mais um seno) partindo de dois x0 diferentes e observe que chega a respostas diferentes.\nPasso 9 — interpolação e o limite dela. Com seis pontos de sin(x) entre 0 e 5, compare np.interp e CubicSpline em x = 2.5. Depois avalie a spline em x = 7 e compare com sin(7):\nextrapolacao em 7: 3.98\nsin(7) é 0,657. Plote o intervalo de 0 a 7 e olhe onde a curva se solta.\nPasso 10 — sinal. Construa um sinal de 2 Hz + 5 Hz a 200 Hz de amostragem, acrescente ruído gaussiano, e: (a) filtre com butter(4, 8, fs=fs) mais filtfilt; (b) meça o desvio do resíduo antes e depois; (c) ache os picos com find_peaks(height=0.8, distance=40); (d) calcule o espectro com rfft/rfftfreq e confirme os dois picos em 2 e 5 Hz. Refaça (a) com lfilter e compare a posição dos picos — o atraso de fase aparece na hora.\nPasso 11 — esparsa. Crie uma matriz 5000×5000 com densidade 0,0005 em formato CSR e compare a memória com a versão densa:\ndensa (float64) :     200,000,000 bytes\nesparsa CSR     :         170,004 bytes\nDepois multiplique a esparsa por um vetor e cronometre; faça o mesmo com a densa (se a memória permitir) e compare.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#resumo",
+    "href": "vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.html#resumo",
+    "title": "84  SciPy e a computação científica aplicada",
+    "section": "84.11 Resumo",
+    "text": "84.11 Resumo\n\nSciPy é organizado em submódulos importados separadamente (from scipy import stats, optimize, ...); import scipy sozinho não dá acesso a nada.\nTodas as distribuições de stats compartilham a interface pdf/pmf, cdf, sf, ppf, rvs. sf(x) é mais preciso que 1 - cdf(x) na cauda.\nO p-valor não é a probabilidade de a hipótese nula ser verdadeira nem uma medida do tamanho do efeito. Relate efeito e intervalo de confiança ao lado dele; “não significativo” com n pequeno não é evidência de ausência.\nttest_ind supõe variâncias iguais: use equal_var=False (Welch) quando as dispersões diferirem. Pearson mede relação linear, Spearman mede monotonia e resiste a extremos.\ncurve_fit é a função mais usada do SciPy. Passe p0, extraia os erros-padrão com np.sqrt(np.diag(pcov)) e julgue o ajuste pelos resíduos, não pelo R².\nVerifique sempre o campo de convergência: r.success no minimize, o erro estimado do quad, e uma pcov finita no curve_fit.\nInterpolar entre os pontos é seguro; extrapolar com spline é inventar — a cúbica dispara fora do domínio sem nenhum aviso.\nEm signal, filtfilt para dados gravados (sem atraso de fase) e lfilter para tempo real; find_peaks precisa de height e distance para não contar ruído. Para espectro de sinal real, rfft com rfftfreq.\nKDTree responde vizinho-mais-próximo em tempo logarítmico; scipy.sparse reduziu 200 MB a 170 KB numa matriz com 0,05% de não-zeros.\nSciPy resolve o problema numérico. Modelagem estatística com diagnóstico é statsmodels; aprendizado de máquina é scikit-learn, o assunto do próximo capítulo.",
     "crumbs": [
       "Volume 13 — Dados, Análise e Visualização\n",
       "<span class='chapter-number'>84</span>  <span class='chapter-title'>SciPy e a computação científica aplicada</span>"
@@ -9546,7 +10195,205 @@
     "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html",
     "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
     "section": "",
-    "text": "(em elaboracao)",
+    "text": "85.1 O vocabulário\nUm modelo acertou 100% dos casos de treino. Em produção, acerta 60%. Outro, treinado com dados que não tinham sinal nenhum — ruído puro, rótulos sorteados —, apresentou 87% de acurácia em validação cruzada. Nos dois casos o código roda, não levanta exceção e produz números convincentes.\nO problema central do aprendizado de máquina não é ajustar, é generalizar. Ajustar é fácil: com parâmetros suficientes, qualquer modelo decora qualquer conjunto de dados. Generalizar é acertar em dados que o modelo nunca viu — e quase toda a disciplina, incluindo a estrutura da biblioteca, existe para proteger essa medida.\nEste capítulo usa scikit-learn 1.9.0. Ele é uma introdução: cobre o fluxo de trabalho, a API e os erros que invalidam resultados. Não cobre a matemática dos algoritmos, e não substitui um curso de estatística.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#o-vocabulário",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#o-vocabulário",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "",
+    "text": "X é a matriz de atributos (features): uma linha por amostra, uma coluna por variável. Forma (n_amostras, n_atributos).\ny é o alvo (target): o que se quer prever. Vetor de tamanho n_amostras.\nSupervisionado é quando existe y. Se y é categoria, é classificação; se é número contínuo, é regressão.\nNão supervisionado é quando não existe y — agrupamento (KMeans) e redução de dimensionalidade (PCA).\n\nfrom sklearn.datasets import load_breast_cancer\n\ndados = load_breast_cancer(as_frame=True)\nX, y = dados.data, dados.target\nprint(\"X:\", X.shape, \"| y:\", y.shape)\nprint(\"classes:\", dict(zip(dados.target_names, np.bincount(y))))\nX: (569, 30) | y: (569,)\nclasses: {'malignant': 212, 'benign': 357}\nproporcao da classe majoritaria: 0.6274",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#a-api-única",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#a-api-única",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.2 A API única",
+    "text": "85.2 A API única\nO que faz do scikit-learn a biblioteca que é não são os algoritmos — é o fato de todos obedecerem à mesma interface:\n\nfit(X, y) aprende. É o único método que olha os dados de treino.\npredict(X) prevê. predict_proba(X) dá as probabilidades, quando o modelo as tem.\ntransform(X) transforma (escaladores, codificadores, PCA).\nscore(X, y) devolve a métrica padrão do estimador.\n\nTrocar LogisticRegression() por RandomForestClassifier() é trocar uma linha. Essa uniformidade é o que permite comparar dez modelos num laço e é o motivo de Pipeline e GridSearchCV funcionarem com qualquer coisa.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#o-fluxo-e-onde-ele-vaza",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#o-fluxo-e-onde-ele-vaza",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.3 O fluxo, e onde ele vaza",
+    "text": "85.3 O fluxo, e onde ele vaza\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n \n \n \n \n \n \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nFigura 85.1: O fluxo supervisionado. A caixa amarela só é aberta no fim, uma vez.\n\n\n\nfrom sklearn.model_selection import train_test_split\n\nX_tr, X_te, y_tr, y_te = train_test_split(\n    X, y, test_size=0.25, random_state=42, stratify=y)\ntreino: 426 | teste: 143\nproporcao da classe 1 no treino: 0.6268\nproporcao da classe 1 no teste : 0.6294\nTrês argumentos, três razões. test_size reserva a parte que mede; random_state torna o resultado reprodutível; stratify=y mantém a proporção das classes nas duas partes — sem ele, uma classe rara pode ficar quase toda de um lado, e a métrica passa a medir o sorteio.\n\n85.3.1 O piso\nAntes de qualquer modelo, saiba o que é “melhor que nada”:\nfrom sklearn.dummy import DummyClassifier\nbobo = DummyClassifier(strategy=\"most_frequent\").fit(X_tr, y_tr)\nprint(\"acuracia do DummyClassifier:\", round(bobo.score(X_te, y_te), 4))\nacuracia do DummyClassifier: 0.6294\nUm modelo que sempre responde a classe majoritária acerta 63%. Qualquer resultado abaixo disso é pior que não fazer nada, e 70% de acurácia neste problema seria péssimo, não razoável. Sem essa referência, não há como julgar número nenhum.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#o-primeiro-modelo-e-o-pipeline",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#o-primeiro-modelo-e-o-pipeline",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.4 O primeiro modelo, e o Pipeline",
+    "text": "85.4 O primeiro modelo, e o Pipeline\nfrom sklearn.pipeline import Pipeline\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.linear_model import LogisticRegression\n\nmodelo = Pipeline([\n    (\"escala\", StandardScaler()),\n    (\"clf\", LogisticRegression(max_iter=2000, random_state=42)),\n])\nmodelo.fit(X_tr, y_tr)\nprint(\"acuracia treino:\", round(modelo.score(X_tr, y_tr), 4))\nprint(\"acuracia teste :\", round(modelo.score(X_te, y_te), 4))\nacuracia treino: 0.9883\nacuracia teste : 0.986\nO Pipeline não é conveniência: é correção. Ele garante que, quando você chama fit, o StandardScaler aprende média e desvio só do treino; e que, quando chama predict, ele transforma com aqueles mesmos números em vez de recalculá-los. Fazer isso à mão é possível e é onde o erro entra.\nDe passagem, o escalador não é decorativo:\nsem StandardScaler, acuracia teste: 0.958\nescala das colunas (min/max de mean):\n     mean radius  mean area\nmin         6.98      143.5\nmax        28.11     2499.0\nUma coluna vai até 28, outra até 2499. Modelos baseados em distância (KNeighbors, SVM) e em gradiente (regressão logística, redes) são sensíveis à escala: sem padronizar, a coluna de maior magnitude domina, e aqui a regressão logística sem escala nem convergiu em 2000 iterações. Árvores e florestas, por compararem limiares dentro de cada coluna, são indiferentes a isso.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#vazamento-o-erro-que-fabrica-resultados",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#vazamento-o-erro-que-fabrica-resultados",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.5 Vazamento: o erro que fabrica resultados",
+    "text": "85.5 Vazamento: o erro que fabrica resultados\nAqui está o experimento mais importante do capítulo. Ruído puro: 120 amostras, 4000 colunas de números aleatórios, rótulos sorteados. Não existe sinal. A acurácia honesta é 50%.\n# ERRADO: seleciona os atributos usando o conjunto TODO\nsel = SelectKBest(f_classif, k=20).fit(X, y)\nnota = cross_val_score(LogisticRegression(max_iter=1000), sel.transform(X), y, cv=cv)\nERRADO (selecao antes do split):\n  dobras : [0.9583 0.8333 0.8333 0.875  0.8333]\n  media  : 0.8667   &lt;- do nada\n# CERTO: a selecao vive dentro do Pipeline, refeita em cada dobra\ncano = Pipeline([(\"sel\", SelectKBest(f_classif, k=20)),\n                 (\"clf\", LogisticRegression(max_iter=1000))])\nnota = cross_val_score(cano, X, y, cv=cv)\nCERTO (selecao dentro do Pipeline):\n  dobras : [0.5833 0.5    0.5    0.625  0.5   ]\n  media  : 0.5417   &lt;- a verdade: moeda\nOitenta e sete por cento de acurácia sobre dados sem nenhuma informação. O mecanismo: com 4000 colunas de ruído e 120 amostras, algumas colunas por puro acaso se correlacionam com o rótulo. Selecioná-las olhando o conjunto inteiro transfere informação do teste para o treino, e a validação cruzada passa a medir essa contaminação em vez de medir generalização.\nEste é o defeito mais grave desta área porque ele não falha — ele produz um resultado bom. Artigos são publicados assim, e modelos vão para produção assim. A defesa é estrutural: todo passo que aprende algo dos dados vive dentro do Pipeline, e é o Pipeline que o cross_val_score refaz em cada dobra.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#validação-cruzada",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#validação-cruzada",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.6 Validação cruzada",
+    "text": "85.6 Validação cruzada\nfrom sklearn.model_selection import cross_val_score, StratifiedKFold\n\ncv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)\nnotas = cross_val_score(modelo, X_tr, y_tr, cv=cv, scoring=\"accuracy\")\nacuracia em cada dobra: [0.9767 0.9647 0.9765 0.9882 0.9882]\nmedia 0.9789  desvio 0.0088\nrelato honesto: 0.979 +/- 0.009\nUm único train_test_split dá um único número, e esse número depende do sorteio. A validação cruzada treina k vezes, cada uma deixando uma parte de fora, e devolve k medidas — cuja dispersão é a informação que faltava. Uma diferença de 0,5 ponto entre dois modelos cujas dobras variam 2 pontos não é diferença nenhuma.\nUse StratifiedKFold para classificação (preserva as proporções), KFold para regressão e TimeSeriesSplit para dados temporais — neste último caso, sortear as dobras deixaria o modelo treinar no futuro e prever o passado, que é outra forma de vazamento.\ncross_validate calcula várias métricas de uma vez:\ntest_accuracy    0.9789\ntest_precision   0.9745\ntest_recall      0.9925\ntest_roc_auc     0.9962",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#métricas-acurácia-engana",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#métricas-acurácia-engana",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.7 Métricas: acurácia engana",
+    "text": "85.7 Métricas: acurácia engana\n\n\n\n\n\n\nFigura 85.2: À esquerda, os quatro números que a acurácia resume. À direita, o desempenho em todos os limiares possíveis.\n\n\n\ncm = confusion_matrix(y_te, modelo.predict(X_te))\nmatriz de confusao (linhas=real, colunas=previsto):\n[[52  1]\n [ 1 89]]\n\nVN=52  FP=1  FN=1  VP=89\nacuracia : 0.9860\nprecisao : 0.9889  = VP/(VP+FP)\nrecall   : 0.9889  = VP/(VP+FN)\nroc_auc  : 0.9977\nA matriz de confusão é o dado; as métricas são resumos dela. E os dois resumos que importam respondem perguntas diferentes:\n\nPrecisão — dos que eu marquei como positivos, quantos eram? Alta precisão significa poucos falsos alarmes.\nRecall (sensibilidade) — dos positivos que existem, quantos eu achei? Alto recall significa poucos casos perdidos.\n\nQual priorizar é uma decisão do problema, não da estatística. Num rastreamento de doença, perder um caso (falso negativo) é muito pior que um exame extra — recall. Num filtro de spam, mandar um e-mail legítimo para o lixo é pior que deixar passar um spam — precisão. O f1 é a média harmônica dos dois, útil quando não há motivo para preferir um.\nE então o caso que expõe a acurácia:\nproporcao da classe rara: 0.024\n\nmodelo que sempre diz 'nao':\n  acuracia : 0.9767   &lt;- parece otimo\n  recall   : 0.0000   &lt;- nao acha nenhum caso\n\nLogisticRegression com class_weight='balanced':\n  acuracia : 0.8533   &lt;- MENOR\n  recall   : 0.7143   &lt;- e util\n  precisao : 0.1064\nUm modelo com 97,7% de acurácia que não detecta nada. Com 2,4% de casos positivos, responder “não” sempre acerta quase tudo — e é inútil. O modelo real tem acurácia menor e é o único dos dois que serve.\nEm classe desbalanceada, use recall, precision, f1, roc_auc ou average_precision; e class_weight=\"balanced\" para que o modelo pague mais caro por errar a classe rara. Acurácia em problema desbalanceado é a métrica errada, e é a que vem por padrão.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#sobreajuste-e-a-curva-de-validação",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#sobreajuste-e-a-curva-de-validação",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.8 Sobreajuste e a curva de validação",
+    "text": "85.8 Sobreajuste e a curva de validação\nmodelo                   treino    teste\narvore max_depth=2       0.9577   0.9091\narvore sem limite        1.0000   0.9231\nA árvore sem limite acerta tudo no treino. Ela decorou. E, no teste, ganhou 1,4 ponto da árvore de profundidade 2 — bem menos do que a diferença de treino sugeria.\n\n\n\n\n\n\nFigura 85.3: À esquerda, a complexidade que o modelo aguenta. À direita, se mais dados ainda ajudariam.\n\n\n\nA curva de validação é o diagnóstico: aumente a complexidade e observe as duas linhas. Enquanto as duas sobem, o modelo está subajustado (falta capacidade). Quando a de treino continua subindo e a de validação empaca ou cai, começou o sobreajuste — e o melhor ponto é onde a validação atinge o máximo, aqui max_depth=3.\nA curva de aprendizado responde outra pergunta: as duas linhas ainda estão se aproximando quando você chega ao fim dos dados? Se sim, mais dados ajudariam. Se já se encontraram e estacionaram, o gargalo é o modelo ou os atributos, e coletar mais amostras não muda nada. Essa distinção decide onde investir.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#ajustar-hiperparâmetros",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#ajustar-hiperparâmetros",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.9 Ajustar hiperparâmetros",
+    "text": "85.9 Ajustar hiperparâmetros\nfrom sklearn.model_selection import GridSearchCV\n\ngrade = {\"clf__C\": [0.01, 0.1, 1.0, 10.0, 100.0]}\nbusca = GridSearchCV(modelo, grade, cv=cv, scoring=\"roc_auc\", n_jobs=-1)\nbusca.fit(X_tr, y_tr)\nmelhor C        : {'clf__C': 1.0}\nmelhor roc_auc CV: 0.9962\nroc_auc no teste : 0.9977\n\ntodos os candidatos:\n  C=0.01     roc_auc=0.9926 +/- 0.0046\n  C=0.1      roc_auc=0.9953 +/- 0.0034\n  C=1.0      roc_auc=0.9962 +/- 0.0040\n  C=10.0     roc_auc=0.9877 +/- 0.0104\nNote a sintaxe clf__C: dois sublinhados separam o nome do passo do nome do parâmetro, e é assim que se alcança qualquer parâmetro de qualquer etapa do Pipeline — inclusive escala__with_mean.\nOlhe a coluna de desvio antes de celebrar o vencedor: 0,9962 ± 0,0040 contra 0,9953 ± 0,0034 são a mesma coisa. O GridSearchCV sempre devolve um melhor; cabe a você ver se ele é melhor de verdade.\nPara grades grandes, RandomizedSearchCV amostra combinações em vez de testar todas, e costuma achar algo tão bom em uma fração do tempo. E n_jobs=-1 usa todos os núcleos — a busca é o caso perfeito de paralelismo, porque os candidatos são independentes (Volume 15).\n\n\n\n\n\n\nAvisoO conjunto de teste tem um uso, não vários\n\n\n\nSe você escolher hiperparâmetros olhando a métrica de teste, ela deixa de ser uma estimativa honesta — você acabou de ajustar o modelo ao teste, só que devagar e à mão. A escolha se faz por validação cruzada dentro do treino; o teste é aberto uma vez, no fim, para relatar. Se precisar iterar muito, separe três conjuntos: treino, validação e teste.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#comparar-modelos",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#comparar-modelos",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.10 Comparar modelos",
+    "text": "85.10 Comparar modelos\nmodelo                   roc_auc CV    desvio\nLogisticRegression           0.9962    0.0040\nKNeighbors(k=5)              0.9820    0.0106\nDecisionTree                 0.9224    0.0192\nRandomForest(200)            0.9887    0.0102\nA regressão logística, o modelo mais simples da lista, ganhou. Isso é comum e vale como aviso contra começar pelo modelo mais sofisticado: estabeleça a linha de base com um modelo linear e só aceite complexidade que pague por si.\nComo orientação inicial: LogisticRegression/Ridge como referência; RandomForest ou HistGradientBoostingClassifier para dados tabulares heterogêneos (e sem precisar escalar); KNeighbors para fronteiras locais e conjuntos pequenos. Para tabelas, gradient boosting costuma ser o teto prático — redes neurais brilham em imagem, texto e áudio, não aqui.\nE florestas dão de graça uma medida de importância:\n6 atributos mais importantes (RandomForest):\nworst perimeter         0.1457\nworst area              0.1441\nworst concave points    0.1146\nmean concave points     0.0983\nworst radius            0.0724\nÚtil para entender e reduzir atributos — mas cuidado: essa importância é enviesada a favor de variáveis com muitos valores distintos, e divide o crédito entre colunas correlacionadas. Para decisões sérias, permutation_importance.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#regressão",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#regressão",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.11 Regressão",
+    "text": "85.11 Regressão\nmodelo                    MAE     RMSE       R2\nLinearRegression        41.55    53.37   0.4849\nRidge(alpha=1)          45.91    55.73   0.4384\nRandomForest            43.34    54.48   0.4633\n\nescala do alvo: 25 a 346 (media 152.1)\nAs três métricas dizem coisas diferentes. MAE é o erro médio absoluto, na unidade do alvo e fácil de comunicar (“erra 41 em média”). RMSE pune erro grande mais que erro pequeno, por causa do quadrado — use quando um erro grande é desproporcionalmente ruim. R² é a fração da variância explicada, adimensional: 0,48 aqui, o que significa que metade da variação continua inexplicada.\nSempre compare o erro com a escala do alvo. Um MAE de 41 num alvo que vai de 25 a 346 é um erro considerável; o mesmo 41 num alvo na casa dos milhões seria excelente. Métrica sem referência não informa nada — e é por isso que DummyRegressor(strategy=\"mean\") também merece ser rodado.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#dados-de-verdade-columntransformer",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#dados-de-verdade-columntransformer",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.12 Dados de verdade: ColumnTransformer",
+    "text": "85.12 Dados de verdade: ColumnTransformer\nUma tabela real tem números e texto, com buracos. ColumnTransformer aplica preprocessamentos diferentes a colunas diferentes, dentro do mesmo Pipeline:\nprep = ColumnTransformer([\n    (\"num\", Pipeline([(\"imp\", SimpleImputer(strategy=\"median\")),\n                      (\"esc\", StandardScaler())]), [\"idade\", \"renda\"]),\n    (\"cat\", OneHotEncoder(handle_unknown=\"ignore\"), [\"cidade\"]),\n])\ncano = Pipeline([(\"prep\", prep), (\"clf\", LogisticRegression())])\ncano.fit(misto, alvo)\ncolunas depois do preprocessamento: (6, 5)\nnomes gerados: ['num__idade', 'num__renda', 'cat__cidade_belem',\n                'cat__cidade_curitiba', 'cat__cidade_manaus']\nDois detalhes que evitam falha em produção. A imputação também vive no Pipeline: a mediana tem de vir do treino, senão é vazamento como qualquer outro. E handle_unknown=\"ignore\" no OneHotEncoder impede que uma cidade nova, ausente no treino, levante exceção no momento da previsão — que é exatamente quando ninguém está olhando.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#não-supervisionado",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#não-supervisionado",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.13 Não supervisionado",
+    "text": "85.13 Não supervisionado\n\n\n\n\n\n\nFigura 85.4: Os mesmos dados projetados em duas dimensões: com o rótulo verdadeiro e com os grupos que o k-means encontrou sozinho.\n\n\n\nvariancia explicada por componente: [0.4427 0.1897]\nacumulada nas 2 primeiras         : 0.6324\n\nk-means nao viu o rotulo, e ainda assim:\nclasse real      0    1\ngrupo k-means\n0               36  339\n1              176   18\nPCA projeta 30 colunas em 2, preservando 63% da variância — o suficiente para desenhar. KMeans, que nunca viu os rótulos, encontrou dois grupos que coincidem com as classes em 91% dos casos.\nDuas cautelas. PCA e KMeans exigem dados padronizados, porque ambos trabalham com variância e distância; sem StandardScaler, a coluna de maior magnitude define tudo. E o k do KMeans é uma escolha sua: aqui sabíamos que eram duas classes, o que num problema real de agrupamento não se sabe — daí o método do cotovelo e o silhouette_score, que são heurísticas, não respostas.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#salvar-o-modelo",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#salvar-o-modelo",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.14 Salvar o modelo",
+    "text": "85.14 Salvar o modelo\nimport joblib\njoblib.dump(modelo, \"modelo.joblib\")\nrecarregado = joblib.load(\"modelo.joblib\")\nmodelo salvo : 3073 bytes\nmesma previsao apos recarregar: True\nSalve o Pipeline inteiro, não só o classificador — ele contém o escalador treinado, sem o qual as previsões saem erradas em silêncio.\nE o aviso do Capítulo 64 vale integralmente: joblib usa pickle, então carregar um modelo de fonte não confiável executa código arbitrário. Modelo baixado da internet é código baixado da internet. Guarde junto do arquivo a versão do scikit-learn usada: carregar um modelo salvo por outra versão pode falhar ou, pior, funcionar com comportamento alterado.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#onde-isto-termina",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#onde-isto-termina",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.15 Onde isto termina",
+    "text": "85.15 Onde isto termina\n\nAprendizado profundo (imagem, texto, áudio, geração) é PyTorch, JAX ou TensorFlow. Redes em dados tabulares raramente batem gradient boosting.\nSéries temporais exigem validação que respeite a ordem (TimeSeriesSplit) e ferramentas próprias.\nCausalidade não é previsão. Um modelo com R² de 0,9 não diz que mexer numa variável muda o resultado.\nJustiça e viés — um modelo aprende os padrões dos dados, inclusive os discriminatórios. Se o histórico tem viés, o modelo o reproduz com aparência de objetividade. Avaliar métricas por subgrupo é obrigatório antes de qualquer decisão sobre pessoas.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#jeito-pythônico",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#jeito-pythônico",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.16 🐍 Jeito Pythônico",
+    "text": "85.16 🐍 Jeito Pythônico\nPipeline sempre, desde a primeira linha. Não é organização, é a defesa estrutural contra vazamento: só o Pipeline garante que cada fit veja apenas o treino, inclusive dentro de cada dobra da validação cruzada.\nDummyClassifier/DummyRegressor antes do primeiro modelo real. Sem o piso, você não sabe se 70% é bom ou desastroso.\nstratify=y em classificação, random_state em tudo. O primeiro protege a proporção das classes; o segundo torna o resultado reprodutível, que é pré-requisito para comparar qualquer coisa.\nRelate média e desvio da validação cruzada. Um número só esconde que a diferença entre dois modelos é menor que a variação entre dobras.\nEscolha a métrica pelo custo do erro, não pelo padrão. Acurácia em classe desbalanceada dá 97,7% a um modelo que não detecta nada. Decida antes se o problema é perder casos ou dar falso alarme.\nComece pelo modelo linear. Ele é rápido, interpretável, e neste capítulo ganhou da floresta. Complexidade se justifica com medida, não com expectativa.\nO conjunto de teste é aberto uma vez. Ajustar hiperparâmetro olhando o teste é sobreajustá-lo à mão.\nSalve o Pipeline inteiro, com a versão da biblioteca — e trate modelo de terceiros como código de terceiros, porque joblib é pickle.\nEscale para modelos de distância e gradiente; não se preocupe para árvores. Saber por quê vale mais que decorar a lista.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#laboratório",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#laboratório",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.17 🧪 Laboratório",
+    "text": "85.17 🧪 Laboratório\nPasso 1 — ambiente.\nmkdir lab-ml && cd lab-ml\npython3.13 -m venv .venv\nsource .venv/bin/activate        # Windows: .venv\\Scripts\\activate\npython -m pip install scikit-learn pandas matplotlib\npython -c \"import sklearn; print(sklearn.__version__)\"\nPasso 2 — conhecer os dados. Carregue load_breast_cancer(as_frame=True). Imprima X.shape, a contagem por classe, X.describe() e a proporção da classe majoritária. Antes de modelar, responda: qual é a acurácia de um modelo que sempre responde a classe mais comum?\nPasso 3 — o piso. Confirme com DummyClassifier:\nacuracia do DummyClassifier: 0.6294\nRode também strategy=\"stratified\" e strategy=\"uniform\" e compare.\nPasso 4 — o primeiro Pipeline. Monte StandardScaler + LogisticRegression, treine e avalie:\nacuracia treino: 0.9883\nacuracia teste : 0.986\nDepois treine a LogisticRegression sem o escalador e observe a queda e o aviso de convergência.\nPasso 5 — o vazamento, com ruído puro. Este é o passo mais importante do laboratório. Gere X = rng.normal(size=(120, 4000)) e y = rng.integers(0, 2, 120) — sem sinal algum. Então:\n\nselecione os 20 melhores atributos com SelectKBest sobre X inteiro e rode cross_val_score;\nponha o SelectKBest dentro de um Pipeline e rode de novo.\n\nERRADO (selecao antes do split): media 0.8667\nCERTO  (dentro do Pipeline)    : media 0.5417\nGuarde esses dois números. Eles são a razão de existir do Pipeline.\nPasso 6 — validação cruzada. Rode cross_val_score com StratifiedKFold(5, shuffle=True) e imprima as cinco dobras, a média e o desvio. Repita com random_state diferente e veja quanto a média se move. Depois use cross_validate com quatro métricas de uma vez.\nPasso 7 — a acurácia enganosa. Com make_classification(n_samples=2000, weights=[0.98, 0.02]), compare um DummyClassifier com uma LogisticRegression(class_weight=\"balanced\"):\nsempre 'nao'  : acuracia 0.9767  recall 0.0000\nbalanced      : acuracia 0.8533  recall 0.7143\nImprima a matriz de confusão dos dois e explique, em uma frase, por que o de acurácia maior é o pior.\nPasso 8 — precisão contra recall. Sobre o modelo do passo 4, use predict_proba e classifique com limiares de 0,1 a 0,9. Monte uma tabela de precisão e recall por limiar e desenhe as duas curvas. Escolha o limiar que você usaria se fosse um rastreamento médico, e o que usaria se fosse um filtro de spam — e justifique cada um.\nPasso 9 — sobreajuste. Compare uma DecisionTreeClassifier(max_depth=2) com uma sem limite:\narvore max_depth=2       0.9577   0.9091\narvore sem limite        1.0000   0.9231\nDepois use validation_curve variando max_depth de 1 a 15 e desenhe as duas linhas. Marque onde a validação atinge o máximo. Faça o mesmo com learning_curve e responda: mais dados ajudariam?\nPasso 10 — busca de hiperparâmetros. Rode GridSearchCV sobre clf__C com cinco valores e scoring=\"roc_auc\". Imprima best_params_, best_score_ e a tabela completa de cv_results_ com médias e desvios. Verifique se o vencedor é estatisticamente distinguível do segundo.\nPasso 11 — comparar quatro modelos. Com o mesmo cv e a mesma métrica, avalie LogisticRegression, KNeighbors, DecisionTree e RandomForest, e imprima média e desvio de cada um. Só então abra o conjunto de teste, uma vez, com o vencedor.\nPasso 12 — dados mistos. Construa um DataFrame com duas colunas numéricas (com NaN) e uma categórica, e monte um ColumnTransformer com SimpleImputer + StandardScaler para as numéricas e OneHotEncoder(handle_unknown=\"ignore\") para a categórica. Confirme os nomes gerados com get_feature_names_out(). Depois preveja para uma cidade que não existia no treino e confirme que não explode.\nPasso 13 — sem rótulo. Padronize X, reduza a 2 componentes com PCA e desenhe o scatter duas vezes: colorido pelo rótulo verdadeiro e pelos grupos do KMeans(n_clusters=2). Cruze os dois com pd.crosstab:\nclasse real      0    1\ngrupo k-means\n0               36  339\n1              176   18\nDepois rode o KMeans sem padronizar e compare — a diferença é o argumento a favor do StandardScaler.\nPasso 14 — persistir. Salve o Pipeline com joblib.dump, recarregue e confirme que as previsões são idênticas. Depois salve só o classificador (sem o escalador), recarregue, preveja sobre X_te cru e observe o resultado errado — sem nenhum erro levantado.",
+    "crumbs": [
+      "Volume 13 — Dados, Análise e Visualização\n",
+      "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
+    ]
+  },
+  {
+    "objectID": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#resumo",
+    "href": "vol13/cap085-introducao-ao-aprendizado-de-maquina-com.html#resumo",
+    "title": "85  Introdução ao aprendizado de máquina com scikit-learn",
+    "section": "85.18 Resumo",
+    "text": "85.18 Resumo\n\nO problema do aprendizado de máquina é generalizar, não ajustar. Toda a estrutura da biblioteca existe para proteger a estimativa de generalização.\nA API é uniforme: fit, predict, transform, score. Trocar de modelo é trocar uma linha, e é isso que faz Pipeline e GridSearchCV funcionarem com qualquer estimador.\ntrain_test_split com stratify=y e random_state; e um DummyClassifier antes de tudo, para saber o que “melhor que nada” significa neste problema.\nPipeline é correção, não conveniência. Num experimento com ruído puro, selecionar atributos antes do split produziu 86,7% de acurácia sobre dados sem sinal; dentro do Pipeline, os mesmos dados deram 54%.\nValidação cruzada devolve k medidas: relate média e desvio. Diferença menor que a variação entre dobras não é diferença. Dados temporais pedem TimeSeriesSplit.\nAcurácia é a métrica errada em classe desbalanceada: 97,7% para um modelo com recall zero. Escolha entre precisão e recall pelo custo do erro, e use class_weight=\"balanced\".\nSobreajuste se diagnostica com a curva de validação (treino sobe, validação empaca); a curva de aprendizado diz se mais dados ajudariam.\nEm GridSearchCV, parâmetro de etapa é passo__parametro (dois sublinhados). O teste é aberto uma vez, no fim — escolher hiperparâmetro por ele é sobreajustá-lo à mão.\nComece pelo modelo linear: aqui a regressão logística venceu a floresta. Escale para modelos de distância e gradiente; árvores não precisam.\nColumnTransformer para tabelas mistas, com imputação dentro do Pipeline e handle_unknown=\"ignore\" no codificador. Salve o Pipeline inteiro com joblib — e lembre que joblib é pickle, com todos os riscos do Capítulo 64.",
     "crumbs": [
       "Volume 13 — Dados, Análise e Visualização\n",
       "<span class='chapter-number'>85</span>  <span class='chapter-title'>Introdução ao aprendizado de máquina com scikit-learn</span>"
