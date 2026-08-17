@@ -1,3 +1,438 @@
 # Implantação: contêineres, servidores de aplicação e produção {#sec-cap092}
 
-*(em elaboracao)*
+`uvicorn app:app --reload` funciona na sua máquina. Em produção ele é errado por quatro motivos ao mesmo tempo: um processo só, recarregamento automático ligado, sem TLS, e escutando em `127.0.0.1`. Trocar isso por um comando maior não basta — implantar é decidir quantos processos, como eles morrem, o que acontece com o pedido em voo durante a atualização, de onde vem a configuração, para onde vai o log e como o orquestrador sabe se a aplicação está viva.
+
+Este capítulo fecha o volume ligando o que já foi construído — a aplicação do @sec-cap088, o banco do @sec-cap090, os segredos do @sec-cap091 — a uma implantação que aguenta.
+
+As medições abaixo são de **Linux (WSL2, kernel 6.6, 12 núcleos)** com Python 3.13.12, uvicorn 0.52.3 e gunicorn 26.0.0 — porque gunicorn não roda em Windows, e implantação de Python é assunto de Unix.
+
+```bash
+pip install "fastapi[standard]" uvicorn gunicorn
+```
+
+## A pilha de produção
+
+::: {#fig-pilha-producao}
+```{.tikz}
+%%| filename: pilha-producao
+%%| alt: A pilha de producao, do proxy reverso ao banco, com as preocupacoes laterais
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=6.4cm,
+             minimum height=1.35cm,font=\scriptsize,inner sep=7pt},
+  sd/.style={draw,rounded corners,align=left,text width=5.4cm,
+             minimum height=1.35cm,font=\scriptsize,inner sep=7pt,
+             fill=manualgray!12}
+]
+  \path (-0.4,-5.8) rectangle (14.4,3.6);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.0,3.3)
+    {o que existe entre o cliente e o seu codigo, em producao};
+
+  \node[bx,fill=manualblue!16] at (3.9,2.1)
+    {\textbf{proxy reverso / balanceador}\\
+     TLS, HTTP/2, estaticos, limite de taxa e de corpo,\\timeout};
+  \node[bx,fill=manualgreen!16] at (3.9,0.3)
+    {\textbf{servidor de aplicacao}\\
+     mestre + N trabalhadores; reinicia quem morre,\\
+     encerra com calma no SIGTERM};
+  \node[bx,fill=manualyellow!22] at (3.9,-1.5)
+    {\textbf{sua aplicacao}\\
+     um processo por trabalhador, sem estado local:\\
+     nada de contador em variavel de modulo};
+  \node[bx,fill=manualred!14] at (3.9,-3.3)
+    {\textbf{estado, do lado de fora}\\
+     banco, cache, fila, arquivos --- o que sobrevive\\ao contêiner};
+
+  \node[sd] at (11.2,2.1)
+    {\textbf{configuracao}\\
+     variavel de ambiente; falhar na\\inicializacao se faltar};
+  \node[sd] at (11.2,0.3)
+    {\textbf{observabilidade}\\
+     log em \texttt{stdout}, uma linha por evento;\\
+     metricas e rastreamento};
+  \node[sd] at (11.2,-1.5)
+    {\textbf{sondas}\\
+     \texttt{/saude} (esta vivo?) e \texttt{/pronto}\\
+     (pode receber trafego?)};
+  \node[sd] at (11.2,-3.3)
+    {\textbf{ciclo de vida}\\
+     migracao antes de trocar a versao;\\
+     \texttt{SIGTERM}, drenagem, saida};
+
+  \draw[<->,>=stealth,thick] (3.9,1.4) -- (3.9,1.0);
+  \draw[<->,>=stealth,thick] (3.9,-0.4) -- (3.9,-0.8);
+  \draw[<->,>=stealth,thick] (3.9,-2.2) -- (3.9,-2.6);
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.6cm,
+        font=\scriptsize] at (7.0,-5.1)
+    {\textbf{a regra que organiza tudo:} o processo e descartavel. Ele pode ser morto a
+     qualquer momento, e outro identico sobe no lugar. Tudo que precisa sobreviver mora
+     fora dele --- e e isso que torna a implantacao repetivel.};
+\end{tikzpicture}
+```
+A pilha de produção e as quatro preocupações que a acompanham.
+:::
+
+## Quantos trabalhadores, e por quê
+
+O modelo é sempre o mesmo: um processo **mestre** que não atende pedido nenhum, e N **trabalhadores** que atendem. O mestre vigia, reinicia quem morre e coordena o desligamento.
+
+A pergunta prática é quantos. A resposta depende do que a rota faz — e dá para medir. Vinte e quatro pedidos simultâneos, numa máquina de 12 núcleos, contra uma rota que gasta CPU e outra que espera I/O:
+
+```bash
+uvicorn app:app --host 0.0.0.0 --port 8000                   # 1 trabalhador
+uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4       # 4
+gunicorn app:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000
+```
+
+```text
+nucleos disponiveis: 12
+
+== uvicorn, 1 trabalhador
+  /cpu?n=3000000     24 pedidos em   3.02 s |    7.9/s | 1 processo(s): [24]
+  /lento             24 pedidos em   0.55 s |   43.5/s | 1 processo(s): [24]
+
+== uvicorn, 4 trabalhadores
+  /cpu?n=3000000     24 pedidos em   1.20 s |   20.0/s | 4 processo(s): [9, 7, 5, 3]
+  /lento             24 pedidos em   0.53 s |   45.0/s | 4 processo(s): [16, 5, 2, 1]
+
+== gunicorn, 4 trabalhadores UvicornWorker
+  /cpu?n=3000000     24 pedidos em   1.07 s |   22.3/s | 4 processo(s): [9, 7, 6, 2]
+  /lento             24 pedidos em   0.54 s |   44.6/s | 4 processo(s): [11, 8, 3, 2]
+```
+
+A leitura é o capítulo inteiro em quatro linhas:
+
+**Para CPU, trabalhador resolve**: 3,02 s viraram 1,20 s. Não os 4× teóricos, porque há custo de rede, de troca de processo e de coordenação — mas 2,5× é real.
+
+**Para I/O, trabalhador não muda nada**: 0,55 s contra 0,53 s. As esperas já se sobrepunham dentro de um único laço de eventos (@sec-cap086). Acrescentar processos para uma carga de I/O gasta memória e não compra desempenho.
+
+**A distribuição não é uniforme**: `[9, 7, 5, 3]`. O sistema operacional decide quem aceita cada conexão, e o resultado é desigual por natureza. Um trabalhador com o dobro dos pedidos de outro não é defeito.
+
+**uvicorn com `--workers` e gunicorn com `UvicornWorker` são equivalentes** em desempenho aqui. A escolha é operacional: gunicorn traz reinício de trabalhador por número de pedidos (`--max-requests`, útil contra vazamento de memória), configuração por arquivo, e ganchos de ciclo de vida.
+
+::: {.callout-tip}
+## O ponto de partida
+`(2 × núcleos) + 1` é a regra tradicional, herdada do mundo WSGI síncrono. Para uma aplicação ASGI com I/O assíncrono de verdade, ela superestima muito — comece com **um trabalhador por núcleo** e ajuste medindo. E, em contêiner, "núcleos" é a **cota do contêiner**, não a do host: `os.cpu_count()` numa máquina de 64 núcleos com limite de 0,5 CPU devolve 64, e 129 trabalhadores derrubam o pod na hora.
+:::
+
+### O custo em memória
+
+Cada trabalhador é um processo com o seu próprio interpretador. Medindo a PSS (memória proporcional, que divide as páginas compartilhadas):
+
+```text
+== gunicorn -w 1
+   2 processos, soma das PSS: 57298 KiB (56.0 MiB)
+
+== gunicorn -w 4
+   5 processos, soma das PSS: 138067 KiB (134.8 MiB)
+
+== gunicorn -w 4 --preload
+   5 processos, soma das PSS:  77378 KiB (75.6 MiB)
+```
+
+`--preload` importa a aplicação **antes** de bifurcar os processos, e as páginas de memória compartilhadas por cópia-na-escrita não são contadas quatro vezes: 134,8 MiB caíram para **75,6 MiB**, 44% a menos. Para uma aplicação com muitas dependências — ou com um modelo carregado na inicialização — a economia é bem maior que isso.
+
+O preço: com `--preload`, o recarregamento gracioso de código não funciona (o mestre já importou a versão antiga), e qualquer recurso aberto **antes** da bifurcação é herdado pelos filhos. Conexão de banco aberta na importação vira o mesmo *socket* compartilhado por quatro processos, com resultados imprevisíveis. É mais um motivo para abrir tudo no `lifespan` (@sec-cap088), que roda em cada trabalhador depois da bifurcação.
+
+## Desligar direito
+
+Atualizar a aplicação significa matar processos. O que acontece com o pedido que estava no meio decide se o usuário vê a resposta ou um erro.
+
+```text
+===== 1. SIGTERM: o pedido em voo termina =====
+  -> mandando SIGTERM com o pedido no meio
+  pedido em voo: HTTP 200 em 0.503492s
+  corpo: {"pid":396}
+  novo pedido depois do SIGTERM:
+    HTTP 000 (000 = conexao recusada)
+  log do servidor:
+    [pid 396] desligando com calma
+
+===== 2. SIGKILL: o pedido em voo morre =====
+  -> mandando SIGKILL com o pedido no meio
+  pedido em voo: HTTP 000 em 0.150505s (000 = morreu)
+  log do servidor:
+    linhas de desligamento: 0
+```
+
+Com **`SIGTERM`**, o servidor para de aceitar conexões novas, deixa as em andamento terminarem (o pedido de 0,5 s completou com `200`) e executa a parte de encerramento do `lifespan` — a linha "desligando com calma" é o `yield` do capítulo anterior soltando os recursos.
+
+Com **`SIGKILL`**, nada disso acontece: o pedido morreu em 150 ms, e o gancho de desligamento não rodou. Conexão de banco não devolvida, arquivo temporário não removido, mensagem não confirmada na fila.
+
+Daí três exigências concretas:
+
+**O seu processo precisa **receber** o `SIGTERM`.** Em contêiner, o sinal vai para o PID 1. Se o `CMD` for uma linha de shell (`CMD gunicorn ... &`, ou um `entrypoint.sh` sem `exec`), o PID 1 é o shell, e ele não repassa o sinal — o orquestrador espera o tempo de graça e manda `SIGKILL`. É por isso que a forma correta é `CMD ["gunicorn", ...]` (forma de vetor, não de shell) e `exec` no final de todo script de entrada.
+
+**O tempo de graça precisa ser maior que o pedido mais longo.** O Kubernetes usa 30 s por padrão; um relatório de 45 s será morto na metade toda vez que houver implantação.
+
+**Mas ele precisa ter limite.** Um pedido travado não pode segurar o desligamento para sempre:
+
+```text
+===== 3. o pedido que nao termina e o timeout =====
+  -> SIGTERM com um pedido de 60 s em voo, --timeout-graceful-shutdown 3
+    o servidor saiu depois de 3.17 s (nao esperou os 60)
+```
+
+## Sondas: vivo é diferente de pronto
+
+```python
+@app.get("/saude")            # liveness: o processo respira?
+def saude():
+    return {"ok": True, "pid": os.getpid()}
+
+@app.get("/pronto")           # readiness: pode receber trafego?
+def pronto():
+    return ({"pronto": True}, 200) if PRONTO["v"] else ({"pronto": False}, 503)
+```
+
+As duas parecem iguais e têm consequências opostas:
+
+- **Vivacidade** falhando faz o orquestrador **matar e recriar** o processo. Portanto ela não pode depender do banco: se o banco cai, matar todas as aplicações não ajuda ninguém e ainda apaga o que estava em memória.
+- **Prontidão** falhando faz o orquestrador **tirar o processo do balanceamento**, sem matá-lo. É aqui que entram as dependências: sem banco, a instância não deve receber tráfego, mas deve continuar viva esperando o banco voltar.
+
+Na prática: `/saude` responde `200` sempre que o processo consegue responder; `/pronto` confere as dependências essenciais e responde `503` enquanto não estiverem prontas — inclusive **durante a inicialização**, como no `lifespan` acima, e **durante o desligamento**, para drenar a instância antes de fechá-la.
+
+## O contêiner
+
+```dockerfile
+# ---------- estagio 1: dependencias ----------
+FROM python:3.13-slim AS build
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# copiado sozinho e de proposito: esta camada so refaz quando
+# as dependencias mudam, nao a cada alteracao de codigo
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# ---------- estagio 2: execucao ----------
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+RUN useradd --create-home --uid 10001 app
+COPY --from=build /opt/venv /opt/venv
+
+WORKDIR /app
+COPY --chown=app:app . .
+
+USER app
+EXPOSE 8000
+
+# forma de vetor: o processo vira PID 1 e RECEBE o SIGTERM
+CMD ["gunicorn", "app:app", \
+     "-k", "uvicorn.workers.UvicornWorker", \
+     "-w", "4", "-b", "0.0.0.0:8000", \
+     "--graceful-timeout", "30", "--timeout", "60", \
+     "--max-requests", "2000", "--max-requests-jitter", "200", \
+     "--access-logfile", "-", "--error-logfile", "-"]
+```
+
+::: {#fig-camadas-imagem}
+```{.tikz}
+%%| filename: camadas-imagem
+%%| alt: Ordem das camadas de um Dockerfile e o efeito no cache
+\begin{tikzpicture}[
+  lz/.style={draw,rounded corners,align=left,text width=5.0cm,
+             minimum height=0.85cm,font=\scriptsize},
+  ob/.style={align=left,text width=6.8cm,font=\scriptsize\itshape,
+             color=manualgray!150}
+]
+  \path (-0.4,-4.8) rectangle (14.2,3.6);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.4cm] at (7.0,3.3)
+    {a ordem das camadas e o que decide o tempo de build};
+
+  \node[lz,fill=manualgray!14] at (3.2,2.3) {\texttt{FROM python:3.13-slim}};
+  \node[ob] at (10.2,2.3) {muda quando voce troca de versao: quase nunca};
+
+  \node[lz,fill=manualblue!16] at (3.2,1.2) {\texttt{COPY requirements.txt}};
+  \node[ob] at (10.2,1.2) {muda quando uma dependencia muda: raro};
+
+  \node[lz,fill=manualblue!16] at (3.2,0.1) {\texttt{RUN pip install -r ...}};
+  \node[ob] at (10.2,0.1)
+    {a camada cara --- so refaz se a de cima mudou};
+
+  \node[lz,fill=manualred!16] at (3.2,-1.0) {\texttt{COPY . .}};
+  \node[ob] at (10.2,-1.0)
+    {muda a cada commit: por isso fica \textbf{depois} do install};
+
+  \node[lz,fill=manualgreen!16] at (3.2,-2.1) {\texttt{USER app} + \texttt{CMD [...]}};
+  \node[ob] at (10.2,-2.1) {sem custo, e a diferenca entre rodar como root ou nao};
+
+  \draw[->,>=stealth] (3.2,1.87) -- (3.2,1.63);
+  \draw[->,>=stealth] (3.2,0.77) -- (3.2,0.53);
+  \draw[->,>=stealth] (3.2,-0.33) -- (3.2,-0.57);
+  \draw[->,>=stealth] (3.2,-1.43) -- (3.2,-1.67);
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.4cm,
+        font=\scriptsize] at (7.0,-3.9)
+    {\textbf{inverta as duas do meio} --- \texttt{COPY . .} antes do \texttt{pip install}
+     --- \textbf{e todo build reinstala tudo}, porque a camada cara passa a depender de
+     um arquivo que muda a cada commit. E a otimizacao de Dockerfile que mais rende, e
+     custa mover uma linha.};
+\end{tikzpicture}
+```
+A ordem das instruções decide quais camadas o cache aproveita.
+:::
+
+Cinco decisões desse arquivo, e o motivo de cada uma:
+
+**Duas etapas (`multi-stage`).** Compilador, cabeçalhos e cache do pip ficam na primeira; a imagem final leva só o ambiente virtual pronto. Menos bytes para transferir e menos superfície para vulnerabilidade.
+
+**`requirements.txt` copiado antes do código.** É o que a figura mostra: a camada cara (`pip install`) só é refeita quando as dependências mudam. Inverter a ordem é o erro mais comum e mais caro em tempo de build.
+
+**`USER app`.** O padrão do Docker é `root`; um contêiner comprometido rodando como root é uma escalada a menos para o atacante. Custa duas linhas.
+
+**`PYTHONUNBUFFERED=1`.** Sem isso, o `stdout` do Python fica em *buffer* quando não é um terminal, e o log aparece em blocos — ou desaparece de vez se o processo for morto. É a causa clássica de "o contêiner não loga nada".
+
+**A forma de vetor no `CMD`.** Como discutido: é o que faz o processo ser o PID 1 e receber o `SIGTERM`.
+
+E o `.dockerignore` que acompanha, sem o qual o `COPY . .` carrega o `.git`, o `.venv` local e o `__pycache__` para dentro da imagem:
+
+```text
+.git
+.venv
+__pycache__/
+*.pyc
+.env
+.pytest_cache
+```
+
+::: {.callout-warning}
+## `.env` no `.dockerignore`, e segredo nunca em `ENV`
+Uma variável definida com `ENV SENHA=...` fica gravada **na imagem** e aparece em `docker history` para qualquer pessoa que tenha a imagem. Segredo entra em tempo de execução (`--env-file`, `-e`, ou o mecanismo de segredo do orquestrador), nunca em tempo de construção.
+:::
+
+## Configuração, log e migração
+
+**Configuração vem do ambiente.** É o terceiro princípio dos *doze fatores*, e o mecanismo já está no @sec-cap087: `BaseSettings` lê as variáveis, converte os tipos e derruba o processo na inicialização se faltar algo. A mesma imagem roda em teste, homologação e produção; só o ambiente muda.
+
+**Log vai para `stdout`, uma linha por evento.** O processo não gerencia arquivo, não rotaciona nada: quem coleta é a plataforma. Formato JSON quando houver agregador — e, se um `request_id` atravessar todas as linhas de um pedido, depurar incidente deixa de ser arqueologia. O `logging` do @sec-cap060 já faz tudo isso com um `StreamHandler` e um formatador.
+
+**Migração de banco é um passo separado do início da aplicação.** Rodar `alembic upgrade head` (@sec-cap090) no arranque de cada trabalhador significa quatro processos disputando a mesma migração. O certo é um passo de implantação próprio, antes de trocar a versão — e migrações compatíveis com as duas versões durante a janela em que ambas rodam: primeiro acrescente a coluna, depois passe a usá-la, e só numa implantação seguinte remova a antiga.
+
+**Atualização sem derrubar** é a soma de tudo isto: o orquestrador sobe instâncias novas, espera a sonda de prontidão, redireciona o tráfego, manda `SIGTERM` nas antigas e espera a drenagem. Cada peça já apareceu neste capítulo; a implantação sem interrupção é a consequência delas funcionarem juntas.
+
+## De onde escolher
+
+| forma | serve bem para | o que cobra |
+|---|---|---|
+| VM com systemd | serviço único, controle total, custo previsível | você cuida de tudo: TLS, atualização, reinício |
+| PaaS (Fly, Render, Railway, App Runner) | equipe pequena, poucos serviços | menos controle, custo por instância |
+| contêiner gerenciado (ECS, Cloud Run) | escala variável, integração com a nuvem | acoplamento ao provedor |
+| Kubernetes | muitos serviços, equipe de plataforma | complexidade real; não é o degrau inicial |
+| serverless (Lambda + Mangum) | tráfego intermitente, picos | arranque a frio, limite de tempo, sem conexão persistente |
+
+O erro comum é começar pelo fim da tabela. Um serviço com dez pedidos por segundo roda numa VM de vinte reais com systemd, nginx e um `gunicorn` — e essa configuração é entendida por uma pessoa numa tarde. Kubernetes resolve problemas que aparecem com dezenas de serviços e várias equipes; adotado antes disso, ele **é** o problema.
+
+## 🐍 Jeito Pythônico
+
+**`--reload` nunca em produção.** Ele vigia o sistema de arquivos, gasta CPU e recarrega código sem controle.
+
+**Um trabalhador por núcleo como ponto de partida**, ajustado por medição. Medido: 4 trabalhadores deram 2,5× em carga de CPU e **zero** ganho em carga de I/O.
+
+**Em contêiner, leia a cota, não `os.cpu_count()`.** Contar os núcleos do host é como se derruba um pod na primeira subida.
+
+**`--preload` quando a memória apertar** — 134,8 MiB caíram para 75,6 MiB —, ciente de que nenhum recurso pode ser aberto antes da bifurcação.
+
+**Abra recursos no `lifespan`**, que roda em cada trabalhador depois do `fork`.
+
+**`CMD` na forma de vetor e `exec` em todo script de entrada**, para que o processo receba o `SIGTERM` de verdade.
+
+**Tempo de graça maior que o pedido mais longo, e com limite.** Sem o primeiro, toda implantação corta pedidos; sem o segundo, um pedido travado impede o desligamento.
+
+**Duas sondas com papéis diferentes**: vivacidade não consulta o banco (senão o banco fora do ar mata a frota inteira); prontidão consulta.
+
+**`COPY requirements.txt` antes de `COPY . .`** no Dockerfile. É a diferença entre reinstalar tudo a cada commit e não reinstalar nada.
+
+**`USER` não-root, `PYTHONUNBUFFERED=1` e `.dockerignore`** — três linhas que evitam três classes de problema.
+
+**Segredo em tempo de execução, nunca em `ENV`.** O que está na imagem está em `docker history`.
+
+**Migração como passo de implantação**, não no arranque do trabalhador — e compatível com as duas versões durante a troca.
+
+**Comece simples.** VM com systemd e nginx entende-se numa tarde; Kubernetes resolve um problema que talvez você não tenha.
+
+## 🧪 Laboratório
+
+Este laboratório precisa de Linux (gunicorn não roda em Windows; WSL serve).
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-deploy && cd lab-deploy
+python3.13 -m venv .venv && source .venv/bin/activate
+python -m pip install fastapi uvicorn gunicorn httpx
+```
+
+Escreva um `app.py` com quatro rotas: `/saude`, `/pronto`, `/cpu` (laço com `n` configurável) e `/lento` (`await asyncio.sleep(0.5)`). Todas devolvem `os.getpid()`.
+
+**Passo 2 — a medição que decide o número de trabalhadores.** Dispare 24 pedidos concorrentes com `httpx.AsyncClient` e `asyncio.gather` contra `/cpu` e `/lento`, com 1 e com 4 trabalhadores:
+
+```text
+== uvicorn, 1 trabalhador
+  /cpu?n=3000000     24 pedidos em   3.02 s |    7.9/s | 1 processo(s): [24]
+  /lento             24 pedidos em   0.55 s |   43.5/s | 1 processo(s): [24]
+== uvicorn, 4 trabalhadores
+  /cpu?n=3000000     24 pedidos em   1.20 s |   20.0/s | 4 processo(s): [9, 7, 5, 3]
+  /lento             24 pedidos em   0.53 s |   45.0/s | 4 processo(s): [16, 5, 2, 1]
+```
+
+Explique em uma frase por que a segunda linha de cada bloco é praticamente igual. Depois suba para 8 e 12 trabalhadores e ache onde o ganho para.
+
+**Passo 3 — memória.** Com o servidor no ar, leia `VmRSS` de `/proc/<pid>/status` e a soma de `Pss` de `/proc/<pid>/smaps_rollup` para o mestre e cada trabalhador. Compare `-w 1`, `-w 4` e `-w 4 --preload`:
+
+```text
+== gunicorn -w 4            5 processos, soma das PSS: 138067 KiB (134.8 MiB)
+== gunicorn -w 4 --preload  5 processos, soma das PSS:  77378 KiB (75.6 MiB)
+```
+
+Explique por que a RSS somada engana e a PSS não.
+
+**Passo 4 — `SIGTERM`.** Dispare um pedido a `/lento` e, 150 ms depois, mande `SIGTERM` no servidor. Confirme que o pedido terminou com `200` e que o próximo é recusado:
+
+```text
+  pedido em voo: HTTP 200 em 0.503492s
+  novo pedido depois do SIGTERM:
+    HTTP 000 (000 = conexao recusada)
+```
+
+**Passo 5 — `SIGKILL`.** Repita com `kill -KILL` e confirme que o pedido morreu e que o gancho de desligamento **não** rodou.
+
+**Passo 6 — o pedido travado.** Crie `/travado` com `time.sleep(60)`, dispare, mande `SIGTERM` e cronometre a saída. Depois acrescente `--timeout-graceful-shutdown 3` e cronometre de novo:
+
+```text
+    o servidor saiu depois de 3.17 s (nao esperou os 60)
+```
+
+**Passo 7 — as duas sondas.** Faça `/pronto` responder `503` durante os dois primeiros segundos de vida do processo. Suba o servidor e peça as duas rotas em laço, imprimindo o status a cada 200 ms. Descreva o que um balanceador faria com essa sequência.
+
+**Passo 8 — o Dockerfile.** Escreva o arquivo de duas etapas do capítulo. Depois **inverta** `COPY . .` e `RUN pip install`, mude uma linha de comentário no código e reconstrua as duas versões cronometrando. A diferença é o cache de camadas.
+
+**Passo 9 — o PID 1.** Troque o `CMD` da forma de vetor para a forma de shell (`CMD gunicorn app:app ...`), rode e mande `docker stop`. Cronometre quanto tempo o contêiner leva para morrer nas duas formas — a versão de shell vai esperar o tempo limite inteiro antes do `SIGKILL`.
+
+**Passo 10 — configuração e log.** Faça a aplicação ler `APP_BANCO_URL` com `BaseSettings` sem valor padrão e confirme que ela **não sobe** sem a variável. Depois configure o `logging` para emitir JSON em `stdout` com um `request_id` por pedido, e confira que a saída aparece imediatamente com `PYTHONUNBUFFERED=1` — e em blocos sem ele.
+
+**Passo 11 — atualização sem interrupção.** Com dois processos em portas diferentes atrás de um nginx (ou de um balanceador simples em Python), simule a troca: suba o novo, espere `/pronto`, mova o tráfego, mande `SIGTERM` no antigo. Mantenha um laço de pedidos rodando o tempo todo e conte quantos falharam. A meta é zero.
+
+## Resumo
+
+- O modelo é **mestre mais N trabalhadores**. Medido em 12 núcleos: 4 trabalhadores levaram uma carga de CPU de 3,02 s para **1,20 s**, e uma carga de I/O de 0,55 s para **0,53 s** — trabalhador resolve CPU, não espera.
+- **Um trabalhador por núcleo** como ponto de partida, ajustado medindo; em contêiner, leia a **cota**, não `os.cpu_count()`.
+- **`--preload` compartilha memória por cópia-na-escrita**: 134,8 MiB de PSS caíram para 75,6 MiB. Em troca, nada pode ser aberto antes da bifurcação — recursos vão no `lifespan`.
+- **`SIGTERM` deixa o pedido em voo terminar** (`200` em 0,50 s) e roda o encerramento do `lifespan`; **`SIGKILL` não faz nada disso**. O tempo de graça precisa ser maior que o pedido mais longo e ainda assim ter limite: com `--timeout-graceful-shutdown 3`, o servidor saiu em 3,17 s em vez de esperar 60.
+- **`CMD` na forma de vetor**, e `exec` em script de entrada — é o que faz o processo receber o sinal em vez de o shell engoli-lo.
+- **Vivacidade e prontidão são sondas diferentes**: a primeira não consulta dependências (falhar mata o processo), a segunda consulta (falhar só tira do balanceamento).
+- No Dockerfile: **duas etapas**, `requirements.txt` copiado **antes** do código, `USER` não-root, `PYTHONUNBUFFERED=1`, `.dockerignore` e **nenhum segredo em `ENV`** — o que está na imagem está em `docker history`.
+- **Configuração do ambiente** (falhando na inicialização se faltar), **log em `stdout`** linha a linha, **migração como passo próprio** da implantação e compatível com as duas versões durante a troca.
+- **Comece simples.** VM com systemd e nginx cabe numa tarde; Kubernetes resolve problemas de escala organizacional, e adotado cedo demais vira o problema principal.

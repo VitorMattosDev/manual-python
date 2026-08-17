@@ -149,7 +149,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 089** - Flask e Django: quando usar cada um - `vol14/cap089-flask-e-django-quando-usar-cada-um.qmd`
 - [x] **cap 090** - Bancos de dados relacionais com SQLAlchemy - `vol14/cap090-bancos-de-dados-relacionais-com-sqlalchemy.qmd`
 - [x] **cap 091** - Autenticação, autorização e segurança em aplicações Python - `vol14/cap091-autenticacao-autorizacao-e-seguranca-em.qmd`
-- [ ] **cap 092** - Implantação: contêineres, servidores de aplicação e produção - `vol14/cap092-implantacao-conteineres-servidores-de.qmd`
+- [x] **cap 092** - Implantação: contêineres, servidores de aplicação e produção - `vol14/cap092-implantacao-conteineres-servidores-de.qmd`
 
 ## Fase 5 — Avançado e Fronteira
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (91 concluidos).
+**Total:** 104 capitulos em 16 volumes (92 concluidos).
 
