@@ -139,7 +139,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 082** - Limpeza, transformação e agregação com pandas - `vol13/cap082-limpeza-transformacao-e-agregacao-com-pandas.qmd`
 - [x] **cap 083** - Visualização de dados com Matplotlib - `vol13/cap083-visualizacao-de-dados-com-matplotlib.qmd`
 - [x] **cap 084** - SciPy e a computação científica aplicada - `vol13/cap084-scipy-e-a-computacao-cientifica-aplicada.qmd`
-- [ ] **cap 085** - Introdução ao aprendizado de máquina com scikit-learn - `vol13/cap085-introducao-ao-aprendizado-de-maquina-com.qmd`
+- [x] **cap 085** - Introdução ao aprendizado de máquina com scikit-learn - `vol13/cap085-introducao-ao-aprendizado-de-maquina-com.qmd`
 
 ### Volume 14 — Web, APIs e Bancos de Dados
 
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (84 concluidos).
+**Total:** 104 capitulos em 16 volumes (85 concluidos).
 
