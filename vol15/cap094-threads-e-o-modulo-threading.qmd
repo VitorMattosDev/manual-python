@@ -1,3 +1,457 @@
 # Threads e o módulo threading {#sec-cap094}
 
-*(em elaboracao)*
+Um serviço de cobrança soma valores em memória antes de gravar. O teste passa, a homologação passa, e em produção o total fecha errado uma vez a cada poucos milhares de execuções — sempre para menos, nunca para mais, e nunca de forma reproduzível. Não há exceção, não há log, não há nada para depurar.
+
+Esse é o defeito característico de código com threads: ele não falha, ele **mente com pouca frequência**. O @sec-cap093 mostrou que o GIL não impede isso. Este capítulo é sobre as ferramentas que impedem — e sobre por que a melhor delas é a que faz você não precisar das outras.
+
+## Criando e esperando threads
+
+```python
+import threading, time
+
+def trabalha(nome, segundos):
+    time.sleep(segundos)
+    print(f"{nome} terminou")
+
+t = threading.Thread(target=trabalha, args=("baixar", 0.5), name="baixador")
+t.start()          # cria a thread do sistema e comeca a executar
+print(t.is_alive())
+t.join()           # bloqueia ate a thread terminar
+print(t.is_alive())
+```
+
+Quatro pontos que economizam depuração:
+
+**`start()` executa em outra thread; chamar `run()` não.** `t.run()` roda a função na thread atual, sem concorrência nenhuma. É um erro silencioso, e o código parece funcionar.
+
+**`join()` é a única forma de saber que terminou.** Sem ele, o programa principal segue adiante e pode ler um resultado que ainda não existe.
+
+**`join(timeout=...)` não interrompe a thread**, só desiste de esperar. Depois de um `join` com tempo esgotado, confira `is_alive()`: não há como matar uma thread em Python, e é proposital — matar uma thread no meio de um `with` deixaria travas presas e arquivos abertos.
+
+**Exceção numa thread não derruba o programa.** Ela é impressa por `threading.excepthook` e o processo segue:
+
+```text
+== excecao dentro de uma thread
+Exception in thread Thread-1 (explode):
+Traceback (most recent call last):
+  ...
+ValueError: falhei no meio do trabalho
+  a thread morreu, o programa continua. is_alive=False
+
+[codigo de saida: 0]
+```
+
+**Código de saída zero.** Um serviço cuja thread de trabalho morreu no primeiro minuto continua "no ar", saudável para o orquestrador, sem fazer nada. É por isso que `ThreadPoolExecutor` (que guarda a exceção no `Future`) ou uma fila de resultados são preferíveis a `Thread` cru: com `Thread`, quem não instala um `threading.excepthook` próprio fica sabendo do erro apenas pelo `stderr`.
+
+## A trava
+
+Retomando o contador do capítulo anterior, agora com oito threads e uma chamada de função entre a leitura e a escrita:
+
+```python
+SALDO = 0
+
+def mais_um(x):
+    return x + 1
+
+def sem_trava(vezes):
+    global SALDO
+    for _ in range(vezes):
+        SALDO = mais_um(SALDO)
+
+def com_trava(vezes, trava):
+    global SALDO
+    for _ in range(vezes):
+        with trava:                     # adquire na entrada, solta na saida
+            SALDO = mais_um(SALDO)
+```
+
+```text
+== 8 threads, 200.000 incrementos cada, esperado 1.600.000
+  sem trava :   1232927  (367073 perdidos)  0.07 s
+  com Lock  :   1600000  (0 perdidos)  0.21 s
+  a trava custou 2.9x o tempo
+```
+
+Três leituras:
+
+**367 mil incrementos evaporaram** — 23% do total. E o número muda a cada execução, que é exatamente o que torna esse defeito tão caro em produção.
+
+**A trava resolve por inteiro.** Zero perdidos, em toda repetição.
+
+**A trava custou 2,9x.** Esse é o preço real da corretude aqui, e ele parece alto porque a seção crítica é minúscula: praticamente todo o tempo virou aquisição e liberação. Numa seção crítica que faça trabalho de verdade, o custo relativo desaparece.
+
+Sempre `with trava:`, nunca `trava.acquire()` seguido de `trava.release()` à mão — uma exceção no meio deixaria a trava presa e travaria todas as outras threads para sempre.
+
+::: {.callout-tip}
+## Seção crítica pequena, mas não pequena demais
+A trava deve cobrir **todas** as operações que precisam ser vistas juntas, e nada além. Travar o laço inteiro serializa o programa e joga fora a concorrência; travar só o `+= 1` mas ler `SALDO` fora da trava logo depois devolve um valor que já mudou. O critério não é tamanho, é **invariante**: o que precisa ser verdade ao mesmo tempo entra junto.
+:::
+
+### `Lock` e `RLock`
+
+Uma `Lock` não é reentrante: a thread que já a segura trava a si mesma se pedir de novo.
+
+```text
+== reentrancia: a mesma thread pedindo a trava duas vezes
+  Lock  : segunda aquisicao -> False  (travaria para sempre sem o timeout)
+  RLock : segunda aquisicao -> True
+```
+
+Isso aparece quando um método travado chama outro método travado da mesma classe. `RLock` conta as aquisições da própria thread e só libera de fato na última liberação. Use `RLock` quando a reentrância for legítima — mas trate a necessidade dela como sinal de que a divisão de responsabilidades da classe talvez esteja errada.
+
+## Impasse
+
+Duas travas e duas threads que as pedem em ordens opostas param para sempre, cada uma segurando o que a outra quer:
+
+```python
+def pega(primeira, segunda, nome):
+    with primeira:
+        time.sleep(0.05)
+        if segunda.acquire(timeout=0.5):   # timeout: sai do impasse
+            segunda.release()
+```
+
+```text
+== impasse por ordem de aquisicao
+  ordens opostas (A->B e B->A):
+    thread 1: NAO conseguiu a segunda trava (impasse)
+    thread 2: ok
+  mesma ordem  (A->B e A->B):
+    thread 1: ok
+    thread 2: ok
+```
+
+Sem o `timeout` do exemplo, o programa ficaria parado indefinidamente, sem consumir CPU e sem traceback — o modo de falha mais desagradável que existe, porque não há nada a inspecionar.
+
+::: {#fig-impasse}
+```{.tikz}
+%%| filename: impasse
+%%| alt: Espera circular entre duas threads e a correcao por ordem global de aquisicao
+\begin{tikzpicture}[
+  th/.style={draw,rounded corners,align=center,text width=1.9cm,
+             minimum height=0.85cm,font=\scriptsize,fill=manualblue!16},
+  tr/.style={draw,circle,minimum size=0.9cm,font=\scriptsize\bfseries,
+             fill=manualyellow!30},
+  ti/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=6.3cm}
+]
+  \path (-0.3,-4.7) rectangle (14.4,3.3);
+
+  % ---------------- painel esquerdo: impasse ----------------
+  \node[ti] at (-0.1,3.0) {ordens opostas --- o ciclo se fecha};
+  \node[th] at (1.0,1.6) {thread 1};
+  \node[tr] at (5.0,1.6) {A};
+  \node[th] at (5.0,-0.8) {thread 2};
+  \node[tr] at (1.0,-0.8) {B};
+
+  \draw[->,>=stealth,thick,dashed,color=manualred] (2.05,1.6) -- (4.5,1.6)
+    node[midway,above,font=\tiny]{espera};
+  \draw[->,>=stealth,thick,color=manualgreen] (5.0,1.1) -- (5.0,-0.33)
+    node[midway,right,font=\tiny]{esta com};
+  \draw[->,>=stealth,thick,dashed,color=manualred] (3.95,-0.8) -- (1.5,-0.8)
+    node[midway,below,font=\tiny]{espera};
+  \draw[->,>=stealth,thick,color=manualgreen] (1.0,-0.33) -- (1.0,1.13)
+    node[midway,left,font=\tiny]{esta com};
+
+  \node[nt] at (-0.1,-2.9)
+    {Siga as setas: elas voltam ao ponto de partida. Cada thread segura o
+     que a outra quer, e nenhuma solta antes de obter o que falta. O
+     programa para --- sem CPU, sem excecao, sem traceback.};
+
+  % ---------------- painel direito: correcao ----------------
+  \node[ti] at (7.9,3.0) {ordem unica --- a corrente termina};
+  \node[th] at (9.0,1.6) {thread 1};
+  \node[tr] at (12.9,1.6) {A};
+  \node[th] at (12.9,-0.8) {thread 2};
+  \node[tr,fill=manualgray!16] at (9.0,-0.8) {B};
+
+  \draw[->,>=stealth,thick,dashed,color=manualred] (10.05,1.6) -- (12.4,1.6)
+    node[midway,above,font=\tiny]{espera};
+  \draw[->,>=stealth,thick,color=manualgreen] (12.9,1.1) -- (12.9,-0.33)
+    node[midway,right,font=\tiny]{esta com};
+  \draw[->,>=stealth,thick,dashed,color=manualred] (11.85,-0.8) -- (9.5,-0.8)
+    node[midway,below,font=\tiny]{espera};
+  \node[font=\tiny,anchor=east] at (8.5,-0.8) {livre};
+
+  \node[nt] at (7.9,-2.9)
+    {Como todo mundo pede A antes de B, a thread 2 so pode estar esperando
+     por B --- que esta livre. A corrente tem fim, e por isso o impasse
+     deixa de ser possivel por construcao.};
+\end{tikzpicture}
+```
+Impasse é espera circular; uma ordem global de aquisição elimina o ciclo.
+:::
+
+Três regras, em ordem de eficácia:
+
+1. **Estabeleça uma ordem global de aquisição** e respeite-a em todo o código. É a única solução que elimina a classe inteira do problema em vez de mitigá-la.
+2. **Não segure uma trava enquanto chama código que você não controla** — *callback*, método de subclasse, biblioteca. Você não sabe que travas ele pede.
+3. **Use `timeout` em `acquire`** como rede de segurança e registre a falha. Um impasse que vira log é infinitamente melhor que um impasse que vira suporte às 3h.
+
+## A fila, que é a resposta certa quase sempre
+
+Trava é uma ferramenta de baixo nível. A abordagem que evita a maior parte dos erros é não compartilhar estado: **transferir dados por uma fila**, onde a sincronização já está pronta e testada.
+
+::: {#fig-fila-trabalho}
+```{.tikz}
+%%| filename: fila-trabalho
+%%| alt: Produtor, fila limitada e consumidores, com sentinelas e contrapressao
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,text width=2.5cm,
+             minimum height=0.95cm,font=\scriptsize},
+  cel/.style={draw,minimum width=0.62cm,minimum height=0.62cm,
+              font=\tiny,fill=manualblue!22},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.4cm}
+]
+  \path (-0.3,-4.9) rectangle (14.3,3.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.0,3.1)
+    {um produtor, uma fila limitada, quatro consumidores};
+
+  \node[bx,fill=manualgreen!18] at (1.5,1.0) {produtor\\\texttt{fila.put(i)}};
+
+  \node[font=\tiny,anchor=south] at (6.3,1.75)
+    {\texttt{queue.Queue(maxsize=10)}};
+  \node[cel] at (4.20,1.0) {7};
+  \node[cel] at (4.82,1.0) {8};
+  \node[cel] at (5.44,1.0) {9};
+  \node[cel] at (6.06,1.0) {10};
+  \node[cel,fill=manualred!25] at (6.68,1.0) {N};
+  \node[cel,fill=manualred!25] at (7.30,1.0) {N};
+  \node[cel,fill=manualred!25] at (7.92,1.0) {N};
+  \node[cel,fill=manualred!25] at (8.54,1.0) {N};
+
+  \node[bx,fill=manualyellow!24] at (11.6,2.15) {consumidor 1};
+  \node[bx,fill=manualyellow!24] at (11.6,1.05) {consumidor 2};
+  \node[bx,fill=manualyellow!24] at (11.6,-0.05) {consumidor 3};
+  \node[bx,fill=manualyellow!24] at (11.6,-1.15) {consumidor 4};
+
+  \draw[->,>=stealth] (2.75,1.0) -- (3.85,1.0);
+  \draw[->,>=stealth] (8.90,1.0) -- (9.65,1.0) -- (9.65,2.15) -- (10.35,2.15);
+  \draw[->,>=stealth] (9.65,1.0) -- (10.35,1.05);
+  \draw[->,>=stealth] (9.65,1.0) -- (9.65,-0.05) -- (10.35,-0.05);
+  \draw[->,>=stealth] (9.65,1.0) -- (9.65,-1.15) -- (10.35,-1.15);
+
+  \node[nt] at (-0.2,-2.3)
+    {\textbf{maxsize} da contrapressao: com a fila cheia, \texttt{put} bloqueia
+     e o produtor desacelera sozinho. Sem limite, um produtor rapido enche a
+     memoria ate o processo morrer.};
+  \node[nt] at (-0.2,-3.3)
+    {\textbf{as celulas vermelhas sao sentinelas} --- uma \texttt{None} por
+     consumidor. Cada um consome a sua e sai; um sentinela so encerraria uma
+     unica thread.};
+  \node[nt] at (-0.2,-4.3)
+    {\textbf{\texttt{task\_done}} em cada item e \texttt{fila.join()} no produtor:
+     e assim que se espera o trabalho acabar sem saber quanto ele demora.};
+\end{tikzpicture}
+```
+Fila limitada com sentinelas: contrapressão, encerramento limpo e nenhuma trava escrita à mão.
+:::
+
+```python
+import queue, threading
+
+fila = queue.Queue(maxsize=10)     # limite = contrapressao
+saida = queue.Queue()
+
+def consumidor():
+    while True:
+        item = fila.get()
+        if item is None:           # sentinela: um por consumidor
+            fila.task_done()
+            return
+        saida.put(item * item)
+        fila.task_done()
+
+trabalhadores = [threading.Thread(target=consumidor, daemon=True)
+                 for _ in range(4)]
+for t in trabalhadores:
+    t.start()
+
+for i in range(2000):
+    fila.put(i)
+for _ in trabalhadores:            # um sentinela para cada
+    fila.put(None)
+
+fila.join()                        # espera todo item ser marcado como feito
+for t in trabalhadores:
+    t.join()
+```
+
+```text
+== produtor/consumidor com queue.Queue
+  2000 itens por 4 consumidores em 0.038 s
+  resultados recebidos: 2000
+  fila vazia ao fim: True
+```
+
+Note o que **não** aparece nesse código: nenhuma `Lock`, nenhum `Event`, nenhuma variável compartilhada entre as threads. A `Queue` é segura para threads por construção, e o desenho "produtor põe, consumidor tira" elimina a corrida em vez de protegê-la.
+
+Os dois detalhes que sempre pegam quem escreve isso pela primeira vez:
+
+**Um sentinela por consumidor.** Um único `None` encerra uma única thread; as outras três ficam bloqueadas em `get()` para sempre. Alternativa: `get(timeout=...)` mais um `Event` de desligamento.
+
+**`task_done()` em *todo* caminho de saída, inclusive o do sentinela.** `fila.join()` espera o contador interno zerar; um `task_done` esquecido faz o `join` nunca voltar, e o sintoma — programa parado no fim — parece um impasse de trava.
+
+## Os outros primitivos
+
+`Lock` e `Queue` cobrem a maioria dos casos. Os demais existem para situações específicas:
+
+| primitivo | usa quando |
+|---|---|
+| `RLock` | a mesma thread precisa reentrar na trava |
+| `Event` | sinalizar "aconteceu" ou "pode parar" para várias threads |
+| `Condition` | esperar por um estado, com notificação (é o que a `Queue` usa por dentro) |
+| `Semaphore` | limitar quantas threads acessam um recurso ao mesmo tempo |
+| `Barrier` | soltar N threads apenas quando todas chegarem a um ponto |
+
+`Event` é o mais útil dos cinco, porque resolve o desligamento limpo:
+
+```python
+parar = threading.Event()
+
+def laco():
+    while not parar.is_set():
+        ...
+        parar.wait(timeout=0.01)     # dorme, mas acorda na hora se for setado
+```
+
+```text
+== Event: pedindo para a thread parar
+  thread ainda viva: False
+  ultima marca: 'saiu limpo' apos 20 voltas
+```
+
+`parar.wait(timeout=...)` em vez de `time.sleep(...)` é a diferença entre uma thread que sai imediatamente quando pedido e uma que só sai no fim do próximo cochilo. Numa thread que dorme 30 segundos entre ciclos, isso decide se o seu serviço reinicia em 1 segundo ou em 30.
+
+## Estado por thread
+
+Quando cada thread precisa da sua própria cópia de algo — uma conexão, um cliente HTTP, um contexto de requisição —, `threading.local` resolve sem trava nenhuma:
+
+```python
+LOCAL = threading.local()
+
+def usa_local(valor):
+    LOCAL.marca = valor      # invisivel para as outras threads
+    ...
+```
+
+```text
+== threading.local: cada thread tem a sua copia
+  t0: LOCAL.marca = 0
+  t1: LOCAL.marca = 1
+  t2: LOCAL.marca = 2
+  t3: LOCAL.marca = 3
+```
+
+O cuidado: num `ThreadPoolExecutor`, as threads são **reaproveitadas** entre tarefas, então o valor de uma tarefa anterior continua lá. É ótimo para cache de recurso caro (uma sessão por thread), e é uma fonte de vazamento de dados entre requisições se for usado para guardar contexto de usuário sem limpar.
+
+## Threads daemon e o `finally` que não roda
+
+Uma thread marcada `daemon=True` não impede o programa de terminar. O que quase ninguém espera é o que acontece com ela:
+
+```python
+def daemon_com_finally():
+    try:
+        time.sleep(30)
+    finally:
+        print("  ESTE finally NUNCA aparece")
+```
+
+```text
+== thread daemon quando o programa termina
+  main terminando com a daemon no meio de um try/finally...
+  fim do main
+```
+
+O `finally` **não** executou. Threads daemon são derrubadas abruptamente no fim do interpretador: sem desempilhar, sem `finally`, sem `__exit__` de gerenciador de contexto. Arquivo aberto não é fechado, transação não é revertida, trava não é solta.
+
+A regra prática: `daemon=True` só para trabalho descartável e sem efeito colateral — coleta de métricas, monitoramento. Qualquer thread que escreva em disco, banco ou rede deve ser **não-daemon**, com desligamento explícito via `Event` e `join()`.
+
+## Quando usar `Thread` cru
+
+Raramente. Para "aplique esta função a estes itens", `ThreadPoolExecutor` (@sec-cap093) é melhor em tudo: reaproveita threads, limita a concorrência, guarda exceções nos `Future` e tem desligamento definido.
+
+`Thread` direto se justifica quando a thread é um **serviço de vida longa** e não uma tarefa: um consumidor de fila, um laço de sondagem, uma thread que atende conexões. Nesses casos vale o conjunto completo — não-daemon, `Event` para parar, `join()` com `timeout` no desligamento, e captura de exceção dentro do alvo para que a morte da thread não passe despercebida.
+
+## 🐍 Jeito Pythônico
+
+**Prefira transferir dados a compartilhá-los.** `queue.Queue` resolve produção e consumo sem uma linha de sincronização escrita à mão. É a recomendação principal deste capítulo.
+
+**Sempre `with trava:`.** `acquire()`/`release()` manuais deixam a trava presa quando uma exceção passa no meio.
+
+**Uma ordem global de aquisição de travas**, respeitada em todo o código. Elimina impasse por construção; as demais táticas apenas mitigam.
+
+**Nunca segure uma trava chamando código de terceiros.** Você não sabe o que ele adquire.
+
+**Um sentinela por consumidor, e `task_done()` em todo caminho de saída.** Os dois erros clássicos de `Queue`, e os dois travam o programa no fim sem mensagem.
+
+**`Queue(maxsize=...)` sempre que o produtor puder ser mais rápido que o consumidor.** Fila ilimitada é vazamento de memória com outro nome.
+
+**`Event.wait(timeout=...)` em vez de `time.sleep()`** em laço de serviço — é o que torna o desligamento imediato em vez de "no fim do próximo ciclo".
+
+**`daemon=True` só para trabalho descartável.** O `finally` não roda; qualquer efeito colateral fica pela metade.
+
+**Não conte com `is_alive()` para detectar falha.** Exceção em thread imprime no `stderr` e devolve código de saída 0 — use `ThreadPoolExecutor` e leia o `Future`, ou uma fila de resultados.
+
+**Prefira `ThreadPoolExecutor` a `Thread`** para tarefas; guarde `Thread` para serviços de vida longa.
+
+## 🧪 Laboratório
+
+**Passo 1 — a corrida.** Escreva `SALDO = mais_um(SALDO)` num laço, rode com 8 threads e 200 mil iterações cada e confirme a perda:
+
+```text
+  sem trava :   1232927  (367073 perdidos)
+```
+
+Rode cinco vezes e anote os cinco totais. Nenhum deve se repetir — é essa não-reprodutibilidade que torna o defeito caro.
+
+**Passo 2 — a trava e o preço dela.** Proteja com `threading.Lock` e cronometre as duas versões:
+
+```text
+  com Lock  :   1600000  (0 perdidos)  0.21 s
+  a trava custou 2.9x o tempo
+```
+
+Depois acrescente trabalho real dentro da seção crítica (uma soma de 10 mil termos) e cronometre de novo. O fator de 2,9x deve encolher muito. Explique por quê.
+
+**Passo 3 — reentrância.** Adquira uma `Lock` duas vezes na mesma thread, com `acquire(timeout=0.3)` na segunda. Confirme o `False`. Repita com `RLock` e confirme o `True`.
+
+::: {.callout-warning}
+## Use `timeout` nos experimentos de impasse
+Sem `timeout`, os passos 3 e 4 travam o terminal e só saem com `Ctrl+C` — quando saem. Todo experimento de bloqueio deste laboratório usa `acquire(timeout=...)` de propósito.
+:::
+
+**Passo 4 — impasse.** Duas travas, duas threads, ordens opostas:
+
+```text
+    thread 1: NAO conseguiu a segunda trava (impasse)
+```
+
+Depois troque para a mesma ordem nas duas threads e confirme que ambas passam. Em seguida, tire o `timeout` e rode com `timeout 5 python impasse.py` — observe que o processo fica parado, com uso de CPU zero.
+
+**Passo 5 — a fila.** Reescreva o passo 1 sem trava alguma: produtor coloca 2000 números na `Queue`, quatro consumidores tiram, calculam e devolvem numa fila de saída. Confirme os 2000 resultados e a fila vazia ao fim.
+
+**Passo 6 — os dois erros clássicos.** No código do passo 5, (a) coloque **um** sentinela em vez de quatro e observe o `join()` que nunca volta; (b) restaure os quatro e remova o `task_done()` do ramo do sentinela — observe o mesmo sintoma por outra causa. Descreva como distinguir os dois casos.
+
+**Passo 7 — contrapressão.** Use `Queue(maxsize=5)` com consumidores que dormem 10 ms e um produtor sem pausa. Meça o tempo total e o tamanho máximo da fila. Depois troque para `Queue()` sem limite e compare a memória com `tracemalloc`.
+
+**Passo 8 — `Event`.** Faça uma thread de serviço com `while not parar.is_set(): parar.wait(0.5)`. Cronometre quanto ela leva para sair após `parar.set()`. Troque `parar.wait(0.5)` por `time.sleep(0.5)` e cronometre de novo.
+
+**Passo 9 — a exceção invisível.** Crie uma `Thread` cujo alvo levanta `ValueError`, junte-a e imprima o código de saída do processo. Confirme o zero. Depois instale um `threading.excepthook` que registre e derrube o processo, e confirme a mudança.
+
+**Passo 10 — o `finally` da daemon.** Reproduza o exemplo do capítulo e confirme que a mensagem não aparece. Troque `daemon=True` por `daemon=False` e observe o programa esperar 30 segundos. Escreva a terceira versão, a correta: `Event` para pedir a parada e `join(timeout=5)` no desligamento.
+
+**Passo 11 — `threading.local` num pool.** Num `ThreadPoolExecutor(max_workers=2)`, submeta 6 tarefas que gravam e depois leem um atributo em `threading.local()`, imprimindo o valor **antes** de gravar. Mostre que valores de tarefas anteriores sobrevivem — e conclua o que isso significa para contexto de requisição em servidor.
+
+## Resumo
+
+- **`start()` executa em outra thread, `run()` não**; `join()` é a única forma de saber que terminou, e `join(timeout=)` desiste de esperar sem interromper nada. Não existe matar thread em Python, e é de propósito.
+- **Exceção em thread não derruba o processo**: sai no `stderr` e o código de saída é **0**. Serviço com thread de trabalho morta parece saudável.
+- **Sem trava, 367.073 de 1.600.000 incrementos se perderam** (23%), com total diferente a cada execução. Com `Lock`, zero perdidos, ao custo de **2,9x** numa seção crítica mínima.
+- **Sempre `with trava:`**; `RLock` só quando a reentrância for legítima.
+- **Impasse é espera circular.** A correção estrutural é uma **ordem global de aquisição**; `timeout` no `acquire` é rede de segurança, não solução. Impasse não gasta CPU e não gera traceback — não há o que inspecionar.
+- **`queue.Queue` é a resposta preferida**: 2000 itens por 4 consumidores sem uma linha de sincronização própria. Exige **um sentinela por consumidor** e `task_done()` em todo caminho de saída, e `maxsize` para ter contrapressão.
+- **`Event.wait(timeout=)` em vez de `time.sleep()`** em laço de serviço, para desligamento imediato.
+- **Thread daemon é morta sem rodar `finally`** — nada de efeito colateral nelas.
+- **`ThreadPoolExecutor` para tarefas, `Thread` para serviços de vida longa.**
