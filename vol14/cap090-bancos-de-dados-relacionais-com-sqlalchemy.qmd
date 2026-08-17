@@ -1,3 +1,539 @@
 # Bancos de dados relacionais com SQLAlchemy {#sec-cap090}
 
-*(em elaboracao)*
+O `sqlite3` da biblioteca padrão (@sec-cap065) resolve muita coisa, e resolve bem enquanto o programa é pequeno. Aí o SQL começa a virar `f-string`, cada consulta repete o mesmo `JOIN`, alguém troca o SQLite por PostgreSQL e descobre que `?` virou `%s` em cento e vinte lugares, e o `row[3]` de uma função não é o mesmo `row[3]` de outra porque a ordem das colunas mudou.
+
+SQLAlchemy é a resposta madura para isso no Python. Ele tem duas camadas: um **Core**, que constrói SQL como expressões Python e abstrai o dialeto do banco, e um **ORM**, que mapeia classes para tabelas e acompanha o estado dos objetos. Dá para usar só o Core, e muita gente séria usa.
+
+Este capítulo usa **SQLAlchemy 2.0.52** com **Alembic 1.19.1**. A versão 2.0 mudou o estilo de consulta o suficiente para que exemplos antigos (`session.query(...)`) ainda funcionem mas não sejam mais o caminho recomendado — o estilo novo é `select()`.
+
+```bash
+pip install sqlalchemy alembic
+pip install aiosqlite          # para a parte assincrona
+```
+
+## Duas camadas, um pacote
+
+::: {#fig-sqlalchemy-camadas}
+```{.tikz}
+%%| filename: sqlalchemy-camadas
+%%| alt: As camadas do SQLAlchemy, do ORM ao driver do banco
+\begin{tikzpicture}[
+  cm2/.style={draw,rounded corners,align=left,text width=6.0cm,
+              minimum height=1.5cm,font=\scriptsize,inner sep=7pt},
+  ob/.style={align=left,text width=6.0cm,font=\scriptsize\itshape,
+             color=manualgray!150}
+]
+  \path (-0.4,-5.6) rectangle (14.0,3.6);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.2cm] at (6.8,3.3)
+    {duas camadas --- e a de baixo funciona sozinha};
+
+  \node[cm2,fill=manualgreen!16] at (3.6,2.2)
+    {\textbf{seu codigo}\\
+     classes com \texttt{Mapped[...]}, \texttt{select()}, \texttt{Session}};
+
+  \node[cm2,fill=manualyellow!22] at (3.6,0.3)
+    {\textbf{ORM}\\
+     mapeia classe em tabela; \texttt{Session} guarda\\
+     identidade, estado sujo e ordem dos INSERTs};
+  \node[ob] at (10.6,0.3)
+    {unidade de trabalho: voce mexe nos objetos,\\
+     ele decide quais INSERT, UPDATE e\\
+     DELETE mandar, e em que ordem};
+
+  \node[cm2,fill=manualblue!16] at (3.6,-1.6)
+    {\textbf{Core}\\
+     \texttt{MetaData}, \texttt{Table}, \texttt{select()}, \texttt{Engine};\\
+     compila para o dialeto do banco};
+  \node[ob] at (10.6,-1.6)
+    {da para usar so isto: SQL como expressao\\
+     Python, sem objeto nenhum --- e e o que\\
+     muito codigo de dados faz};
+
+  \node[cm2,fill=manualgray!16] at (3.6,-3.5)
+    {\textbf{DBAPI} (PEP 249)\\
+     \texttt{sqlite3}, \texttt{psycopg}, \texttt{asyncpg}, \texttt{pymysql}};
+  \node[ob] at (10.6,-3.5)
+    {a interface padronizada de driver do Python,\\
+     a mesma do capitulo de SQLite};
+
+  \draw[<->,>=stealth,thick] (3.6,1.45) -- (3.6,1.05);
+  \draw[<->,>=stealth,thick] (3.6,-0.45) -- (3.6,-0.85);
+  \draw[<->,>=stealth,thick] (3.6,-2.35) -- (3.6,-2.75);
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.2cm,
+        font=\scriptsize] at (6.8,-5.0)
+    {\textbf{trocar de banco mexe numa linha:} a URL do \texttt{create\_engine}. O que
+     muda de verdade sao os detalhes que o dialeto nao esconde --- tipos proprios,
+     bloqueio, \texttt{RETURNING}, ordem de resultado sem \texttt{ORDER BY}.};
+\end{tikzpicture}
+```
+As camadas do SQLAlchemy: o ORM é opcional, o Core não.
+:::
+
+## O modelo declarativo
+
+Em 2.0, o mapeamento usa anotações de tipo de verdade (@sec-cap068) — o mesmo `Mapped[int]` que o verificador de tipos entende:
+
+```python
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+class Base(DeclarativeBase):
+    pass
+
+class Autor(Base):
+    __tablename__ = "autor"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(80))
+    livros: Mapped[list["Livro"]] = relationship(back_populates="autor",
+                                                 cascade="all, delete-orphan")
+
+class Livro(Base):
+    __tablename__ = "livro"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    isbn: Mapped[str] = mapped_column(String(13), unique=True)
+    titulo: Mapped[str] = mapped_column(String(120))
+    preco: Mapped[Decimal] = mapped_column(sa.Numeric(9, 2))
+    autor_id: Mapped[int] = mapped_column(ForeignKey("autor.id"))
+    autor: Mapped[Autor] = relationship(back_populates="livros")
+```
+
+A anotação carrega informação real: `Mapped[str]` significa `NOT NULL`, e `Mapped[str | None]` significa nulo permitido. O DDL sai daí:
+
+```text
+CREATE TABLE livro (
+	id INTEGER NOT NULL,
+	isbn VARCHAR(13) NOT NULL,
+	titulo VARCHAR(120) NOT NULL,
+	preco NUMERIC(9, 2) NOT NULL,
+	autor_id INTEGER NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (isbn),
+	FOREIGN KEY(autor_id) REFERENCES autor (id)
+)
+```
+
+Duas escolhas do exemplo que merecem nota:
+
+**`Numeric(9, 2)` para dinheiro, nunca `Float`.** É a mesma razão do @sec-cap010: `0.1 + 0.2` não é `0.3`, e num sistema financeiro isso vira diferença de centavos que ninguém consegue explicar. O SQLAlchemy devolve `Decimal` do outro lado. (O SQLite não tem tipo decimal nativo; o SQLAlchemy converte, e a precisão declarada é o que mantém a saída limpa.)
+
+**`back_populates` nos dois lados.** Ele mantém as duas pontas do relacionamento sincronizadas em memória: acrescentar um livro a `autor.livros` também define `livro.autor`, sem ida ao banco.
+
+## Consultar: `select()` é a interface
+
+```python
+q = select(Livro).where(Livro.preco > 150).order_by(Livro.titulo)
+for livro in s.scalars(q):
+    print(livro, livro.preco)
+```
+
+```text
+  SQL: SELECT livro.id, livro.isbn, livro.titulo, livro.preco, livro.autor_id
+       FROM livro WHERE livro.preco > :preco_1 ORDER BY livro.titulo
+    Livro(id=3, titulo='Effective Python') 159.00
+    Livro(id=1, titulo='Fluent Python') 189.00
+```
+
+Repare no `:preco_1`. **O valor nunca entra no texto do SQL** — ele vai parametrizado, o que elimina injeção de SQL por construção. É o argumento de segurança mais forte a favor de qualquer construtor de consultas sobre `f-string`.
+
+O mesmo `select()` faz agregação e junção:
+
+```python
+s.scalar(select(func.sum(Livro.preco)))
+
+s.execute(
+    select(Autor.nome, func.count(Livro.id), func.sum(Livro.preco))
+    .join(Livro)
+    .group_by(Autor.nome)
+    .order_by(func.count(Livro.id).desc())
+).all()
+```
+
+```text
+  soma dos precos: 497.00 Decimal
+  agregado por autor: [('Luciano Ramalho', 2, Decimal('338.00')), ('Brett Slatkin', 1, Decimal('159.00'))]
+```
+
+A distinção entre os dois métodos de execução vale decorar:
+
+- **`s.scalars(q)`** devolve a primeira coluna de cada linha — use quando a consulta seleciona **entidades** (`select(Livro)`), e você recebe objetos `Livro`.
+- **`s.execute(q)`** devolve linhas (tuplas nomeadas) — use quando a consulta seleciona **colunas** (`select(Autor.nome, func.count(...))`).
+- **`s.scalar(q)`** devolve um único valor — para `count`, `sum` e afins.
+
+Trocar um pelo outro produz o erro mais comum de quem migra do estilo 1.x: uma lista de tuplas de um elemento onde se esperava uma lista de objetos.
+
+## O N+1, de novo — e o SQLAlchemy tem mais respostas
+
+Com vinte autores, cada um com seus livros:
+
+```python
+for autor in s.scalars(select(Autor)):
+    _ = [livro.titulo for livro in autor.livros]        # lazy, o padrao
+
+for autor in s.scalars(select(Autor).options(selectinload(Autor.livros))):
+    _ = [livro.titulo for livro in autor.livros]        # uma consulta a mais, so
+
+s.execute(select(Autor.nome, Livro.titulo).join(Livro)).all()   # sem ORM
+```
+
+```text
+  autores no banco: 20
+  lazy (padrao)          : 21 consultas
+  selectinload           : 2 consultas
+  join direto (sem ORM)  : 1 consulta, 21 linhas
+```
+
+Vinte e uma consultas contra duas contra uma. O padrão do relacionamento é **preguiçoso**: `autor.livros` só vai ao banco quando alguém toca no atributo, e num laço isso vira uma consulta por iteração. É o mesmo defeito do @sec-cap089, com as mesmas consequências e uma escolha maior de curas:
+
+| estratégia | como resolve | quando usar |
+|---|---|---|
+| `selectinload` | uma segunda consulta com `IN (...)` | coleções (o caso comum) |
+| `joinedload` | `LEFT JOIN` numa consulta só | um-para-um e muitos-para-um |
+| `subqueryload` | subconsulta correlacionada | herdado; prefira `selectinload` |
+| `raiseload` | **levanta erro** se alguém carregar preguiçosamente | para proibir o acidente |
+| sem ORM | `select()` de colunas com `join()` | relatório, exportação, listagem grande |
+
+`raiseload` merece destaque: configurar o relacionamento com `lazy="raise"` faz qualquer carga preguiçosa acidental estourar uma exceção em desenvolvimento, em vez de virar 300 consultas em produção. É a forma mais confiável de manter o problema fora do sistema.
+
+E a última linha da medição sugere algo que se esquece com facilidade: **quando o resultado é um relatório, não um grafo de objetos, o ORM só atrapalha.** Selecionar colunas devolve tuplas, gasta uma consulta e não constrói objeto nenhum.
+
+## A `Session`: unidade de trabalho e mapa de identidade
+
+Esta é a parte do SQLAlchemy que mais confunde, e a que mais vale entender.
+
+```python
+with Session(engine) as s:
+    livro = s.scalar(select(Livro).where(Livro.isbn == "9781492056355"))
+    print(livro.preco)              # 189.00
+    livro.preco = Decimal("199.90") # nenhum UPDATE ainda
+    print(livro in s.dirty)         # True
+    s.flush()                       # agora sim o UPDATE foi ao banco
+    print(livro in s.dirty)         # False
+    s.rollback()                    # ...e desfeito
+```
+
+```text
+  antes  : 189.00
+  sujo?   True
+  apos flush, sujo? False
+  depois do rollback: 189.00
+```
+
+**Você não escreve `UPDATE`.** Alterar um atributo marca o objeto como sujo; a sessão acumula as mudanças e as envia — na ordem correta em relação às chaves estrangeiras — quando você chama `flush()` (ou `commit()`, que faz `flush` e confirma).
+
+::: {#fig-sessao-estados}
+```{.tikz}
+%%| filename: sessao-estados
+%%| alt: Os estados de um objeto dentro de uma Session do SQLAlchemy
+\begin{tikzpicture}[
+  es/.style={draw,rounded corners,align=center,text width=2.6cm,
+             minimum height=1.5cm,font=\scriptsize},
+  lb/.style={font=\tiny,inner sep=3pt,fill=white}
+]
+  \path (-0.4,-5.2) rectangle (14.2,3.6);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.4cm] at (6.9,3.4)
+    {o mesmo objeto, cinco estados};
+
+  \node[es,fill=manualgray!16] (tr) at (2.0,1.9)
+    {\textbf{transiente}\\criado com\\\texttt{Livro(...)}, sem\\sessao, sem linha};
+  \node[es,fill=manualyellow!22] (pe) at (6.6,1.9)
+    {\textbf{pendente}\\na sessao, sem\\INSERT ainda};
+  \node[es,fill=manualgreen!18] (ps) at (11.2,1.9)
+    {\textbf{persistente}\\tem linha e\\identidade\\na sessao};
+  \node[es,fill=manualblue!16] (su) at (11.2,-1.5)
+    {\textbf{sujo}\\alterado em\\memoria, UPDATE\\pendente};
+  \node[es,fill=manualred!16] (de) at (6.6,-1.5)
+    {\textbf{destacado}\\tem linha, sem\\sessao: carga\\preguicosa falha};
+
+  \draw[->,>=stealth] (tr) -- node[lb,above,pos=0.5]{\texttt{s.add(obj)}} (pe);
+  \draw[->,>=stealth] (pe) -- node[lb,above,pos=0.5]{\texttt{s.flush()}} (ps);
+  \draw[->,>=stealth] (ps) to[bend right=22]
+    node[lb,left,pos=0.5]{\texttt{obj.x = ...}} (su);
+  \draw[->,>=stealth] (su) to[bend right=22]
+    node[lb,right,pos=0.5]{\texttt{s.flush()}} (ps);
+  \draw[->,>=stealth] (ps) -- node[lb,sloped,above,pos=0.5]
+    {\texttt{s.close()}} (de);
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.4cm,
+        font=\scriptsize] at (6.9,-4.2)
+    {\textbf{o estado que morde e o quarto.} Depois do \texttt{with}, o objeto continua
+     acessivel e os atributos ja carregados continuam la --- mas tocar num
+     relacionamento levanta \texttt{DetachedInstanceError}. E a causa de metade dos
+     defeitos de quem esta comecando: a view devolve o objeto, o template acessa
+     \texttt{obj.autor.nome}, e a sessao ja fechou.};
+\end{tikzpicture}
+```
+Os estados de um objeto na sessão, e a transição que causa mais confusão.
+:::
+
+### O mapa de identidade
+
+```python
+with Session(engine) as s:
+    a = s.scalar(select(Livro).where(Livro.id == 1))
+    b = s.get(Livro, 1)
+    print(a is b)                 # True
+
+with Session(engine) as s1, Session(engine) as s2:
+    print(s1.get(Livro, 1) is s2.get(Livro, 1))   # False
+```
+
+```text
+  a is b ? True | mesma sessao, mesma identidade
+  sessoes diferentes: False
+```
+
+**Dentro de uma sessão, uma linha corresponde a exatamente um objeto Python.** Duas consultas diferentes que trazem a mesma linha devolvem o *mesmo* objeto — não uma cópia. Isso é o que impede duas partes do código de terem versões divergentes do mesmo registro, e é o que torna possível a sessão saber o que mudou.
+
+Em sessões diferentes, são objetos diferentes. Daí a regra: **não compare objetos ORM com `is` através de sessões** — compare pela chave primária.
+
+### O objeto solto
+
+```python
+with Session(engine) as s:
+    solto = s.scalar(select(Autor).where(Autor.id == 1))
+
+print(solto.nome)        # funciona: ja estava carregado
+print(solto.livros)      # estoura
+```
+
+```text
+  fora do with, atributo ja carregado: Luciano Ramalho
+  atributo preguicoso -> DetachedInstanceError
+    Parent instance <Autor at 0x2458e393e00> is not bound to a Session; lazy load operation of attri...
+```
+
+(O endereço do objeto muda a cada execução; o que importa é a classe da exceção.)
+
+Esse erro é a consequência direta do modelo de carga preguiçosa: fora da sessão, não há conexão para ir buscar o que faltou. As saídas, em ordem de preferência:
+
+1. **Carregue tudo que vai precisar dentro da sessão**, com `selectinload`/`joinedload`.
+2. **Converta para o que você realmente vai devolver** ainda dentro da sessão — um modelo Pydantic (@sec-cap087), um `dict`, uma dataclass.
+3. `expire_on_commit=False` evita que o `commit` invalide os atributos já carregados — útil, mas não faz relacionamento não carregado aparecer.
+
+A segunda é a melhor prática numa API: a camada web devolve `ProdutoSaida`, não `Produto` do ORM. Isso resolve o `DetachedInstanceError` e, de quebra, o vazamento de campos do @sec-cap088.
+
+## Sessão por pedido
+
+A regra de ouro do uso do ORM numa aplicação web: **uma sessão por pedido, aberta no começo e fechada no fim.** Com FastAPI, isso é uma dependência com `yield`:
+
+```python
+Sessao = async_sessionmaker(engine, expire_on_commit=False)
+
+async def sessao():
+    async with Sessao() as s:
+        yield s
+
+@app.get("/livros/{livro_id}")
+async def obter(livro_id: int, s: Annotated[AsyncSession, Depends(sessao)]):
+    livro = await s.get(Livro, livro_id)
+    if livro is None:
+        raise HTTPException(404, "livro nao encontrado")
+    return {"id": livro.id, "titulo": livro.titulo, "preco": str(livro.preco)}
+```
+
+```text
+  GET /livros/1  -> 200 {'id': 1, 'titulo': 'Fluent Python', 'preco': '189.00'}
+  GET /livros/99 -> 404 {'detail': 'livro nao encontrado'}
+```
+
+O que **não** fazer: uma sessão global no módulo. Ela não é segura entre threads, acumula objetos indefinidamente e faz um erro em um pedido contaminar o seguinte.
+
+### A versão assíncrona
+
+```python
+engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+async with Sessao() as s:
+    livros = (await s.scalars(select(Livro).order_by(Livro.titulo))).all()
+    print(await s.scalar(select(func.sum(Livro.preco))))
+```
+
+```text
+  titulos : ['Effective Python', 'Fluent Python']
+  soma    : 348.00
+```
+
+A API é a mesma, com `await` na execução. Duas ressalvas concretas:
+
+**O driver precisa ser assíncrono**: `asyncpg` ou `psycopg` (v3) para PostgreSQL, `aiosqlite` para SQLite, `aiomysql` para MySQL. A URL muda (`postgresql+asyncpg://`), e usar um driver síncrono com `create_async_engine` falha na criação do *engine*.
+
+**Carga preguiçosa não funciona em `async`** — não há como um acesso a atributo esperar por I/O. Ou você usa `selectinload`/`joinedload`, ou usa `await s.refresh(obj, ["livros"])`, ou toma um erro. Na prática, o modo assíncrono **obriga** a boa prática que o síncrono só recomenda.
+
+## Migrações com Alembic
+
+O modelo mudou; o banco em produção não sabe disso. Alembic gera e aplica a diferença.
+
+```bash
+alembic init alembic
+# em alembic.ini:  sqlalchemy.url = sqlite:///catalogo.db
+# em alembic/env.py:  from modelos import Base;  target_metadata = Base.metadata
+alembic revision --autogenerate -m "esquema inicial"
+alembic upgrade head
+```
+
+```text
+INFO  [alembic.autogenerate.compare.tables] Detected added table 'autor'
+INFO  [alembic.autogenerate.compare.tables] Detected added table 'livro'
+INFO  [alembic.runtime.migration] Running upgrade  -> 94fcd6644a04, esquema inicial
+```
+
+Agora acrescente um campo ao modelo e peça a diferença:
+
+```python
+class Livro(Base):
+    ...
+    paginas: Mapped[int | None] = mapped_column(nullable=True)
+```
+
+```bash
+alembic revision --autogenerate -m "livro ganha paginas"
+alembic upgrade head
+```
+
+```text
+INFO  [alembic.autogenerate.compare.tables] Detected added column 'livro.paginas'
+INFO  [alembic.runtime.migration] Running upgrade 94fcd6644a04 -> b6d817a17739, livro ganha paginas
+```
+
+E a migração gerada é um arquivo Python versionado junto com o código:
+
+```python
+def upgrade() -> None:
+    op.add_column('livro', sa.Column('paginas', sa.Integer(), nullable=True))
+
+def downgrade() -> None:
+    op.drop_column('livro', 'paginas')
+```
+
+```text
+94fcd6644a04 -> b6d817a17739 (head), livro ganha paginas
+<base> -> 94fcd6644a04, esquema inicial
+```
+
+::: {.callout-warning}
+## `--autogenerate` é um rascunho, não uma resposta
+Os comentários que o próprio Alembic escreve no arquivo — *"auto generated by Alembic - please adjust!"* — são para ser levados a sério. Ele **não** detecta renomeação (vê `DROP` mais `ADD`, e isso apaga dados), tem dificuldade com mudança de tipo, ignora índices em alguns dialetos e não sabe migrar os **dados** existentes. Toda migração autogerada precisa ser lida antes de ser aplicada, e uma que mexe em dado de produção precisa ser testada numa cópia.
+
+E o `downgrade` merece o mesmo cuidado: ele existe, mas reverter uma migração que apagou coluna não devolve o conteúdo dela.
+:::
+
+## Quando não usar o ORM
+
+Vale ser explícito, porque o ORM não é obrigatório nem sempre adequado:
+
+- **Relatório e exportação**: selecione colunas com o Core. Construir dez mil objetos para somar uma coluna é desperdício.
+- **Carga em massa**: `insert()` do Core com lista de dicionários, ou o `COPY` do PostgreSQL. O ORM tem `bulk_save_objects`, mas o Core é mais direto.
+- **Consulta que o ORM deixa feia**: CTE recursiva, função de janela, `LATERAL`, extensão específica do banco. Use `sa.text()` — **sempre com parâmetros nomeados**:
+
+```python
+s.execute(sa.text("SELECT titulo, preco FROM livro WHERE preco > :minimo"),
+          {"minimo": 150}).all()
+```
+
+```text
+  parametrizado: [('Fluent Python', 189), ('Effective Python', 159)]
+```
+
+Note o `:minimo` com o dicionário separado. **`sa.text()` com `f-string` é injeção de SQL**, e é o único jeito de reintroduzir num projeto com SQLAlchemy o problema que ele resolve de graça.
+
+## 🐍 Jeito Pythônico
+
+**Estilo 2.0: `select()`**, não `session.query()`. O antigo funciona e não é o caminho recomendado; `select()` é o mesmo objeto no Core e no ORM.
+
+**`Mapped[T]` e `mapped_column()`** para que o verificador de tipos veja o modelo. `Mapped[str]` é `NOT NULL`; `Mapped[str | None]` permite nulo.
+
+**`Numeric` para dinheiro**, nunca `Float`.
+
+**`scalars` para entidades, `execute` para colunas, `scalar` para valor único.** Confundir devolve tupla onde você esperava objeto.
+
+**Estratégia de carga explícita.** `selectinload` para coleções, `joinedload` para muitos-para-um. Medido: 21 consultas viraram 2.
+
+**`lazy="raise"` nos relacionamentos** durante o desenvolvimento: transforma N+1 acidental em erro alto, em vez de lentidão silenciosa.
+
+**Uma sessão por pedido**, com `with` ou dependência `yield`. Sessão global de módulo não é segura entre threads.
+
+**Não devolva objeto do ORM pela API.** Converta para Pydantic dentro da sessão — resolve `DetachedInstanceError` e vazamento de campo de uma vez.
+
+**Migração é código versionado.** `--autogenerate` produz rascunho: leia antes de aplicar, principalmente quando houver renomeação ou mudança de tipo.
+
+**`sa.text()` sempre com parâmetros nomeados.** `f-string` em SQL é injeção, com ORM ou sem.
+
+**Para relatório, dispense o ORM.** Colunas com o Core custam uma consulta e nenhum objeto.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-sqlalchemy && cd lab-sqlalchemy
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install sqlalchemy alembic aiosqlite
+python -c "import sqlalchemy; print(sqlalchemy.__version__)"
+```
+
+**Passo 2 — modelo e DDL.** Declare `Autor` e `Livro` com `Mapped[...]`. Antes de criar as tabelas, imprima o DDL com `CreateTable(Livro.__table__).compile(engine)` e confirme o `NOT NULL`, o `UNIQUE` e a chave estrangeira. Depois troque um campo para `Mapped[str | None]` e veja o `NOT NULL` sumir.
+
+**Passo 3 — inserir pelo relacionamento.** Crie um `Autor` e atribua `autor.livros = [Livro(...), Livro(...)]` **sem** definir `autor_id`. Faça `commit` e confirme que o SQLAlchemy preencheu a chave estrangeira sozinho, na ordem certa.
+
+**Passo 4 — consultas.** Escreva três: uma com `where` e `order_by`, uma agregação com `func.sum`, e uma com `join` mais `group_by`. Imprima `str(consulta)` das três e localize os parâmetros `:nome_1` — confirme que **nenhum valor** aparece no texto do SQL.
+
+**Passo 5 — o N+1.** Registre um ouvinte de `before_cursor_execute` para contar consultas. Com 20 autores, compare:
+
+```text
+  lazy (padrao)          : 21 consultas
+  selectinload           : 2 consultas
+  join direto (sem ORM)  : 1 consulta, 21 linhas
+```
+
+Depois troque `selectinload` por `joinedload` e compare o SQL gerado pelos dois.
+
+**Passo 6 — `lazy="raise"`.** Configure o relacionamento com `relationship(..., lazy="raise")` e refaça o laço preguiçoso. Confirme que agora ele **estoura** em vez de fazer 21 consultas. Essa é a configuração que você quer em desenvolvimento.
+
+**Passo 7 — a unidade de trabalho.** Altere o preço de um livro e confira `obj in s.dirty` antes e depois de `flush()`. Depois faça `rollback()` e verifique o valor no banco:
+
+```text
+  sujo?   True
+  apos flush, sujo? False
+  depois do rollback: 189.00
+```
+
+**Passo 8 — identidade.** Traga a mesma linha por dois caminhos na mesma sessão e confirme `a is b`. Depois faça o mesmo em duas sessões e confirme que não. Explique por que comparar objetos ORM com `is` entre sessões é errado.
+
+**Passo 9 — o objeto solto.** Carregue um `Autor` dentro de um `with Session(...)`, saia do bloco e acesse `autor.nome` (funciona) e `autor.livros` (estoura):
+
+```text
+  atributo preguicoso -> DetachedInstanceError
+```
+
+Depois conserte de três jeitos: com `selectinload`, convertendo para um modelo Pydantic dentro da sessão, e com `expire_on_commit=False`. Explique por que o terceiro **não** resolve o caso do relacionamento.
+
+**Passo 10 — Alembic.** Rode `alembic init`, aponte `target_metadata` para o seu `Base.metadata`, gere a primeira revisão e aplique. Depois acrescente `paginas: Mapped[int | None]` ao modelo, autogere de novo e **leia** o arquivo gerado antes de aplicar:
+
+```python
+def upgrade() -> None:
+    op.add_column('livro', sa.Column('paginas', sa.Integer(), nullable=True))
+```
+
+Por fim, **renomeie** um campo e autogere: confirme que o Alembic propõe `DROP` mais `ADD` — e que aplicar isso apagaria os dados da coluna.
+
+**Passo 11 — assíncrono.** Refaça os passos 2 a 4 com `create_async_engine("sqlite+aiosqlite:///...")` e `AsyncSession`. Depois tente uma carga preguiçosa de relacionamento e observe o erro. Conserte com `selectinload`.
+
+**Passo 12 — a sessão por pedido.** Monte um FastAPI com a dependência `sessao()` e duas rotas. Verifique com um contador de consultas quantas cada pedido gasta, e confirme que a sessão fecha ao final mesmo quando a rota levanta exceção.
+
+## Resumo
+
+- SQLAlchemy tem **Core** (expressões SQL, `Engine`, `MetaData`) e **ORM** (classes mapeadas, `Session`). O Core funciona sozinho e é a escolha certa para relatório e carga em massa.
+- Em 2.0, o mapeamento usa **`Mapped[T]` e `mapped_column()`**: `Mapped[str]` vira `NOT NULL`, `Mapped[str | None]` permite nulo, e o verificador de tipos entende o modelo.
+- **`select()` é a interface de consulta**, com `scalars` para entidades, `execute` para colunas e `scalar` para valor único. Valores vão **parametrizados** (`:preco_1`), o que elimina injeção por construção.
+- **`Numeric` para dinheiro**, nunca `Float`.
+- O **N+1** é o padrão preguiçoso em ação: 21 consultas com 20 autores, **2** com `selectinload`, **1** selecionando colunas. `lazy="raise"` transforma o acidente em erro alto.
+- A **`Session` é unidade de trabalho e mapa de identidade**: você altera atributos e ela decide os `UPDATE`; dentro dela, uma linha é sempre o mesmo objeto Python.
+- Fora da sessão, o objeto fica **destacado** e qualquer carga preguiçosa levanta `DetachedInstanceError`. A cura boa é converter para Pydantic **dentro** da sessão.
+- **Uma sessão por pedido**, aberta e fechada por dependência com `yield`; nunca uma sessão global de módulo.
+- O modo **assíncrono** tem a mesma API com `await` e exige driver assíncrono — e **proíbe** carga preguiçosa, o que obriga a estratégia explícita.
+- **Alembic** versiona o esquema. `--autogenerate` detectou tabela nova e coluna nova, mas **não detecta renomeação** (propõe `DROP` mais `ADD`) nem migra dados: toda migração se lê antes de aplicar.
