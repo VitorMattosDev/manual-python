@@ -1,3 +1,545 @@
 # Como funciona uma aplicação web: HTTP, WSGI e ASGI {#sec-cap086}
 
-*(em elaboracao)*
+Seu script lê um CSV, calcula e imprime. Funciona. Aí alguém pergunta: "dá para ver isso pelo navegador?" — e a pergunta parece pequena. Não é. Entre a pessoa digitando um endereço e a sua função Python rodando existem umas seis camadas, e cada uma delas tem um nome, um protocolo e um jeito próprio de falhar.
+
+O reflexo de quem chega é instalar um framework e sair escrevendo rotas. Funciona até o dia em que a aplicação está lenta e ninguém sabe se o culpado é o Python, o servidor, o proxy ou o banco; ou em que o `curl` responde `502` e o log da aplicação está vazio, porque o pedido nunca chegou nela. Este capítulo é o mapa dessas camadas. Depois dele, `pip install fastapi` vira uma escolha informada em vez de um chute.
+
+Nada aqui exige dependência externa: HTTP, WSGI e um cliente rudimentar estão na biblioteca padrão. Só a parte de ASGI usa `uvicorn` e `httpx`.
+
+```bash
+pip install uvicorn httpx
+```
+
+## O caminho de um pedido
+
+::: {#fig-caminho-pedido}
+```{.tikz}
+%%| filename: caminho-pedido
+%%| alt: Camadas entre o navegador e a funcao Python que responde ao pedido
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=2.6cm,
+             minimum height=2.0cm,font=\scriptsize},
+  nt/.style={align=left,text width=2.6cm,font=\scriptsize\itshape,
+             color=manualgray!150},
+  lb/.style={font=\scriptsize\bfseries,align=center}
+]
+  \path (-0.4,-4.8) rectangle (14.2,3.5);
+
+  \node[lb,text width=13.4cm] at (7.1,3.2)
+    {do endereco digitado ate a sua funcao --- e a resposta de volta};
+
+  \node[bx,fill=manualblue!18] at (1.7,1.3)
+    {\textbf{navegador}\\
+     abre TCP, negocia\\TLS e escreve\\um pedido:\\
+     \texttt{GET /pedidos/7}};
+  \node[bx,fill=manualgreen!18] at (5.3,1.3)
+    {\textbf{proxy reverso}\\
+     nginx, Caddy, ALB\\
+     TLS, estaticos,\\limite de taxa,\\timeout};
+  \node[bx,fill=manualyellow!22] at (8.9,1.3)
+    {\textbf{servidor de}\\
+     \textbf{aplicacao}\\
+     gunicorn, uvicorn\\
+     processos, filas,\\reinicio};
+  \node[bx,fill=manualred!18] at (12.5,1.3)
+    {\textbf{sua aplicacao}\\
+     framework mais a\\funcao que voce\\escreveu; devolve\\dados ou HTML};
+
+  \draw[->,>=stealth,thick] (3.15,1.3) -- (3.85,1.3);
+  \draw[->,>=stealth,thick] (6.75,1.3) -- (7.45,1.3);
+  \draw[->,>=stealth,thick,manualred] (10.35,1.3) -- (11.05,1.3);
+  \node[font=\tiny,align=center,color=manualred] at (10.7,2.55)
+    {WSGI ou ASGI};
+  \draw[manualred,thin,dotted] (10.7,2.4) -- (10.7,1.45);
+
+  \node[nt] at (1.7,-0.7) {HTTP e texto: linha,\\cabecalhos, linha\\em branco, corpo};
+  \node[nt] at (5.3,-0.7) {aqui morrem 502 e\\504, antes de chegar\\ao seu log};
+  \node[nt] at (8.9,-0.7) {traduz socket em\\dicionario Python};
+  \node[nt] at (12.5,-0.7) {aqui, e so aqui, o\\assunto e o seu\\dominio};
+
+  \draw[->,>=stealth,thick,manualgray] (12.5,-2.1) -- (1.7,-2.1);
+  \node[font=\scriptsize,fill=white,inner sep=2pt] at (7.1,-2.1)
+    {a resposta volta pelo mesmo caminho: status, cabecalhos, corpo};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.0cm,
+        font=\scriptsize] at (7.1,-3.7)
+    {\textbf{o que a fronteira vermelha resolve:} sem um contrato, cada framework
+     precisaria do seu proprio servidor, e cada servidor so falaria com um framework.
+     WSGI e ASGI sao esse contrato --- e por isso Django, Flask e FastAPI rodam sob
+     servidores que nunca ouviram falar deles.};
+\end{tikzpicture}
+```
+As camadas entre o navegador e a função Python que responde.
+:::
+
+Vale fixar a divisão de trabalho, porque ela explica quase todo problema de produção:
+
+- **O proxy reverso** termina o TLS, serve arquivo estático, corta pedido gigante e desiste depois de um tempo. Um `504 Gateway Timeout` é ele dizendo que a sua aplicação demorou demais — e ele responde sozinho, sem passar pelo seu código.
+- **O servidor de aplicação** fala HTTP de um lado e Python do outro. Ele mantém os processos vivos, distribui as conexões e converte bytes de socket em estruturas Python.
+- **A aplicação** recebe uma estrutura pronta e devolve outra. Nunca lê socket, nunca analisa cabeçalho na mão.
+
+Em desenvolvimento as três primeiras camadas colapsam numa só (`uvicorn app:app --reload` faz tudo). Em produção elas são processos diferentes, e é isso que confunde quem só viu o modo de desenvolvimento.
+
+## HTTP é texto
+
+Antes de qualquer framework, o protocolo. Um pedido HTTP é texto com uma estrutura rígida: linha de pedido, cabeçalhos, uma linha em branco e — opcionalmente — o corpo.
+
+```text
+POST /busca?q=asgi&pag=2 HTTP/1.1
+Host: localhost:8052
+User-Agent: manual-python/1.0
+X-Pedido: 42
+Content-Type: application/json
+Content-Length: 17
+
+{"termo": "asgi"}
+```
+
+A resposta tem a mesma forma, trocando a linha de pedido por uma linha de status. Este é o retorno real de um servidor WSGI da biblioteca padrão, capturado com um `socket` cru (@sec-cap077):
+
+```python
+s = socket.create_connection(("127.0.0.1", 8051), timeout=5)
+s.sendall(b"GET / HTTP/1.1\r\nHost: localhost:8051\r\nConnection: close\r\n\r\n")
+print(s.recv(4096).decode())
+```
+
+```text
+HTTP/1.0 200 OK
+Date: Mon, 17 Aug 2026 13:24:33 GMT
+Server: WSGIServer/0.2 CPython/3.13.15
+Content-Type: text/plain; charset=utf-8
+Content-Length: 10
+(linha em branco: fim dos cabecalhos)
+alo, WSGI
+```
+
+Três detalhes que importam:
+
+**As quebras de linha são `\r\n`, não `\n`.** O protocolo exige CRLF, e um servidor escrito à mão que use `\n` produz respostas que alguns clientes aceitam e outros não — o pior tipo de defeito.
+
+**A linha em branco é obrigatória** e é o que separa cabeçalhos de corpo. Sem ela, o cliente fica esperando mais cabeçalhos até estourar o tempo.
+
+**`Content-Length` diz onde o corpo termina.** Sem ele, o receptor não sabe se a mensagem acabou ou se a rede engasgou. (A alternativa é `Transfer-Encoding: chunked`, usada quando o tamanho só se conhece ao final.)
+
+O `wsgiref` respondeu `HTTP/1.0` porque é um servidor de brinquedo: ele fecha a conexão a cada pedido. Um servidor de produção responde `HTTP/1.1` e mantém a conexão aberta para o pedido seguinte — que é de onde vem boa parte do ganho de desempenho de um site moderno.
+
+### Métodos e status: a semântica que ninguém lê
+
+| método | significa | seguro | idempotente |
+|---|---|---|---|
+| `GET` | leia isto | sim | sim |
+| `HEAD` | só os cabeçalhos de isto | sim | sim |
+| `POST` | crie algo / execute algo | não | **não** |
+| `PUT` | grave este estado aqui | não | sim |
+| `PATCH` | altere estes campos | não | não |
+| `DELETE` | apague isto | não | sim |
+
+**Seguro** significa que não muda estado no servidor; **idempotente**, que repetir a chamada dá o mesmo resultado. Não é filosofia: é o que autoriza um proxy a repetir um `PUT` que caiu na rede e o proíbe de repetir um `POST`. Uma API que faz `GET /apagar?id=7` está mentindo para toda a infraestrutura, e um dia um pré-carregador de links do navegador apaga o registro 7 sozinho.
+
+As faixas de status são igualmente semânticas: `2xx` deu certo, `3xx` procure em outro lugar, `4xx` **o cliente errou**, `5xx` **o servidor errou**. Devolver `200` com `{"erro": "não encontrado"}` no corpo quebra todo monitoramento automático, porque a métrica de erro do proxy conta status, não JSON.
+
+Os que aparecem todo dia: `200` ok, `201` criado, `204` ok e sem corpo, `301`/`302` redirecionamento, `400` pedido malformado, `401` não autenticado, `403` autenticado mas sem permissão, `404` não existe, `409` conflito, `422` bem formado mas semanticamente inválido, `429` calma aí, `500` estourou uma exceção, `502` o proxy não conseguiu falar com a aplicação, `503` fora do ar, `504` a aplicação demorou demais.
+
+::: {.callout-note}
+## `401` e `403` trocados é o erro mais comum de API
+`401 Unauthorized` significa **não sei quem você é** (credencial ausente, inválida ou expirada) e obriga o servidor a mandar um cabeçalho `WWW-Authenticate`. `403 Forbidden` significa **sei quem você é e não pode**. Um cliente bem escrito reage a `401` renovando o token e a `403` desistindo; trocá-los produz laços de renovação infinitos. O assunto volta no capítulo de autenticação.
+:::
+
+## WSGI: um contrato de uma função
+
+O PEP 3333 define WSGI em uma frase: **uma aplicação WSGI é um objeto chamável que recebe `environ` e `start_response`, e devolve um iterável de `bytes`.** Isso é tudo. Não há classe base, não há registro, não há importação.
+
+```python
+def app(environ, start_response):
+    corpo = b"alo, WSGI\n"
+    start_response("200 OK", [
+        ("Content-Type", "text/plain; charset=utf-8"),
+        ("Content-Length", str(len(corpo))),
+    ])
+    return [corpo]
+```
+
+Isso é uma aplicação web completa. Para servi-la, a biblioteca padrão traz um servidor:
+
+```python
+from wsgiref.simple_server import make_server
+
+with make_server("127.0.0.1", 8000, app) as servidor:
+    servidor.serve_forever()
+```
+
+::: {.callout-warning}
+## `wsgiref` e `http.server` não são para produção
+Ambos são de thread única, sem limite de tamanho de pedido, sem *timeout* e sem tratamento de cliente malicioso — a própria documentação diz isso. Servem para aprender, para teste e para um servidor de arquivos temporário na rede local. Em produção, gunicorn, uWSGI ou Waitress.
+:::
+
+### `environ`: o pedido virou dicionário
+
+O `environ` é um dicionário comum, com chaves herdadas da convenção CGI dos anos 1990. Uma aplicação que só imprime o que recebeu mostra o formato:
+
+```python
+def espiao(environ, start_response):
+    n = int(environ.get("CONTENT_LENGTH") or 0)
+    corpo = environ["wsgi.input"].read(n)
+    ...
+```
+
+```text
+REQUEST_METHOD     = 'POST'
+PATH_INFO          = '/busca'
+QUERY_STRING       = 'q=asgi&pag=2'
+SERVER_PROTOCOL    = 'HTTP/1.1'
+CONTENT_TYPE       = 'application/json'
+CONTENT_LENGTH     = '17'
+HTTP_HOST          = 'localhost:8052'
+HTTP_USER_AGENT    = 'manual-python/1.0'
+HTTP_X_PEDIDO      = '42'
+wsgi.url_scheme    = 'http'
+wsgi.input         = 'BufferedReader'
+corpo lido         = b'{"termo": "asgi"}'
+```
+
+As regras de tradução são mecânicas e vale conhecê-las, porque todo framework as expõe de algum jeito:
+
+- **Todo cabeçalho HTTP vira `HTTP_<NOME>`**, em maiúsculas e com hífen virando sublinhado: `X-Pedido: 42` chegou como `HTTP_X_PEDIDO`. As duas exceções são `Content-Type` e `Content-Length`, que perdem o prefixo por herança do CGI.
+- **Tudo é `str`** — inclusive `CONTENT_LENGTH`, que é `'17'` e não `17`. Esquecer o `int()` é clássico.
+- **O corpo não está no dicionário.** `wsgi.input` é um arquivo binário que você lê, uma vez só. Ler além do `CONTENT_LENGTH` pode travar esperando bytes que não virão.
+- **`PATH_INFO` e `QUERY_STRING` vêm separados** e ainda codificados em percentual; quem decodifica é `urllib.parse`.
+
+### Middleware é só uma função que envolve outra
+
+Como a aplicação é um chamável, envolvê-la em outro chamável é toda a arquitetura de *middleware* do WSGI — o mesmo padrão dos decoradores (@sec-cap051):
+
+```python
+def cronometro(aplicacao):
+    def envolvida(environ, start_response):
+        t0 = time.perf_counter()
+
+        def start_response_medido(status, headers, exc_info=None):
+            ms = (time.perf_counter() - t0) * 1000
+            headers = list(headers) + [("X-Tempo-ms", f"{ms:.1f}")]
+            return start_response(status, headers, exc_info)
+
+        return aplicacao(environ, start_response_medido)
+    return envolvida
+
+app = cronometro(app)
+```
+
+```text
+WSGI  -> 200 12.4 ms
+```
+
+Note o incômodo: para acrescentar um cabeçalho foi preciso interceptar o `start_response`, porque no WSGI os cabeçalhos saem por uma *função de retorno* e não por um valor de retorno. É a parte mais estranha do protocolo, e existe para permitir que a aplicação comece a mandar o corpo antes de saber o tamanho dele.
+
+### Onde o WSGI para
+
+O contrato é síncrono por construção: `app(environ, start_response)` é uma chamada de função comum, e enquanto ela não retorna, aquela linha de execução está ocupada. Disso decorre tudo:
+
+- **Um pedido lento prende uma thread inteira.** Se a view espera 300 ms pelo banco, a thread fica 300 ms parada sem consumir CPU nenhuma.
+- **Não há WebSocket, nem SSE decente, nem HTTP/2 *server push*.** O protocolo tem um pedido e uma resposta; não há vocabulário para uma conexão que fica aberta trocando mensagens.
+- **Não há evento de inicialização e desligamento.** Abrir um pool de conexões quando o processo sobe e fechá-lo quando desce é gambiarra em WSGI.
+
+Isso não faz do WSGI um erro. Ele é de 2003, resolveu o problema da sua época com uma elegância notável e ainda sustenta a maior parte do Python em produção. Só existe um teto.
+
+## ASGI: três funções e um dicionário
+
+ASGI é a resposta a esse teto. A aplicação continua sendo um chamável, mas agora é **assíncrono** e conversa por **eventos**:
+
+```python
+async def app(scope, receive, send):
+    assert scope["type"] == "http"
+    corpo = b"alo, ASGI\n"
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(corpo)).encode())],
+    })
+    await send({"type": "http.response.body", "body": corpo})
+```
+
+```bash
+uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+```text
+status : 200
+headers: {'date': 'Mon, 17 Aug 2026 13:25:09 GMT', 'server': 'uvicorn',
+          'content-type': 'text/plain; charset=utf-8', 'content-length': '10'}
+corpo  : alo, ASGI
+```
+
+::: {#fig-wsgi-asgi}
+```{.tikz}
+%%| filename: wsgi-asgi
+%%| alt: Comparacao lado a lado das assinaturas de WSGI e ASGI
+\begin{tikzpicture}[
+  pn/.style={draw,rounded corners,align=left,text width=6.0cm,
+             font=\scriptsize,inner sep=8pt},
+  lb/.style={font=\small\bfseries,align=center}
+]
+  \path (-0.4,-6.2) rectangle (14.6,2.6);
+
+  \node[lb,text width=6.4cm] at (3.5,2.1) {WSGI --- PEP 3333 (2003)};
+  \node[lb,text width=6.4cm] at (10.9,2.1) {ASGI 3.0 (2018)};
+
+  \node[pn,fill=manualblue!14] at (3.5,0.0)
+    {\texttt{def app(environ, start\_response):}\\[3pt]
+     \textbf{entra} \texttt{environ}: um dicionario com\\
+     o pedido inteiro; o corpo em\\\texttt{wsgi.input}\\[3pt]
+     \textbf{sai} chamar \texttt{start\_response(status,}\\
+     \texttt{headers)} e devolver um iteravel\\de \texttt{bytes}\\[3pt]
+     \textbf{ritmo} uma chamada, um retorno};
+
+  \node[pn,fill=manualgreen!14] at (10.9,0.0)
+    {\texttt{async def app(scope, receive, send):}\\[3pt]
+     \textbf{entra} \texttt{scope}: dicionario com o\\
+     pedido \textit{sem} o corpo; o corpo vem\\por eventos\\[3pt]
+     \textbf{sai} \texttt{await send(\{...\})} --- primeiro\\
+     \texttt{http.response.start}, depois um ou\\mais \texttt{http.response.body}\\[3pt]
+     \textbf{ritmo} eventos nos dois sentidos};
+
+  \node[pn,fill=manualyellow!20] at (3.5,-3.4)
+    {\textbf{tipos de conexao}\\
+     so HTTP\\[3pt]
+     \textbf{concorrencia}\\
+     um pedido por thread ou processo\\[3pt]
+     \textbf{servidores}\\
+     gunicorn, uWSGI, Waitress, mod\_wsgi};
+
+  \node[pn,fill=manualyellow!20] at (10.9,-3.4)
+    {\textbf{tipos de conexao}\\
+     \texttt{http}, \texttt{websocket}, \texttt{lifespan}\\[3pt]
+     \textbf{concorrencia}\\
+     milhares de conexoes por processo\\[3pt]
+     \textbf{servidores}\\
+     uvicorn, hypercorn, granian, daphne};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.0cm,
+        font=\scriptsize] at (7.2,-5.5)
+    {\textbf{os dois convivem:} \texttt{a2wsgi} adapta nos dois sentidos, o que permite
+     montar uma aplicacao WSGI antiga dentro de uma ASGI nova enquanto a migracao
+     acontece --- e torna a escolha reversivel.};
+\end{tikzpicture}
+```
+Os dois contratos lado a lado: o que entra, o que sai e a que custo.
+:::
+
+### O `scope` e os eventos
+
+O `scope` é o análogo do `environ`, com três diferenças: as chaves são minúsculas e organizadas, os cabeçalhos vêm como lista de pares de `bytes` (preservando ordem e repetições, que o dicionário do WSGI perde), e **o corpo não está ali**.
+
+```text
+type          = 'http'
+asgi          = {'version': '3.0', 'spec_version': '2.3'}
+http_version  = '1.1'
+method        = 'POST'
+scheme        = 'http'
+path          = '/busca'
+raw_path      = b'/busca'
+query_string  = b'q=asgi&pag=2'
+root_path     = ''
+client        = ('127.0.0.1', 51140)
+server        = ('127.0.0.1', 8062)
+headers       = [
+    (b'host', b'127.0.0.1:8062'),
+    (b'accept', b'*/*'),
+    (b'accept-encoding', b'gzip, deflate'),
+    (b'connection', b'keep-alive'),
+    (b'x-pedido', b'42'),
+    (b'user-agent', b'manual-python/1.0'),
+    (b'content-length', b'16'),
+    (b'content-type', b'application/json'),
+]
+eventos de receive() = [('http.request', b'{"termo":"asgi"}', False)]
+```
+
+O corpo chega por `await receive()`, um evento de cada vez, com a bandeira `more_body` dizendo se há mais. Um envio grande vem em vários pedaços — e é por isso que uma aplicação ASGI consegue processar um arquivo de 2 GB sem carregá-lo na memória, enquanto no WSGI isso exige ler o `wsgi.input` em laço com cuidado manual.
+
+O `scope["type"]` é o que abre as outras portas. Além de `"http"`, existem `"websocket"` (com eventos `websocket.connect`, `websocket.receive`, `websocket.send`) e `"lifespan"`, o ciclo de vida do processo:
+
+```python
+async def app(scope, receive, send):
+    if scope["type"] == "lifespan":
+        while True:
+            msg = await receive()
+            if msg["type"] == "lifespan.startup":
+                # abrir pool de conexoes, carregar modelo, aquecer cache
+                await send({"type": "lifespan.startup.complete"})
+            elif msg["type"] == "lifespan.shutdown":
+                # fechar tudo com calma
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+```
+
+```text
+  [lifespan] recebido: lifespan.startup
+  [lifespan] recebido: lifespan.shutdown
+```
+
+Esse gancho é o que o WSGI não tem, e é onde vive o "abra o banco uma vez, não a cada pedido". Nos frameworks ele aparece embrulhado — no FastAPI é o `lifespan`, assunto do @sec-cap088.
+
+### O ganho, medido
+
+A promessa do ASGI é concorrência com I/O. Dá para conferir: dez pedidos simultâneos a uma rota que espera meio segundo, contra **um** processo de cada lado.
+
+```python
+async def dez(url):
+    async with httpx.AsyncClient(timeout=30) as c:
+        t0 = time.perf_counter()
+        await asyncio.gather(*(c.get(url) for _ in range(10)))
+        return time.perf_counter() - t0
+```
+
+```text
+ASGI (uvicorn, 1 processo)      :  0.57 s
+WSGI (wsgiref, 1 thread)        :  5.04 s
+```
+
+Dez esperas de 0,5 s custaram 0,57 s de um lado e 5,04 s do outro. A conta é direta: o laço de eventos, ao encontrar `await asyncio.sleep(0.5)`, larga aquele pedido e atende o próximo; a thread única do `wsgiref`, ao encontrar `time.sleep(0.5)`, fica parada.
+
+Duas ressalvas honestas, porque essa medição é fácil de exagerar:
+
+**A comparação justa não é essa.** Um gunicorn com 4 processos e 8 threads cada atenderia os dez pedidos em cerca de 0,5 s também. A diferença real é de **custo**: 32 threads carregam 32 pilhas de memória, enquanto um processo ASGI mantém dez mil corrotinas com o custo de um dicionário cada.
+
+**O ganho é de I/O, não de CPU.** Se a rota gastar 500 ms calculando em vez de esperando, o `async` não ajuda em nada — a corrotina não solta o controle e o servidor inteiro trava. Pior: um `time.sleep()` ou uma chamada de biblioteca síncrona dentro de uma rota `async` bloqueia **todos** os pedidos daquele processo, o defeito mais comum de quem migra sem entender. O porquê disso é o assunto do Volume 15, na parte de concorrência e do GIL.
+
+### Middleware ASGI
+
+Mesmo padrão, envolvendo o `send` em vez do `start_response`:
+
+```python
+def cronometro_asgi(aplicacao):
+    async def envolvida(scope, receive, send):
+        if scope["type"] != "http":
+            await aplicacao(scope, receive, send)
+            return
+        t0 = time.perf_counter()
+
+        async def send_medido(evento):
+            if evento["type"] == "http.response.start":
+                ms = (time.perf_counter() - t0) * 1000
+                evento = dict(evento)
+                evento["headers"] = list(evento["headers"]) + [
+                    (b"x-tempo-ms", f"{ms:.1f}".encode())]
+            await send(evento)
+
+        await aplicacao(scope, receive, send_medido)
+    return envolvida
+```
+
+```text
+ASGI  -> 200 13.0 ms
+```
+
+Duas armadilhas moram nesse trecho, e as duas custam caro:
+
+**O `if scope["type"] != "http"` não é decoração.** Sem ele, o middleware tenta ler `scope["method"]` num evento de `lifespan` e derruba a inicialização do servidor com um `KeyError` que aparece como "a aplicação não sobe", sem pedido nenhum envolvido.
+
+**Só o `http.response.start` carrega cabeçalhos.** Tentar acrescentá-los no `http.response.body` não dá erro — simplesmente não faz nada, porque a essa altura os cabeçalhos já foram para a rede.
+
+## Escolhendo, na prática
+
+Nem toda aplicação precisa de ASGI. O critério é o que a rota faz:
+
+| situação | escolha |
+|---|---|
+| CRUD que fala com um banco relacional, tráfego moderado | WSGI serve muito bem |
+| Django com ORM síncrono e um ecossistema inteiro em volta | WSGI, sem culpa |
+| API que chama três serviços externos por pedido | ASGI ganha muito |
+| WebSocket, SSE, notificação em tempo real | ASGI é o único caminho |
+| processamento pesado de CPU | nenhum dos dois: fila de tarefas |
+| projeto novo, sem restrição | ASGI, pelo teto mais alto |
+
+E os dois mundos convivem: `a2wsgi` adapta nos dois sentidos, o que permite montar uma aplicação Flask antiga dentro de uma FastAPI nova enquanto a migração acontece. Ferramentas assim são o que torna a decisão reversível — e, portanto, barata.
+
+## 🐍 Jeito Pythônico
+
+**Aprenda o protocolo antes do framework.** `environ`, `scope`, `receive` e `send` são o vocabulário comum de Django, Flask, FastAPI e Litestar. Quem os conhece lê o código de qualquer um deles; quem não, decora nomes de decorador.
+
+**Use o status certo, sempre.** `2xx`/`4xx`/`5xx` é o que o proxy, o balanceador, o painel de métricas e o cliente leem. `200` com `{"erro": ...}` no corpo é invisível para toda a infraestrutura.
+
+**`GET` não muda estado.** Idempotência não é teoria: é a licença que a rede tem para repetir a chamada.
+
+**`wsgiref` e `http.server` nunca em produção.** São de thread única e sem defesa nenhuma; a documentação da biblioteca padrão diz isso com todas as letras.
+
+**Middleware é uma função que envolve outra** — o mesmo padrão do decorador (@sec-cap051). Não invente registro global para o que uma closure resolve.
+
+**Middleware ASGI trata `scope["type"]` diferente de `"http"` antes de tocar em qualquer chave.** É a diferença entre o servidor subir e não subir.
+
+**Não bloqueie o laço de eventos.** `time.sleep`, `requests.get` ou um driver de banco síncrono dentro de uma rota `async` param o processo inteiro. Se a biblioteca for síncrona, `asyncio.to_thread` ou uma alternativa `async` de verdade (`httpx.AsyncClient` no lugar de `requests`, @sec-cap078).
+
+**`async` resolve espera, não conta.** Trabalho de CPU dentro de uma corrotina não fica mais rápido e ainda trava os vizinhos.
+
+**Cabeçalho é `bytes` no ASGI e `str` no WSGI.** E `CONTENT_LENGTH` é `str` mesmo quando parece número.
+
+**Abra recursos no `lifespan`, não no primeiro pedido.** Pool de conexões, cliente HTTP e modelo carregado pertencem à inicialização do processo.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-web && cd lab-web
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install uvicorn httpx
+```
+
+**Passo 2 — HTTP na mão.** Suba `python -m http.server 8000` num terminal e, noutro, escreva um cliente com `socket` que envie exatamente:
+
+```text
+GET / HTTP/1.1\r\nHost: localhost:8000\r\nConnection: close\r\n\r\n
+```
+
+Imprima a resposta crua. Depois **remova** a linha em branco final e observe o cliente ficar pendurado — o servidor está esperando o resto dos cabeçalhos.
+
+**Passo 3 — a app WSGI de cinco linhas.** Escreva a `app(environ, start_response)` que devolve `b"alo, WSGI\n"`, sirva com `wsgiref.simple_server.make_server` e confirme com `curl -v`. Confira que `Content-Length` bate com o tamanho do corpo.
+
+**Passo 4 — o `environ` inteiro.** Troque o corpo por um despejo de `sorted(environ)`. Faça um `POST /busca?q=asgi&pag=2` com um cabeçalho `X-Pedido: 42` e um corpo JSON, e localize na saída:
+
+```text
+QUERY_STRING       = 'q=asgi&pag=2'
+HTTP_X_PEDIDO      = '42'
+CONTENT_LENGTH     = '17'
+```
+
+Depois leia o corpo com `environ["wsgi.input"].read(int(environ["CONTENT_LENGTH"]))` e tente ler **de novo**: o segundo `read` devolve `b""`. Explique por quê.
+
+**Passo 5 — middleware WSGI.** Escreva o `cronometro` do capítulo e confirme o cabeçalho na resposta:
+
+```text
+WSGI  -> 200 12.4 ms
+```
+
+Depois empilhe dois middlewares (um que mede tempo, outro que registra o método no log) e observe a ordem em que eles rodam na entrada e na saída.
+
+**Passo 6 — a app ASGI de seis linhas.** Escreva a `async def app(scope, receive, send)` que responde `b"alo, ASGI\n"`, rode com `uvicorn app:app` e confirme com `httpx`. Depois **omita** o evento `http.response.body` e veja o que o uvicorn faz.
+
+**Passo 7 — o `scope`.** Despeje o `scope` e a sequência de `receive()` para um `POST` com corpo JSON. Compare com o `environ` do passo 4 e liste três diferenças concretas.
+
+**Passo 8 — a medição.** Reproduza o teste dos dez pedidos concorrentes com `asyncio.sleep(0.5)` do lado ASGI e `time.sleep(0.5)` do lado WSGI:
+
+```text
+ASGI (uvicorn, 1 processo)      :  0.57 s
+WSGI (wsgiref, 1 thread)        :  5.04 s
+```
+
+Agora o experimento que ensina: troque o `asyncio.sleep(0.5)` da rota ASGI por `time.sleep(0.5)` e refaça a medição. O tempo do ASGI vai a cerca de 5 s. **Esse é o defeito mais caro do Python assíncrono, reproduzido em uma linha.**
+
+**Passo 9 — `lifespan`.** Acrescente ao seu app ASGI o tratamento de `scope["type"] == "lifespan"`, imprimindo uma mensagem na inicialização e outra no desligamento. Suba e derrube o uvicorn e confirme que as duas apareceram, na ordem certa.
+
+**Passo 10 — a ponte.** Instale `a2wsgi`, envolva sua aplicação WSGI com `WSGIMiddleware` e sirva-a com uvicorn. Ela responde igual. Depois faça o contrário com `ASGIMiddleware` e gunicorn, e explique por que o segundo caminho perde a vantagem de concorrência.
+
+## Resumo
+
+- Entre o navegador e a sua função há **proxy reverso**, **servidor de aplicação** e **framework**. Saber qual camada respondeu é o que separa depurar de adivinhar: um `502` ou `504` costuma nem chegar ao seu log.
+- **HTTP é texto** com linha de pedido, cabeçalhos, linha em branco e corpo, terminados por `\r\n`. `Content-Length` é o que diz onde a mensagem acaba.
+- **Métodos têm semântica** (`GET` seguro e idempotente, `POST` nenhum dos dois) e **faixas de status são contrato** com toda a infraestrutura. `200` com erro no corpo é invisível para o monitoramento.
+- **WSGI (PEP 3333) é um chamável** `app(environ, start_response)` que devolve um iterável de `bytes`. `environ` é um dicionário de `str` com os cabeçalhos em `HTTP_<NOME>`; o corpo vem por `wsgi.input`.
+- **ASGI é um chamável assíncrono** `app(scope, receive, send)` que conversa por eventos, atende `http`, `websocket` e `lifespan`, e recebe o corpo em pedaços.
+- **Middleware, nos dois, é uma função que envolve outra** — WSGI intercepta `start_response`, ASGI intercepta `send`. Middleware ASGI precisa tratar `scope["type"]` diferente de `"http"`.
+- **A vantagem do ASGI é I/O concorrente**, medida aqui em 0,57 s contra 5,04 s para dez esperas de meio segundo com um trabalhador de cada lado — mas some inteira se o código bloquear o laço de eventos.
+- **`wsgiref` e `http.server` são de brinquedo.** Produção é gunicorn/uWSGI (WSGI) ou uvicorn/hypercorn (ASGI), atrás de um proxy reverso.
+- O contrato existe para que framework e servidor sejam trocáveis; `a2wsgi` adapta nos dois sentidos, o que torna a escolha reversível.

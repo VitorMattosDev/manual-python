@@ -143,7 +143,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ### Volume 14 — Web, APIs e Bancos de Dados
 
-- [ ] **cap 086** - Como funciona uma aplicação web: HTTP, WSGI e ASGI - `vol14/cap086-como-funciona-uma-aplicacao-web-http-wsgi-e.qmd`
+- [x] **cap 086** - Como funciona uma aplicação web: HTTP, WSGI e ASGI - `vol14/cap086-como-funciona-uma-aplicacao-web-http-wsgi-e.qmd`
 - [ ] **cap 087** - Validação de dados com Pydantic - `vol14/cap087-validacao-de-dados-com-pydantic.qmd`
 - [ ] **cap 088** - APIs REST com FastAPI - `vol14/cap088-apis-rest-com-fastapi.qmd`
 - [ ] **cap 089** - Flask e Django: quando usar cada um - `vol14/cap089-flask-e-django-quando-usar-cada-um.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (85 concluidos).
+**Total:** 104 capitulos em 16 volumes (86 concluidos).
 
