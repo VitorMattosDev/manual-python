@@ -1,3 +1,543 @@
 # APIs REST com FastAPI {#sec-cap088}
 
-*(em elaboracao)*
+Uma API de catálogo tem seis rotas. Escrita à mão sobre ASGI cru (@sec-cap086), cada uma precisa: casar o caminho, extrair o parâmetro, converter para inteiro, tratar a conversão que falha, ler o corpo, decodificar o JSON, validar os campos, montar a resposta de erro, serializar a de sucesso e escrever a documentação num arquivo à parte que ficará desatualizado em duas semanas.
+
+O FastAPI faz isso a partir da **assinatura da função**. Você escreve os tipos que já escreveria (@sec-cap068) e ele deriva o resto — validação, conversão, códigos de status, esquema OpenAPI e a página de documentação interativa. Não é mágica: é o Pydantic do @sec-cap087 aplicado à borda HTTP, com o modelo de dependências por cima.
+
+Este capítulo usa **FastAPI 0.141.1** sobre Starlette 1.6.0 e Pydantic 2.13.4.
+
+```bash
+pip install fastapi uvicorn httpx
+```
+
+## A assinatura é o contrato
+
+```python
+from fastapi import FastAPI, HTTPException, Path, Query, status
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Catalogo", version="1.0.0")
+
+class ProdutoEntrada(BaseModel):
+    sku: str = Field(pattern=r"^[A-Z]{3}-\d{4}$")
+    nome: str = Field(min_length=2, max_length=60)
+    preco: float = Field(gt=0)
+    categoria: Literal["livro", "eletronico", "alimento"]
+
+class ProdutoSaida(ProdutoEntrada):
+    id: int
+
+@app.post("/produtos", response_model=ProdutoSaida,
+          status_code=status.HTTP_201_CREATED)
+def criar(dados: ProdutoEntrada):
+    novo = {"id": PROXIMO["id"], **dados.model_dump()}
+    BANCO[novo["id"]] = novo
+    PROXIMO["id"] += 1
+    return novo
+```
+
+```bash
+uvicorn app:app --reload
+```
+
+```text
+  POST /produtos (valido)                    201  {"sku":"ELE-0042","nome":"Mouse","preco":129.9,"categoria":"eletronico","id":2}
+```
+
+Nada nesse código lê JSON, nem checa tipo, nem escolhe status. O `201` veio do `status_code`, a validação veio da anotação `dados: ProdutoEntrada`, e a serialização veio do `response_model`.
+
+::: {#fig-fastapi-assinatura}
+```{.tikz}
+%%| filename: fastapi-assinatura
+%%| alt: O que o FastAPI deriva de cada parte da assinatura de uma funcao
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=3.4cm,
+             minimum height=2.1cm,font=\scriptsize},
+  cd/.style={draw,rounded corners,align=left,text width=12.2cm,
+             font=\scriptsize\ttfamily,fill=manualgray!12,inner sep=7pt}
+]
+  \path (-0.4,-5.4) rectangle (14.0,4.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.2cm] at (7.0,4.1)
+    {uma assinatura, seis comportamentos derivados};
+
+  \node[cd] at (7.0,2.7)
+    {@app.get("/produtos/\{produto\_id\}", response\_model=ProdutoSaida)\\
+     def obter(produto\_id: Annotated[int, Path(ge=1)],\\
+     \hspace*{2em}limite: Annotated[int, Query(le=100)] = 10,\\
+     \hspace*{2em}dados: ProdutoEntrada,\\
+     \hspace*{2em}chave: Annotated[str, Depends(chave\_valida)]):};
+
+  \node[bx,fill=manualblue!16] at (2.6,0.3)
+    {\textbf{caminho}\\
+     o nome entre chaves casa\\com o parametro; \texttt{int}\\converte e devolve 422\\se nao der};
+  \node[bx,fill=manualblue!16] at (7.0,0.3)
+    {\textbf{consulta}\\
+     o que sobra na assinatura\\vira query string;\\
+     \texttt{Query(le=100)} restringe};
+  \node[bx,fill=manualgreen!16] at (11.4,0.3)
+    {\textbf{corpo}\\
+     parametro anotado com\\um \texttt{BaseModel} vira\\o JSON do corpo,\\ja validado};
+
+  \node[bx,fill=manualyellow!22] at (2.6,-2.4)
+    {\textbf{dependencia}\\
+     \texttt{Depends(f)} roda antes\\da view: autentica, abre\\sessao, pagina};
+  \node[bx,fill=manualyellow!22] at (7.0,-2.4)
+    {\textbf{resposta}\\
+     \texttt{response\_model} valida e\\\textit{filtra} a saida;\\
+     \texttt{status\_code} fixa o codigo};
+  \node[bx,fill=manualred!14] at (11.4,-2.4)
+    {\textbf{documentacao}\\
+     \texttt{/openapi.json},\\
+     \texttt{/docs} (Swagger),\\
+     \texttt{/redoc} --- sempre em dia};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.2cm,
+        font=\scriptsize] at (7.0,-4.7)
+    {\textbf{a consequencia pratica:} a documentacao nao pode divergir do codigo,
+     porque nao e escrita --- e derivada. Um campo renomeado muda o \texttt{/docs}
+     no mesmo instante.};
+\end{tikzpicture}
+```
+Cada parte da assinatura vira um comportamento; nada disso é escrito duas vezes.
+:::
+
+## Caminho, consulta e corpo
+
+A regra de atribuição é simples: **se o nome aparece no caminho, é parâmetro de caminho; se é um modelo Pydantic, é o corpo; senão, é parâmetro de consulta.**
+
+```python
+@app.get("/produtos", response_model=Pagina)
+def listar(
+    categoria: Annotated[str | None, Query(description="filtra por categoria")] = None,
+    limite: Annotated[int, Query(ge=1, le=100)] = 10,
+):
+    ...
+
+@app.get("/produtos/{produto_id}", response_model=ProdutoSaida)
+def obter(produto_id: Annotated[int, Path(ge=1)]):
+    if produto_id not in BANCO:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "produto nao encontrado")
+    return BANCO[produto_id]
+```
+
+```text
+  GET /produtos                              200  {"total":1,"itens":[{"sku":"LIV-0007",...
+  GET /produtos/1                            200  {"sku":"LIV-0007","nome":"Fluent Python",...
+  GET /produtos/99                           404  {"detail":"produto nao encontrado"}
+  GET /produtos?categoria=livro              200  {"total":1,"itens":[...
+  GET /produtos?limite=0                     422  {"detail":[{"type":"greater_than_equal","loc":["query","limite"],...
+  GET /produtos/abc                          422  {"detail":[{"type":"int_parsing","loc":["path","produto_id"],...
+```
+
+Repare no `loc` das duas últimas linhas: `["query", "limite"]` e `["path", "produto_id"]`. É o caminho do erro do Pydantic (@sec-cap087) com a **origem** na frente. O cliente sabe se o problema está na URL, no corpo ou num cabeçalho sem precisar adivinhar.
+
+::: {.callout-note}
+## `422`, e não `400`
+FastAPI devolve `422 Unprocessable Content` para erro de validação, não `400`. A distinção é útil: `400` é "não entendi o que você mandou" (JSON malformado, por exemplo) e `422` é "entendi perfeitamente, e está inválido". Quem espera `400` no cliente precisa saber disso. Dá para mudar com um `@app.exception_handler(RequestValidationError)`, mas o padrão está certo.
+:::
+
+E o corpo inválido devolve o inventário completo:
+
+```text
+  POST /produtos (invalido)                   422
+{
+  "detail": [
+    {
+      "type": "string_pattern_mismatch",
+      "loc": ["body", "sku"],
+      "msg": "String should match pattern '^[A-Z]{3}-\\d{4}$'",
+      "input": "xx",
+      "ctx": {"pattern": "^[A-Z]{3}-\\d{4}$"}
+    },
+    {
+      "type": "missing",
+      "loc": ["body", "nome"],
+      "msg": "Field required",
+      ...
+    },
+    {
+      "type": "greater_than",
+      "loc": ["body", "preco"],
+      "msg": "Input should be greater than 0",
+      ...
+```
+
+::: {.callout-warning}
+## O campo `input` devolve o que o cliente mandou
+Repare no `"input": "xx"` e, no erro `missing`, no corpo inteiro ecoado. Numa rota de login, isso significa a **senha errada voltando na resposta** e indo parar no log do cliente. Para rotas com dado sensível, sobrescreva o tratador de `RequestValidationError` e devolva só `type`, `loc` e `msg`. O assunto volta no @sec-cap091.
+:::
+
+## `response_model` é um filtro, não uma anotação decorativa
+
+Este é o recurso que mais evita incidente, e o mais fácil de esquecer:
+
+```python
+class UsuarioBanco(BaseModel):
+    id: int
+    email: str
+    senha_hash: str
+    interno_notas: str
+
+class UsuarioPublico(BaseModel):
+    id: int
+    email: str
+
+@app.get("/vazando/{uid}")                                   # sem response_model
+def vazando(uid: int):
+    return UsuarioBanco(...)
+
+@app.get("/protegido/{uid}", response_model=UsuarioPublico)  # com
+def protegido(uid: int):
+    return UsuarioBanco(...)
+```
+
+```text
+  sem response_model: {'id': 7, 'email': 'ana@exemplo.com', 'senha_hash': 'argon2id$v=19$...', 'interno_notas': 'cliente reclamou em julho'}
+  com response_model: {'id': 7, 'email': 'ana@exemplo.com'}
+```
+
+**A mesma função, o mesmo objeto retornado, duas respostas diferentes.** O `response_model` não apenas descreve a saída: ele a recorta. Sem ele, qualquer campo que alguém acrescentar ao modelo do banco daqui a seis meses passa a sair pela API — e ninguém vai notar, porque nenhum teste falha quando um campo **a mais** aparece.
+
+Daí a prática que vale adotar desde a primeira rota: **modelos de entrada, de banco e de saída são classes distintas**, e toda rota declara o seu `response_model`. É um pouco mais de código e uma classe inteira de vazamento a menos.
+
+## Dependências: a injeção que o Python já tinha
+
+`Depends` transforma qualquer chamável num pré-requisito da rota. O resultado é injetado como argumento:
+
+```python
+def chave_valida(x_api_key: Annotated[str | None, Header()] = None) -> str:
+    if x_api_key != "segredo-do-lab":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "chave invalida")
+    return x_api_key
+
+@app.delete("/produtos/{produto_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remover(produto_id: int, _: Annotated[str, Depends(chave_valida)]):
+    if BANCO.pop(produto_id, None) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "produto nao encontrado")
+```
+
+```text
+  DELETE sem chave                           401  {"detail":"chave invalida"}
+  DELETE com chave errada                    401  {"detail":"chave invalida"}
+  DELETE com chave certa                     204
+  GET /produtos/1 depois do DELETE           404  {"detail":"produto nao encontrado"}
+```
+
+Note que a dependência **também é analisada**: ela declara `x_api_key: Annotated[str | None, Header()]`, então o cabeçalho `X-API-Key` entra no esquema OpenAPI e aparece no `/docs`. Dependência não é gambiarra fora do contrato; é parte dele.
+
+### Dependência com `yield`: o recurso que fecha sozinho
+
+Quando o pré-requisito é um recurso — sessão de banco, arquivo, cliente HTTP —, a dependência vira um gerador (@sec-cap050), e o FastAPI fecha o que foi aberto:
+
+```python
+def sessao():
+    EVENTOS.append("abriu sessao")
+    try:
+        yield {"conn": "fake"}
+    finally:
+        EVENTOS.append("fechou sessao")
+
+@app.get("/com-sessao")
+def com_sessao(s: Annotated[dict, Depends(sessao)]):
+    ...
+```
+
+```text
+  sucesso : ['abriu sessao', 'rodou a view', 'fechou sessao']
+  com erro: ['abriu sessao', 'view vai estourar', 'fechou sessao'] -> status 500
+```
+
+**O `finally` roda mesmo quando a view estoura.** É o mesmo contrato do `with` (@sec-cap040), e é o que garante que uma exceção não deixe conexão pendurada até o pool acabar. Uma API que abre sessão de banco na mão dentro da view, sem `try/finally`, vaza conexão em toda rota que falha — e o sintoma só aparece sob carga.
+
+O `Depends` ainda tem duas propriedades que economizam código:
+
+**Dependências compõem.** Uma dependência pode depender de outra: `usuario_atual` depende de `token_valido`, que depende de `cabecalho_authorization`. O FastAPI resolve o grafo.
+
+**O resultado é cacheado por pedido.** Se três dependências pedem `sessao()`, ela roda **uma vez** naquele pedido. (Para desligar: `Depends(f, use_cache=False)`.)
+
+## Erros de domínio viram status HTTP
+
+Espalhar `HTTPException` pelo código de negócio acopla a regra ao protocolo. A alternativa é levantar exceção do domínio e traduzi-la num só lugar:
+
+```python
+class SemEstoque(Exception):
+    def __init__(self, sku: str):
+        self.sku = sku
+
+@app.exception_handler(SemEstoque)
+def sem_estoque(request: Request, exc: SemEstoque):
+    return JSONResponse(status_code=409,
+                        content={"erro": "sem estoque", "sku": exc.sku})
+```
+
+```text
+  POST /comprar/LIV-0007 -> 409 {'erro': 'sem estoque', 'sku': 'LIV-0007'}
+```
+
+A função de compra levanta `SemEstoque` e não sabe que HTTP existe — o que a torna testável sem cliente, reutilizável numa tarefa de fila e independente da camada web. É a mesma separação que o @sec-cap039 defende para exceções próprias, aplicada à borda.
+
+## Tarefa de fundo: responder antes de terminar
+
+```python
+@app.post("/pedido")
+def pedido(tarefas: BackgroundTasks):
+    tarefas.add_task(escreve_log, "email enviado")
+    return {"status": "aceito"}
+```
+
+```text
+  resposta imediata: 200 {'status': 'aceito'}
+  depois da resposta: ['email enviado']
+```
+
+`BackgroundTasks` roda a função **depois** que a resposta foi enviada. Serve para o que é rápido e tolerante a falha: mandar um e-mail, gravar métrica, invalidar cache.
+
+**Não serve como fila de tarefas.** Se o processo cair entre a resposta e a execução, a tarefa se perde sem rastro; não há repetição, nem prioridade, nem visibilidade. Para o que não pode ser perdido, uma fila de verdade (Celery, RQ, ARQ, ou o banco com uma tabela de trabalho) — o `BackgroundTasks` é o degrau anterior a isso.
+
+## `def` ou `async def`: a decisão que mais custa
+
+FastAPI aceita os dois, e trata cada um de um jeito. Três rotas equivalentes, dez pedidos simultâneos, um processo:
+
+```python
+@app2.get("/async-certo")
+async def async_certo():
+    await asyncio.sleep(0.3)
+    return {"ok": True}
+
+@app2.get("/async-errado")
+async def async_errado():
+    time.sleep(0.3)                   # BLOQUEIA o laco de eventos
+    return {"ok": True}
+
+@app2.get("/def-normal")
+def def_normal():
+    time.sleep(0.3)                   # roda no pool de threads
+    return {"ok": True}
+```
+
+```text
+  /async-certo   :  0.34 s
+  /def-normal    :  0.34 s
+  /async-errado  :  3.04 s
+```
+
+::: {#fig-fastapi-async}
+```{.tikz}
+%%| filename: fastapi-async
+%%| alt: Onde cada tipo de rota do FastAPI roda e o custo de bloquear o laco
+\begin{tikzpicture}[
+  cd/.style={draw,rounded corners,align=left,text width=4.4cm,
+             font=\scriptsize\ttfamily,minimum height=1.25cm,inner sep=6pt},
+  on/.style={draw,rounded corners,align=left,text width=3.6cm,
+             font=\scriptsize,minimum height=1.25cm},
+  tm/.style={draw,rounded corners,align=center,text width=2.4cm,
+             font=\scriptsize\bfseries,minimum height=1.25cm}
+]
+  \path (-0.4,-4.6) rectangle (14.0,3.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.2cm] at (6.8,3.1)
+    {dez pedidos de 0,3 s, um processo};
+
+  \node[cd,fill=manualgreen!14] at (2.6,1.8)
+    {async def rota():\\ \ await asyncio.sleep(...)};
+  \node[on,fill=manualgreen!14] at (8.0,1.8)
+    {\textbf{laco de eventos}\\o \texttt{await} devolve o controle;\\
+     as dez esperas se sobrepoem};
+  \node[tm,fill=manualgreen!24] at (12.1,1.8) {0,34 s};
+
+  \node[cd,fill=manualblue!14] at (2.6,0.0)
+    {def rota():\\ \ time.sleep(...)};
+  \node[on,fill=manualblue!14] at (8.0,0.0)
+    {\textbf{pool de threads}\\o FastAPI ve que nao e\\
+     corrotina e move para fora\\do laco};
+  \node[tm,fill=manualblue!24] at (12.1,0.0) {0,34 s};
+
+  \node[cd,fill=manualred!14] at (2.6,-1.8)
+    {async def rota():\\ \ time.sleep(...)};
+  \node[on,fill=manualred!14] at (8.0,-1.8)
+    {\textbf{laco de eventos, travado}\\nada devolve o controle;\\
+     as esperas viram fila};
+  \node[tm,fill=manualred!26] at (12.1,-1.8) {3,04 s};
+
+  \draw[->,>=stealth] (4.95,1.8) -- (6.05,1.8);
+  \draw[->,>=stealth] (4.95,0.0) -- (6.05,0.0);
+  \draw[->,>=stealth] (4.95,-1.8) -- (6.05,-1.8);
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.2cm,
+        font=\scriptsize] at (6.8,-3.7)
+    {\textbf{a regra:} \texttt{async def} so com bibliotecas \texttt{async} ate o fim.
+     Na duvida, \texttt{def} --- o pool de threads e mais lento por pedido e limitado,
+     mas nunca trava o servidor inteiro. O pior dos mundos e o terceiro caso, que
+     parece moderno e e nove vezes pior.};
+\end{tikzpicture}
+```
+As três formas de escrever a mesma rota, e o que cada uma custa.
+:::
+
+A leitura é direta: `async def` **com** `await` de verdade e `def` comum entregam o mesmo desempenho aqui, por caminhos diferentes. O terceiro caso — `async def` chamando código bloqueante — é nove vezes pior, porque monopoliza o laço de eventos e serializa tudo.
+
+E ele é fácil de escrever sem perceber: `requests.get()` numa rota `async`, um driver de banco síncrono, `open()` de um arquivo grande, uma chamada a `subprocess.run` (@sec-cap075). A saída, quando não há alternativa assíncrona, é `await asyncio.to_thread(funcao_bloqueante, ...)`, que devolve o trabalho para o pool.
+
+::: {.callout-tip}
+## Regra prática
+Se a rota usa alguma biblioteca que **não** é `async`, escreva `def`. FastAPI cuida do resto. Só use `async def` quando o caminho inteiro — cliente HTTP, driver de banco, cache — for assíncrono.
+:::
+
+## Ciclo de vida: `lifespan`
+
+O gancho do @sec-cap086 aparece aqui embrulhado num gerenciador de contexto assíncrono:
+
+```python
+@asynccontextmanager
+async def ciclo(app: FastAPI):
+    BANCO[1] = {...}                 # abrir pool, carregar modelo, aquecer cache
+    print("  [lifespan] catalogo carregado")
+    yield
+    print("  [lifespan] conexoes fechadas")
+    BANCO.clear()
+
+app = FastAPI(title="Catalogo", version="1.0.0", lifespan=ciclo)
+```
+
+```text
+  [lifespan] catalogo carregado
+  ...
+  [lifespan] conexoes fechadas
+```
+
+Tudo que é caro e compartilhado mora aqui: pool de conexões (@sec-cap090), cliente HTTP reutilizado, modelo de aprendizado de máquina carregado uma vez. O antipadrão correspondente é abrir esses recursos no escopo do módulo — que roda na importação, antes de o servidor existir, e quebra de formas curiosas com `--reload` e com múltiplos trabalhadores.
+
+::: {.callout-note}
+## `@app.on_event("startup")` está obsoleto
+Os decoradores `on_event` foram substituídos pelo `lifespan`. Código antigo os usa; código novo não deveria.
+:::
+
+## OpenAPI de graça
+
+```python
+esq = c.get("/openapi.json").json()
+```
+
+```text
+  titulo   : Catalogo 1.0.0
+  caminhos : ['/produtos', '/produtos/{produto_id}']
+  metodos de /produtos/{produto_id}: ['delete', 'get']
+  esquemas : ['HTTPValidationError', 'Pagina', 'ProdutoEntrada', 'ProdutoSaida', 'ValidationError']
+  ProdutoEntrada.sku: {"type": "string", "pattern": "^[A-Z]{3}-\\d{4}$", "title": "Sku", "example": "LIV-0007"}
+  /docs    : 200 (Swagger UI)
+```
+
+O `pattern` do `Field` chegou ao esquema. Isso significa que um gerador de cliente (`openapi-generator`, `openapi-typescript`) produz código TypeScript com o mesmo contrato, e que um teste de contrato consegue comparar duas versões da API. Documentação derivada não é só conveniência: é o que permite automatizar o resto.
+
+Três ajustes que fazem diferença no `/docs`: `tags=["catalogo"]` agrupa as rotas, `summary`/`description` (ou a docstring da função) descrevem cada uma, e `json_schema_extra={"example": ...}` põe um exemplo no formulário interativo.
+
+## Testar é síncrono e rápido
+
+```python
+from fastapi.testclient import TestClient
+
+with TestClient(app) as c:
+    r = c.post("/produtos", json={"sku": "ELE-0042", "nome": "Mouse",
+                                  "preco": 129.9, "categoria": "eletronico"})
+    assert r.status_code == 201
+    assert r.json()["id"] == 2
+```
+
+O `TestClient` fala com a aplicação **em memória**, sem abrir socket nem subir servidor — os testes rodam em milissegundos e não dependem de porta livre. Dois detalhes que economizam horas:
+
+**Use `with`.** Fora do `with`, o `lifespan` **não roda**, e a aplicação começa sem o que a inicialização deveria ter preparado. É a causa número um de "o teste falha e a aplicação funciona".
+
+**Substitua dependências em vez de monkeypatch.** `app.dependency_overrides[sessao] = sessao_de_teste` troca a dependência só naquele teste, com o mecanismo oficial. É mais limpo que remendar o módulo (@sec-cap071) e não vaza para o teste seguinte se você limpar o dicionário no *fixture*.
+
+## 🐍 Jeito Pythônico
+
+**Deixe a assinatura falar.** Tipo de parâmetro, modelo do corpo, `response_model` e `status_code` são a especificação executável da rota. Validação escrita à mão dentro da view é sinal de que o modelo está incompleto.
+
+**Toda rota com `response_model`.** Sem ele, campo novo no modelo interno vaza pela API em silêncio — e nenhum teste reclama de um campo **a mais**.
+
+**Modelos separados: entrada, banco, saída.** Herdar um do outro (`ProdutoSaida(ProdutoEntrada)`) evita repetição sem juntar responsabilidades.
+
+**`def` por padrão; `async def` só com pilha assíncrona inteira.** Medido aqui: `async def` com chamada bloqueante foi 9× pior que as duas alternativas corretas.
+
+**`asyncio.to_thread` para o bloqueante inevitável** dentro de rota `async`.
+
+**Dependência com `yield` para recurso.** O `finally` roda mesmo quando a view estoura; abrir sessão na mão dentro da view vaza conexão sob falha.
+
+**Exceção de domínio mais `@app.exception_handler`**, em vez de `HTTPException` espalhada pela regra de negócio. A camada de negócio não deve saber que HTTP existe.
+
+**`lifespan` para recurso caro**, nunca no escopo do módulo — o módulo roda na importação, antes de o servidor existir.
+
+**`BackgroundTasks` não é fila.** Se a tarefa não pode ser perdida, ela precisa de fila com repetição.
+
+**`TestClient` dentro de `with`**, e `dependency_overrides` em vez de remendo de módulo.
+
+**Cuidado com o campo `input` do erro 422** em rota que recebe segredo: ele ecoa o que o cliente mandou.
+
+## 🧪 Laboratório
+
+**Passo 1 — ambiente.**
+
+```bash
+mkdir lab-fastapi && cd lab-fastapi
+python3.13 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install fastapi uvicorn httpx
+python -c "import fastapi; print(fastapi.__version__)"
+```
+
+**Passo 2 — a primeira rota.** Escreva `GET /produtos/{produto_id}` com `produto_id: int`, rode `uvicorn app:app --reload` e visite `/docs`. Peça `/produtos/1`, `/produtos/abc` e `/produtos/0`. Anote os três status:
+
+```text
+  GET /produtos/abc                          422  {"detail":[{"type":"int_parsing","loc":["path","produto_id"],...
+```
+
+**Passo 3 — corpo validado.** Acrescente `POST /produtos` com `ProdutoEntrada`. Mande um corpo com **três** erros de uma vez e confirme que a resposta traz os três, cada um com `loc` começando em `"body"`.
+
+**Passo 4 — o vazamento.** Crie `UsuarioBanco` (com `senha_hash`) e uma rota que o devolve **sem** `response_model`. Confirme que a senha sai na resposta. Depois acrescente `response_model=UsuarioPublico` e confirme que sumiu:
+
+```text
+  sem response_model: {'id': 7, 'email': 'ana@exemplo.com', 'senha_hash': 'argon2id$v=19$...', ...}
+  com response_model: {'id': 7, 'email': 'ana@exemplo.com'}
+```
+
+**Passo 5 — dependência.** Escreva `chave_valida` lendo `X-API-Key` e proteja o `DELETE`. Teste sem cabeçalho, com valor errado e com o certo. Depois confira que o cabeçalho apareceu no `/docs`.
+
+**Passo 6 — dependência com `yield`.** Escreva uma dependência que registra `"abriu"` antes do `yield` e `"fechou"` no `finally`. Chame uma rota que funciona e uma que levanta `RuntimeError`, e confirme:
+
+```text
+  com erro: ['abriu sessao', 'view vai estourar', 'fechou sessao'] -> status 500
+```
+
+Depois remova o `try/finally` (deixando só o `yield`) e explique o que muda.
+
+**Passo 7 — dependência aninhada e cache.** Faça `B` depender de `A` e `C` depender de `A`, e uma rota depender de `B` e `C`. Ponha um `print` em `A` e conte quantas vezes ele aparece num pedido. Depois use `Depends(A, use_cache=False)` e conte de novo.
+
+**Passo 8 — erro de domínio.** Crie `SemEstoque` e um `@app.exception_handler`. Confirme o `409` e o corpo próprio. Repare que a função de negócio não importa nada do FastAPI.
+
+**Passo 9 — a medição que decide.** Escreva as três rotas (`async` com `await`, `def` com `sleep`, `async` com `sleep`) e dispare dez pedidos concorrentes em cada uma:
+
+```text
+  /async-certo   :  0.34 s
+  /def-normal    :  0.34 s
+  /async-errado  :  3.04 s
+```
+
+Depois conserte a terceira com `await asyncio.to_thread(time.sleep, 0.3)` e meça de novo.
+
+**Passo 10 — `lifespan` e testes.** Ponha um `print` na inicialização e outro no desligamento. Rode os testes **com** `with TestClient(app)` e **sem**, e compare a saída — o segundo caso não imprime nada. Depois troque uma dependência com `app.dependency_overrides` e confirme que a rota passa a usar a versão de teste.
+
+**Passo 11 — o contrato.** Baixe `/openapi.json`, confirme que o `pattern` do `sku` está lá e que os quatro esquemas foram gerados. Renomeie um campo do modelo e recarregue `/docs` — a documentação mudou sozinha.
+
+## Resumo
+
+- FastAPI **deriva o comportamento da assinatura**: parâmetro de caminho, de consulta, corpo, dependências, resposta e documentação saem dos tipos que você já escreveria.
+- Erro de validação devolve **`422` com `loc` completo** (`["query","limite"]`, `["body","sku"]`, `["path","produto_id"]`) e **todos** os problemas de uma vez.
+- **`response_model` filtra a saída**, não apenas a descreve: a mesma função devolveu `senha_hash` sem ele e não devolveu com ele. Sem `response_model`, campo novo vaza em silêncio.
+- **`Depends`** injeta pré-requisitos analisados (entram no OpenAPI), compõe em grafo e é cacheado por pedido. Com **`yield`**, o `finally` fecha o recurso mesmo quando a view estoura.
+- **Exceção de domínio mais `@app.exception_handler`** mantém a regra de negócio ignorante de HTTP.
+- **`BackgroundTasks` roda depois da resposta** — bom para e-mail e métrica, ruim para o que não pode ser perdido.
+- **`def` vai para o pool de threads; `async def` fica no laço de eventos.** Medido: 0,34 s, 0,34 s e **3,04 s** quando a rota `async` chama código bloqueante. Na dúvida, `def`.
+- **`lifespan`** é onde abrem e fecham os recursos caros; `on_event` está obsoleto e o escopo do módulo é armadilha.
+- O **esquema OpenAPI** sai pronto em `/openapi.json`, com as restrições do `Field` incluídas, e alimenta `/docs`, `/redoc` e geradores de cliente.
+- **`TestClient` dentro de `with`** (senão o `lifespan` não roda) e `dependency_overrides` no lugar de remendo — testes em memória, em milissegundos.
