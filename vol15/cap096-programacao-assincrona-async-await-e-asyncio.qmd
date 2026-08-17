@@ -1,3 +1,385 @@
 # Programação assíncrona: async, await e asyncio {#sec-cap096}
 
-*(em elaboracao)*
+Um serviço precisa consultar 500 endereços. Cada consulta leva 50 ms de espera de rede. O programa foi escrito com `async def` e `await` do começo ao fim, tudo certo pela documentação — e leva 25 segundos.
+
+```python
+async def sequencial():
+    return [await espera(i) for i in range(N)]
+```
+
+```text
+== 500 esperas de 0.05s cada
+  await em serie                      25.15 s  (500 resultados)
+  asyncio.gather                       0.05 s  (500 resultados)
+```
+
+**Quinhentas vezes mais lento** que a versão concorrente. O código é assíncrono e roda em série, porque `await` não significa "faça isto em paralelo" — significa "suspenda aqui até isto ficar pronto". Se você suspende esperando a primeira consulta, a segunda nem começou.
+
+Esse é o mal-entendido central do `asyncio`, e desfazê-lo é o assunto deste capítulo.
+
+## Corrotina não é tarefa
+
+Chamar uma função `async def` **não executa nada**:
+
+```python
+>>> async def espera(i):
+...     await asyncio.sleep(0.05)
+...     return i
+>>> espera(1)
+<coroutine object espera at 0x7f...>
+```
+
+O que volta é um objeto corrotina — uma computação descrita e não iniciada, como um gerador (@sec-cap050). Ele só anda quando alguém o entrega ao laço de eventos. Há três formas, e a diferença entre elas é o capítulo inteiro:
+
+- **`await corotina`** — executa **agora**, e suspende quem chamou até terminar. Uma de cada vez.
+- **`asyncio.create_task(corotina)`** — agenda no laço e devolve na hora. A tarefa progride sozinha.
+- **`asyncio.gather(...)` / `TaskGroup`** — agenda várias e espera todas.
+
+Concorrência aparece quando as tarefas são **agendadas antes** de qualquer espera. Por isso `gather` e `TaskGroup` custam 0,05 s: as 500 esperas começaram juntas e se sobrepuseram.
+
+::: {.callout-warning}
+## O `await` dentro de um laço `for` é o defeito mais comum do `asyncio`
+`for x in itens: await processa(x)` é código sequencial com sintaxe assíncrona. Sempre que o laço não depender do resultado anterior, ele deveria ser um `TaskGroup` ou um `gather`.
+:::
+
+## O laço de eventos
+
+::: {#fig-laco-eventos}
+```{.tikz}
+%%| filename: laco-eventos
+%%| alt: O ciclo do laco de eventos entre fila de prontas, execucao e seletor do sistema
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=4.4cm,
+             minimum height=1.5cm,font=\scriptsize,inner sep=6pt}
+]
+  \path (-0.3,-5.4) rectangle (14.4,3.4);
+
+  \node[font=\scriptsize\bfseries,align=center,text width=13.6cm] at (7.1,3.1)
+    {o laco de eventos: tudo isto acontece numa unica thread};
+
+  \node[bx,fill=manualgreen!16] at (2.7,1.5)
+    {\textbf{1. fila de prontas}\\
+     tarefas que podem rodar agora, na ordem em que ficaram prontas};
+  \node[bx,fill=manualblue!16] at (11.5,1.5)
+    {\textbf{2. executa uma tarefa}\\
+     roda o corpo da corotina ate encontrar o proximo \texttt{await}};
+  \node[bx,fill=manualyellow!22] at (11.5,-1.4)
+    {\textbf{3. suspende e registra}\\
+     o \texttt{await} de I/O entrega o descritor ao seletor do sistema
+     (\texttt{epoll}) e devolve o controle};
+  \node[bx,fill=manualred!14] at (2.7,-1.4)
+    {\textbf{4. o seletor avisa}\\
+     quando o socket tem dados, a tarefa volta para a fila de prontas};
+
+  \draw[->,>=stealth,thick] (5.0,1.5) -- (9.2,1.5)
+    node[midway,above,font=\tiny]{pega a proxima};
+  \draw[->,>=stealth,thick] (11.5,0.72) -- (11.5,-0.62)
+    node[midway,right,font=\tiny]{encontrou \texttt{await}};
+  \draw[->,>=stealth,thick] (9.2,-1.4) -- (5.0,-1.4)
+    node[midway,below,font=\tiny]{espera no seletor};
+  \draw[->,>=stealth,thick] (2.7,-0.62) -- (2.7,0.72)
+    node[midway,left,font=\tiny]{pronta de novo};
+
+  \node[draw,rounded corners,fill=manualgray!16,align=left,text width=13.4cm,
+        font=\scriptsize,inner sep=6pt] at (7.1,-4.1)
+    {\textbf{a consequencia que decide tudo:} o passo 2 roda ate o proximo
+     \texttt{await} --- e so devolve o controle ali. Qualquer coisa que demore sem
+     ceder (um \texttt{time.sleep}, um calculo longo, uma consulta com driver
+     sincrono) congela os passos 1, 3 e 4 junto, para todas as tarefas.};
+\end{tikzpicture}
+```
+O ciclo do laço de eventos. Nada aqui usa mais de uma thread.
+:::
+
+O modelo é **multitarefa cooperativa**: cada tarefa roda até ceder voluntariamente, e cede exatamente nos `await`. Isso tem uma vantagem enorme sobre threads — entre dois `await` o seu código é atômico, o que elimina a classe inteira de corridas do @sec-cap094 — e uma desvantagem simétrica, que é a próxima seção.
+
+## `TaskGroup` é o jeito atual
+
+Desde o Python 3.11 existe `asyncio.TaskGroup`, e ele é preferível a `gather` em quase todo caso novo:
+
+```python
+async def com_taskgroup():
+    async with asyncio.TaskGroup() as tg:
+        tarefas = [tg.create_task(espera(i)) for i in range(N)]
+    return [t.result() for t in tarefas]     # aqui todas ja terminaram
+```
+
+```text
+  asyncio.gather                       0.05 s  (500 resultados)
+  asyncio.TaskGroup                    0.05 s  (500 resultados)
+```
+
+Mesmo desempenho, semântica melhor. A diferença aparece quando algo falha:
+
+```text
+== uma tarefa falha: gather x TaskGroup
+  gather(return_exceptions=True) -> [1, 'ValueError', 2]
+    as outras rodaram ate o fim (0.05 s)
+  TaskGroup -> ExceptionGroup com 1 erro(s): ValueError('quebrei')
+    as irmas foram canceladas automaticamente
+```
+
+- **`gather`** sem `return_exceptions=True` propaga o primeiro erro mas **deixa as outras tarefas rodando**, agora sem ninguém esperando por elas. É a receita para tarefa órfã.
+- **`TaskGroup`** cancela as irmãs, espera todas encerrarem e levanta um `ExceptionGroup` com tudo que deu errado. O bloco `async with` só termina quando o grupo inteiro terminou — nada escapa.
+
+Trata-se com `except*`:
+
+```python
+try:
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(ok(1))
+        tg.create_task(falha())
+except* ValueError as eg:
+    print(f"{len(eg.exceptions)} tarefa(s) falharam: {eg.exceptions[0]!r}")
+```
+
+Use `gather(..., return_exceptions=True)` quando quiser mesmo o resultado parcial de todas — um verificador de 500 URLs que precisa do relatório completo, e não da primeira falha.
+
+::: {.callout-important}
+## Guarde a referência de toda tarefa que criar
+`asyncio.create_task(...)` sem guardar o retorno é um erro real: o laço mantém apenas uma referência fraca, e o coletor de lixo pode destruir a tarefa no meio. Guarde num conjunto e remova no `add_done_callback` — ou, melhor, use `TaskGroup`, que faz isso por você.
+:::
+
+## Uma chamada bloqueante congela tudo
+
+Este é o modo de falha característico do `asyncio`, e ele é fácil de medir. Um "batimento" a cada 10 ms, e no meio uma chamada que demora 500 ms:
+
+```python
+async def batimento(marcas, parar):
+    while not parar.is_set():
+        marcas.append(time.perf_counter())
+        await asyncio.sleep(0.01)
+
+def bloqueia():
+    time.sleep(0.5)            # ERRADO dentro de corotina
+```
+
+```text
+== uma chamada bloqueante dentro do laco de eventos
+  time.sleep(0.5) direto       0.50 s | batimentos:  10 | maior intervalo:  510.3 ms
+  await to_thread(time.sleep)  0.50 s | batimentos:  59 | maior intervalo:   11.9 ms
+```
+
+**Meio segundo sem um único batimento.** As duas versões levaram os mesmos 0,50 s, mas na primeira o laço inteiro parou: nenhuma outra tarefa progrediu, nenhuma conexão foi aceita, nenhum tempo limite foi verificado. Num servidor, isso é meio segundo de indisponibilidade para **todos** os clientes por causa de um cliente.
+
+::: {#fig-bloqueio}
+```{.tikz}
+%%| filename: bloqueio
+%%| alt: Batimentos do laco de eventos com e sem uma chamada bloqueante
+\begin{tikzpicture}[
+  lb/.style={font=\scriptsize,anchor=east},
+  ti/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.0cm}
+]
+  \path (-2.6,-4.4) rectangle (12.4,2.9);
+
+  \node[ti] at (-2.5,2.6) {batimento a cada 10 ms; a barra e a chamada de 500 ms};
+
+  % ------- lane A: bloqueante -------
+  \node[lb] at (-0.15,1.3) {\texttt{time.sleep(0.5)}};
+  \draw[->,>=stealth,color=manualgray] (0.0,0.85) -- (11.4,0.85);
+  \foreach \idx in {0,1,2,3,4}
+    \draw[thick,color=manualblue] ({\idx*0.183},1.05) -- ({\idx*0.183},1.55);
+  \draw[fill=manualred!25,draw=manualred] (0.73,1.05) rectangle (10.0,1.55);
+  \node[font=\tiny,color=manualred] at (5.4,1.3)
+    {510 ms sem um unico batimento --- o laco esta congelado};
+  \foreach \idx in {0,1,2,3,4}
+    \draw[thick,color=manualblue] ({10.1+\idx*0.183},1.05) -- ({10.1+\idx*0.183},1.55);
+
+  % ------- lane B: to_thread -------
+  \node[lb] at (-0.15,-0.9) {\texttt{await to\_thread(...)}};
+  \draw[->,>=stealth,color=manualgray] (0.0,-1.35) -- (11.4,-1.35);
+  \foreach \idx in {0,1,...,59}
+    \draw[thick,color=manualgreen] ({\idx*0.183},-1.15) -- ({\idx*0.183},-0.65);
+  \node[font=\tiny,color=manualgreen] at (5.7,-0.25)
+    {59 batimentos; maior intervalo 11,9 ms --- o laco continua atendendo};
+
+  \node[nt] at (-2.5,-3.2)
+    {A chamada leva 0,50 s nos dois casos. A diferenca nao esta na duracao dela,
+     e sim em quem mais consegue trabalhar enquanto ela acontece. Num servidor, a
+     primeira linha e meio segundo de indisponibilidade para todos os clientes
+     por causa de um.};
+\end{tikzpicture}
+```
+A mesma espera de 500 ms: bloqueando o laço, e cedida a uma thread.
+:::
+
+A correção é tirar a chamada bloqueante do laço:
+
+```python
+resultado = await asyncio.to_thread(funcao_bloqueante, arg)   # 3.9+
+```
+
+`asyncio.to_thread` roda a função num `ThreadPoolExecutor` e devolve o controle ao laço enquanto isso. Para um executor próprio (com mais trabalhadores, ou de processos, para cálculo pesado):
+
+```python
+laco = asyncio.get_running_loop()
+with ProcessPoolExecutor() as pool:
+    r = await laco.run_in_executor(pool, calculo_pesado, arg)
+```
+
+Onde isso costuma morder:
+
+- **Driver de banco síncrono** (`psycopg2`, `pymysql`, `sqlite3`) dentro de corrotina. Use o equivalente assíncrono (`asyncpg`, `aiosqlite`) ou `to_thread`.
+- **`requests`** em vez de `httpx.AsyncClient` ou `aiohttp` (@sec-cap078).
+- **Leitura de arquivo grande**, `json.loads` de 100 MB, `hashlib` sobre um arquivo inteiro.
+- **Cálculo longo** — mesmo sem I/O, um laço de 2 segundos congela o servidor por 2 segundos.
+
+Uma boa prática de diagnóstico: ligue `laco.set_debug(True)`, que registra automaticamente toda execução de retorno de chamada que passar de 100 ms.
+
+## Limitando a concorrência
+
+Disparar 10 mil tarefas de uma vez não é concorrência, é uma negação de serviço contra o outro lado — e contra os seus próprios descritores de arquivo. `asyncio.Semaphore` limita quantas correm juntas:
+
+```python
+sem = asyncio.Semaphore(10)
+
+async def tarefa(sem):
+    async with sem:
+        await faz_a_consulta()
+```
+
+```text
+== limitando a concorrencia com asyncio.Semaphore
+  Semaphore(10) | pico de tarefas simultaneas:  10 | 0.53 s
+  Semaphore(50) | pico de tarefas simultaneas:  50 | 0.11 s
+```
+
+O pico bateu exatamente no limite nos dois casos, e o tempo caiu de 0,53 s para 0,11 s ao quintuplicar o limite. O número certo vem do outro lado da conexão — quantas conexões simultâneas o servidor aceita, qual o limite de taxa da API —, não do seu hardware.
+
+## Cancelamento e tempo limite
+
+Cancelar uma tarefa **levanta `CancelledError` dentro dela**, no ponto do `await` em que estiver suspensa:
+
+```python
+async def longa():
+    try:
+        await asyncio.sleep(10)
+    except asyncio.CancelledError:
+        ...                      # limpeza
+        raise                    # SEMPRE relance
+```
+
+```text
+== cancelamento e timeout
+  a tarefa foi cancelada e propagou CancelledError
+  finally rodou no cancelamento
+  asyncio.timeout(0.2) levantou TimeoutError como esperado
+```
+
+Duas regras que evitam bugs difíceis:
+
+**Relance sempre o `CancelledError`.** Engoli-lo transforma a tarefa em algo que não pode ser cancelado, e o `TaskGroup` ou o `timeout` que a cancelou fica esperando para sempre. Capture apenas para limpar.
+
+**Não use `except Exception` esperando pegar cancelamento** — desde o 3.8, `CancelledError` herda de `BaseException` justamente para não ser engolida por um `except Exception` genérico.
+
+Para tempo limite, o idiomático desde o 3.11 é o gerenciador de contexto:
+
+```python
+async with asyncio.timeout(0.2):        # 3.11+
+    await operacao_lenta()
+```
+
+Ele cancela o que estiver dentro e levanta `TimeoutError`. Diferente de `asyncio.wait_for`, funciona sobre um bloco inteiro em vez de uma única espera.
+
+## O custo de uma unidade de concorrência
+
+```text
+== memoria por unidade de concorrencia (500 unidades)
+  asyncio.Task        1209 bytes por unidade
+  threading.Thread    2861 bytes por unidade (so o lado Python)
+```
+
+Esses números medem apenas os objetos Python. A diferença real é maior: cada thread também recebe uma **pilha do sistema operacional** — 8 MiB de espaço de endereçamento reservado por padrão no Linux, com algumas dezenas de kilobytes realmente ocupados — e entra no escalonamento do núcleo. Uma tarefa do `asyncio` é um objeto no heap e uma entrada numa fila.
+
+Daí a regra prática: **dezenas ou centenas de esperas simultâneas, threads servem; milhares, `asyncio`.** Dez mil threads não é uma opção; dez mil tarefas é rotina.
+
+## Quando não usar `asyncio`
+
+O `asyncio` não é o modelo superior, é o modelo certo para um tipo de problema. Não use quando:
+
+- **O trabalho é CPU.** Corrotina não cria paralelismo nenhum; o GIL continua lá e o laço fica congelado. Isso é `ProcessPoolExecutor` (@sec-cap095).
+- **As bibliotecas de que você precisa são síncronas.** Adotar `asyncio` e envolver tudo em `to_thread` é a complexidade do assíncrono com o desempenho das threads.
+- **A concorrência é baixa.** Para 20 downloads, `ThreadPoolExecutor` resolve em três linhas, sem cor de função.
+- **O código é um script simples.** `asyncio.run` no topo, `async` propagando por toda a pilha de chamadas ("função colorida") e depuração mais difícil são um preço real.
+
+## 🐍 Jeito Pythônico
+
+**`await` numa lista é código sequencial.** Foi 470x mais lento aqui. Agende primeiro (`TaskGroup`/`gather`), espere depois.
+
+**`asyncio.TaskGroup` em código novo** (3.11+), não `gather`: ele cancela as irmãs, espera todas e agrupa os erros num `ExceptionGroup` tratado com `except*`. `gather(return_exceptions=True)` só quando você quiser mesmo o resultado parcial de todas.
+
+**Guarde a referência de toda tarefa criada com `create_task`** — o laço só tem referência fraca, e a tarefa pode ser coletada no meio.
+
+**Nada de bloqueante dentro de corrotina.** Medido: 510 ms com o laço congelado contra 11,9 ms. Use `asyncio.to_thread` para I/O síncrono e `run_in_executor` com pool de processos para cálculo.
+
+**`asyncio.Semaphore` para limitar concorrência**, com o número vindo do serviço do outro lado, não do seu hardware.
+
+**Relance sempre o `CancelledError`.** Engoli-lo cria uma tarefa que não pode ser cancelada e um `TaskGroup` que nunca termina.
+
+**`async with asyncio.timeout(...)`** (3.11+) em vez de `wait_for`, porque cobre um bloco inteiro.
+
+**`asyncio.run()` uma vez, no ponto de entrada.** Não crie laços à mão, não use `get_event_loop` em código novo.
+
+**Ligue `set_debug(True)` em desenvolvimento** — ele denuncia sozinho o retorno de chamada lento que congelou o seu laço.
+
+**Milhares de esperas: `asyncio`. Dezenas: threads.** 1209 bytes por tarefa contra uma pilha de sistema por thread.
+
+## 🧪 Laboratório
+
+**Passo 1 — a armadilha.** Escreva `espera(i)` com `await asyncio.sleep(0.05)` e compare as três formas para 500 chamadas:
+
+```text
+  await em serie                      25.15 s
+  asyncio.gather                       0.05 s
+  asyncio.TaskGroup                    0.05 s
+```
+
+Explique em uma frase por que a primeira leva exatamente `500 × 0,05` s.
+
+**Passo 2 — corrotina não é tarefa.** No REPL, chame `espera(1)` sem `await` e imprima o objeto. Depois rode com `asyncio.run` e observe o `RuntimeWarning` de corrotina nunca aguardada.
+
+**Passo 3 — o batimento.** Monte a tarefa de batimento a cada 10 ms e meça o maior intervalo com `time.sleep(0.5)` no meio, depois com `asyncio.to_thread(time.sleep, 0.5)`:
+
+```text
+  time.sleep(0.5) direto       | maior intervalo:  510.3 ms
+  await to_thread(time.sleep)  | maior intervalo:   11.9 ms
+```
+
+::: {.callout-warning}
+## Deixe o batimento registrar o outro lado do bloqueio
+Se você mandar a tarefa de batimento parar imediatamente após a chamada bloqueante, o laço sai antes de registrar a marca posterior — e o intervalo de 510 ms **não aparece**, dando a falsa impressão de que nada travou. Espere mais alguns batimentos antes de sinalizar a parada.
+:::
+
+**Passo 4 — cálculo também congela.** Troque `time.sleep(0.5)` por um laço de soma que leve o mesmo tempo. Confirme que o efeito é idêntico, e conclua que o problema não é "I/O bloqueante", é "não ceder o controle".
+
+**Passo 5 — `TaskGroup` contra `gather`.** Com três tarefas, uma das quais falha, compare os dois. Confirme que o `gather` sem `return_exceptions` deixa as irmãs rodando e que o `TaskGroup` as cancela. Trate o `ExceptionGroup` com `except*`.
+
+**Passo 6 — a tarefa que some.** Crie 200 tarefas com `create_task` **sem** guardar as referências, force `gc.collect()` no meio e conte quantas terminaram. Repita guardando num `set`.
+
+**Passo 7 — `Semaphore`.** Com um contador de tarefas ativas, confirme que o pico bate no limite:
+
+```text
+  Semaphore(10) | pico de tarefas simultaneas:  10 | 0.53 s
+  Semaphore(50) | pico de tarefas simultaneas:  50 | 0.11 s
+```
+
+**Passo 8 — cancelamento.** Escreva uma tarefa com `finally` que registra a limpeza, cancele-a e confirme que o `finally` rodou. Depois **engula** o `CancelledError` (capture sem relançar) dentro de um `TaskGroup` e observe o programa não terminar.
+
+**Passo 9 — tempo limite.** Envolva uma operação de 5 s em `async with asyncio.timeout(0.2)` e confirme o `TimeoutError`. Depois coloque duas operações no mesmo bloco e confirme que o limite vale para o conjunto.
+
+**Passo 10 — o custo.** Meça com `tracemalloc` a memória de 500 tarefas dormindo e de 500 threads dormindo. Depois tente 10 mil de cada e anote o que acontece com as threads.
+
+**Passo 11 — servidor real.** Suba um `httpx.AsyncClient` consultando 200 URLs com `TaskGroup` e `Semaphore(20)`. Acrescente uma chamada `requests.get` (síncrona) no meio de uma das corrotinas e meça o efeito no tempo total. Depois troque por `to_thread` e meça de novo.
+
+## Resumo
+
+- **Corrotina não é tarefa.** `async def` devolve um objeto que não fez nada; concorrência só existe quando as tarefas são **agendadas antes** da espera. `await` numa lista foi **470x** mais lento que `gather` para as mesmas 500 esperas.
+- **O laço de eventos é multitarefa cooperativa numa única thread.** Cada tarefa roda até o próximo `await`. Entre dois `await` o código é atômico — o que elimina as corridas do @sec-cap094.
+- **Qualquer coisa que não ceda o controle congela tudo**: `time.sleep(0.5)` dentro de corrotina produziu **510,3 ms** sem um batimento, contra **11,9 ms** com `asyncio.to_thread`. Vale igualmente para cálculo longo e para driver síncrono.
+- **`TaskGroup` (3.11+) em vez de `gather`**: cancela as irmãs quando uma falha, espera todas encerrarem e levanta `ExceptionGroup`, tratado com `except*`. `gather(return_exceptions=True)` apenas quando o resultado parcial de todas for o objetivo.
+- **Guarde a referência de toda tarefa criada** — o laço mantém só referência fraca.
+- **`Semaphore` limita a concorrência**; o pico bateu exatamente no limite (10 e 50), e o número certo vem do serviço do outro lado.
+- **`CancelledError` herda de `BaseException` e sempre deve ser relançado**; `async with asyncio.timeout(...)` cobre um bloco inteiro.
+- **Uma tarefa custa ~1,2 kB; uma thread custa mais, e ainda uma pilha do sistema.** Milhares de esperas simultâneas pedem `asyncio`; dezenas resolvem-se com threads e bem menos complexidade.
+- **`asyncio` não serve para CPU** — nesse caso o modelo é processo, não corrotina.
