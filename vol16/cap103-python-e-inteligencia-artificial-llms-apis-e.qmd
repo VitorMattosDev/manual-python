@@ -1,3 +1,590 @@
 # Python e inteligência artificial: LLMs, APIs e agentes {#sec-cap103}
 
-*(em elaboracao)*
+Chegou o pedido: "coloca uma IA para resumir os chamados de suporte". Em duas horas você tem um protótipo que funciona — trinta linhas, uma chave de API, um `print`. Em duas semanas ele está em produção, e aí começam as perguntas que o protótipo não respondeu: o que acontece quando a API devolve 429; por que a conta do mês veio dez vezes maior que a estimativa; como testar isso sem gastar; e o que fazer quando o modelo devolve um JSON quase válido.
+
+Este capítulo trata a integração com um modelo de linguagem como o que ela é: **uma dependência de rede, cara, lenta e não determinística** — e mostra o que muda no seu código Python por causa dessas quatro propriedades. Os exemplos usam o SDK oficial da Anthropic (`anthropic` 0.122.0) e Claude, mas a estrutura vale para qualquer API de LLM: todas são um `POST` com JSON.
+
+::: {.callout-important}
+## De onde vêm as saídas deste capítulo
+Todas as saídas mostradas aqui são **reais e reproduzíveis por você, sem chave e sem custo**. Elas foram produzidas contra um pequeno servidor local que fala o protocolo da Messages API — o `servidor_falso.py`, montado na primeira seção. É de propósito: as partes deste capítulo que valem estudo (o corpo da requisição, o laço de ferramentas, o que invalida o cache, como o SDK repete uma falha) são todas do **seu lado da conexão**, e são exatamente as que você precisa conseguir testar em integração contínua. Onde um número só existe com a API de verdade — preços, contagem oficial de tokens, qualidade da resposta — o texto diz isso explicitamente.
+:::
+
+## Um LLM é um `POST` sem estado
+
+Antes de qualquer abstração, vale ver o que o SDK realmente coloca no fio. Um servidor de estudo com trinta linhas de `http.server` resolve:
+
+```python
+# servidor_falso.py -- um espelho, nao um modelo
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        corpo = self.rfile.read(int(self.headers["Content-Length"]))
+        RECEBIDO.append({"caminho": self.path, "cabecalhos": dict(self.headers),
+                         "corpo": json.loads(corpo)})
+        resposta = ROTEIRO.pop(0) if ROTEIRO else texto("ok")
+        ...
+```
+
+E o cliente apontado para ele:
+
+```python
+import anthropic
+
+cliente = anthropic.Anthropic(api_key="chave-de-mentira", base_url=url)
+
+resposta = cliente.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    system="Responda em portugues, em uma frase.",
+    messages=[{"role": "user", "content": "Qual e a capital do Brasil?"}],
+)
+```
+
+```text
+== o corpo que saiu daqui
+{
+  "max_tokens": 1024,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Qual e a capital do Brasil?"
+    }
+  ],
+  "model": "claude-opus-5",
+  "system": "Responda em portugues, em uma frase."
+}
+```
+
+É isso. Um objeto JSON com quatro campos. **Não há sessão, não há conexão persistente, não há memória** — e essa é a propriedade mais importante da API inteira, com consequências que vamos ver em custo, em latência e em desenho.
+
+Os cabeçalhos que o SDK monta sozinho:
+
+```text
+  Content-Type: application/json
+  User-Agent: Anthropic/Python 0.122.0
+  X-Api-Key: chave-de-mentira
+  anthropic-version: 2023-06-01
+  x-stainless-timeout: 600
+  x-stainless-retry-count: 0
+```
+
+`anthropic-version` é o que garante que a forma da resposta não muda debaixo de você. E `x-stainless-retry-count` já entrega uma informação útil: **o SDK repete requisições por conta própria** — voltaremos a isso.
+
+Do lado de cá, a resposta é um objeto tipado:
+
+```text
+== a resposta, do lado de ca
+  tipo do objeto : Message
+  stop_reason    : end_turn
+  blocos         : ['text']
+  texto          : Brasilia.
+  request id     : req_falso_0001
+  uso            : entrada=42 saida=7
+```
+
+Três campos merecem atenção desde já:
+
+**`content` é uma lista de blocos, não uma string.** Pode haver texto, raciocínio, chamada de ferramenta e resultado de ferramenta na mesma resposta. Escrever `resposta.content[0].text` funciona no protótipo e quebra no dia em que o modelo pensar antes de responder. **Sempre teste `.type` antes de acessar `.text`.**
+
+**`stop_reason` diz por que parou** — `end_turn` (terminou), `max_tokens` (você cortou), `tool_use` (quer chamar uma ferramenta), `refusal` (recusou). Ignorá-lo é o bug mais comum de integração: uma resposta truncada por `max_tokens` chega como uma resposta normal, só que pela metade.
+
+**`usage` é a sua conta.** É o único número honesto sobre custo, e ele vem em toda resposta.
+
+### O cliente e a credencial
+
+```bash
+pip install anthropic
+```
+
+```python
+cliente = anthropic.Anthropic()      # resolve a credencial do ambiente
+```
+
+O construtor sem argumentos lê `ANTHROPIC_API_KEY` do ambiente. **Nunca escreva a chave no código** — nem "só para testar", porque é assim que ela vai parar no histórico do git, de onde não sai (@sec-cap102). Chave de LLM em repositório público é varrida por robôs em minutos, e a fatura é sua.
+
+## Modelos, preço e a decisão que ele impõe
+
+A escolha do modelo é uma decisão de arquitetura, porque a diferença de preço entre o topo e a base da família é de cinco vezes. Os valores em dólares por milhão de tokens, na API da Anthropic, estão na @tbl-precos-llm:
+
+| Modelo | Identificador | Entrada | Saída |
+|---|---|---|---|
+| Claude Opus 5 | `claude-opus-5` | 5,00 | 25,00 |
+| Claude Sonnet 5 | `claude-sonnet-5` | 3,00 | 15,00 |
+| Claude Haiku 4.5 | `claude-haiku-4-5` | 1,00 | 5,00 |
+
+: Preços por milhão de tokens (agosto de 2026). {#tbl-precos-llm}
+
+::: {.callout-warning}
+## Esta tabela envelhece
+Modelos são lançados, aposentados e reprecificados várias vezes por ano — nenhuma tabela impressa sobrevive. Trate a de cima como ordem de grandeza e confirme na documentação oficial antes de dimensionar qualquer coisa. No código, o identificador do modelo é **configuração**, não literal espalhado por vinte arquivos: uma constante, ou uma variável de ambiente (@sec-cap101).
+:::
+
+Duas assimetrias mudam o desenho:
+
+**A saída custa cinco vezes a entrada.** Pedir concisão não é economia de estilo, é economia de verdade. Um `max_tokens` apertado e uma instrução de formato curto valem mais do que qualquer otimização de prompt.
+
+**O modelo mais caro nem sempre é o certo.** Classificar sentimento, extrair um campo de um texto, decidir uma rota — trabalho simples e de alto volume roda bem num modelo pequeno por um quinto do preço. Reserve o modelo grande para o que exige raciocínio.
+
+## Streaming: a resposta chega aos pedaços
+
+Uma resposta longa pode levar dezenas de segundos. Sem streaming, a conexão fica ociosa esse tempo todo — e conexão ociosa é conexão que intermediários derrubam.
+
+```python
+with cliente.messages.stream(
+    model="claude-opus-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Qual e a capital do Brasil?"}],
+) as fluxo:
+    for pedaco in fluxo.text_stream:
+        print(f"  recebi: {pedaco!r}")
+    final = fluxo.get_final_message()
+```
+
+```text
+== o texto chegando aos pedacos
+  recebi: 'Brasi'
+  recebi: 'lia e a'
+  recebi: ' capital'
+  recebi: ' do Brasil.'
+
+  o SDK remontou : 'Brasilia e a capital do Brasil.'
+  stop_reason    : end_turn
+  saida (tokens) : 9
+```
+
+Repare que o SDK faz as duas coisas: entrega os pedaços conforme chegam **e** remonta a mensagem completa no fim. Você não precisa escolher — `get_final_message()` dá o objeto `Message` inteiro, com `stop_reason` e `usage`, mesmo tendo consumido o fluxo.
+
+O protocolo por baixo é *server-sent events*, com eventos nomeados: `message_start`, `content_block_start`, uma sequência de `content_block_delta`, `content_block_stop`, `message_delta` (que traz o `stop_reason` e a contagem final) e `message_stop`. Você raramente precisa vê-los — mas precisa saber que existem quando algo chega pela metade.
+
+**A regra prática:** use streaming sempre que a resposta puder ser longa, mesmo que a interface não mostre o texto aparecendo. É proteção contra tempo limite, não enfeite.
+
+## A conta que a ausência de estado produz
+
+::: {#fig-laco-agente}
+```{.tikz}
+%%| filename: laco-agente
+%%| alt: O laco de uso de ferramentas, o historico que cresce e as tres protecoes
+\begin{tikzpicture}[
+  nd/.style={draw,rounded corners,align=center,font=\tiny,
+             minimum height=0.95cm,text width=2.9cm,inner sep=4pt},
+  hd/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.3,-4.7) rectangle (14.4,3.6);
+
+  \node[hd] at (-0.2,3.3) {o laco --- e o historico que cresce a cada volta};
+
+  \node[nd,fill=manualgray!14] at (1.9,2.0) {pedido do usuario\\ \texttt{messages = [1]}};
+  \node[nd,fill=manualblue!14] at (5.6,2.0) {\texttt{messages.create()}\\ envia \emph{tudo}};
+  \node[nd,fill=manualyellow!22] at (9.3,2.0) {\texttt{stop\_reason}\\ \texttt{= tool\_use}?};
+  \node[nd,fill=manualgreen!16] at (13.0,2.0) {\texttt{end\_turn}\\ devolve o texto};
+
+  \draw[->,>=stealth] (3.4,2.0) -- (4.1,2.0);
+  \draw[->,>=stealth] (7.1,2.0) -- (7.8,2.0);
+  \draw[->,>=stealth] (10.8,2.0) -- (11.5,2.0) node[midway,above,font=\tiny]{nao};
+
+  \node[nd,fill=manualred!14] at (9.3,0.3) {executa a ferramenta\\ do \emph{seu} lado};
+  \node[nd,fill=manualred!14] at (5.6,0.3) {anexa \texttt{tool\_result}\\ com o mesmo \texttt{id}};
+  \draw[->,>=stealth] (9.3,1.5) -- (9.3,0.8) node[midway,right,font=\tiny]{sim};
+  \draw[->,>=stealth] (7.85,0.3) -- (7.05,0.3);
+  \draw[->,>=stealth] (5.6,0.8) -- (5.6,1.5)
+    node[midway,left,font=\tiny,align=right]{de novo,\\com o historico\\ maior};
+
+  \node[nt] at (-0.2,-1.1)
+    {\textbf{medido:} a volta 1 enviou \textbf{1} mensagem; a volta 2 enviou
+     \textbf{3}. A API nao guarda nada --- cada requisicao carrega a conversa
+     inteira, e voce paga a entrada de novo a cada volta. Por isso o custo de uma
+     conversa cresce com o \emph{quadrado} do numero de turnos, e nao linearmente.};
+
+  \node[draw,rounded corners,fill=manualgray!14,align=left,text width=13.4cm,
+        font=\tiny,inner sep=6pt] at (7.1,-3.2)
+    {\textbf{tres protecoes que o laco precisa ter antes de ir para producao:}\\[3pt]
+     \textbf{1. limite de voltas} --- um teto de iteracoes, ou um bug de
+     ferramenta vira laco infinito pago por token.\\[2pt]
+     \textbf{2. teto de gasto} --- acumule \texttt{usage} e pare no limite; a
+     conta e do seu cartao, nao do modelo.\\[2pt]
+     \textbf{3. ferramenta nao e confianca} --- a saida do modelo e \emph{entrada
+     nao confiavel}. Valide todo argumento, e nunca passe direto para
+     \texttt{eval}, \texttt{subprocess} ou SQL.};
+\end{tikzpicture}
+```
+O laço de ferramentas, o histórico que cresce e as três proteções obrigatórias.
+:::
+
+A API não guarda a conversa. Para o modelo "lembrar" do que foi dito, **você reenvia tudo**, a cada chamada. O laço da próxima seção deixa isso visível:
+
+```text
+== a API e SEM ESTADO: cada volta reenviou tudo
+  requisicao 1: 1 mensagem(ns) no corpo
+  requisicao 2: 3 mensagem(ns) no corpo
+```
+
+A consequência é aritmética e cara: numa conversa de vinte turnos, o vigésimo pedido carrega os dezenove anteriores. O custo total de uma conversa cresce com o **quadrado** do número de turnos, não linearmente. É a razão de existirem três técnicas que valem conhecer: **cache de prompt** (a seguir), **compactação** (o servidor resume o histórico antigo por você) e **truncamento por janela** (você descarta turnos velhos e aceita o esquecimento).
+
+## Cache de prompt: onde está o dinheiro
+
+Quando várias chamadas compartilham um pedaço grande e idêntico — um manual, um esquema de banco, um conjunto de exemplos —, esse pedaço pode ficar em cache no servidor. Ler do cache custa cerca de 10% do preço de entrada; gravar custa cerca de 125%.
+
+A conta, para mil perguntas sobre um documento de 40 mil tokens:
+
+```text
+== 1000 perguntas sobre o mesmo documento de 40.000 tokens
+  claude-opus-5      sem cache US$   216.00 | com cache US$    36.43 | economia  83.1%
+  claude-sonnet-5    sem cache US$   129.60 | com cache US$    21.86 | economia  83.1%
+  claude-haiku-4-5   sem cache US$    43.20 | com cache US$     7.29 | economia  83.1%
+```
+
+Oitenta e três por cento. Nenhuma otimização de código que você vá escrever este ano chega perto disso.
+
+Ligar é uma linha:
+
+```python
+resposta = cliente.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    system=[{"type": "text", "text": MANUAL,
+             "cache_control": {"type": "ephemeral"}}],
+    messages=[{"role": "user", "content": pergunta}],
+)
+```
+
+E aqui vem a parte que derruba a economia sem avisar: **o cache é casamento de prefixo**. A ordem de composição é `tools`, depois `system`, depois `messages`. Qualquer byte diferente em qualquer lugar do prefixo invalida tudo dali para frente. Dá para ver isso sem chamar a API — basta comparar o prefixo que o SDK montou:
+
+```python
+def volatil():
+    agora = datetime.datetime.now().isoformat()
+    return [{"type": "text", "text": f"Data de hoje: {agora}\n{MANUAL}",
+             "cache_control": {"type": "ephemeral"}}]
+```
+
+```text
+== caso A: prefixo estavel (o certo)
+  hash do prefixo, chamada 1: e26c4d9313c358c5
+  hash do prefixo, chamada 2: e26c4d9313c358c5
+  identicos? True   -> o cache pode ser aproveitado
+
+== caso B: um carimbo de data no sistema (o erro classico)
+  hash do prefixo, chamada 1: fa6774882bcc8f81
+  hash do prefixo, chamada 2: 35eb949e4cba31c3
+  identicos? False   -> cache perdido em toda chamada, sem aviso
+```
+
+Um `datetime.now()` no prompt de sistema — que parece a coisa mais inocente do mundo, e que muita gente põe "para o modelo saber a data" — zera a taxa de acerto e multiplica a conta por seis. E **nada avisa**: não há erro, não há aviso, só a fatura.
+
+Os invalidadores silenciosos mais comuns são sempre os mesmos quatro: carimbo de data ou hora, identificador único por requisição, `json.dumps` de um dicionário sem `sort_keys=True`, e uma lista de ferramentas montada em ordem não determinística.
+
+**Como verificar de verdade:** contra a API real, olhe `resposta.usage.cache_read_input_tokens`. Se ele for zero em chamadas repetidas com o mesmo prefixo, há um invalidador. Contra o servidor de estudo, compare o prefixo montado, como acima — e ponha isso num teste, para o invalidador não voltar na próxima refatoração.
+
+A regra de desenho decorre disso: **estável primeiro, volátil depois**. Prompt de sistema congelado e ferramentas em ordem fixa no começo; a pergunta do usuário, o horário e os identificadores no fim.
+
+## Uso de ferramentas: o modelo pede, você executa
+
+"Ferramenta" é uma função sua que o modelo pode pedir para chamar. Ele não executa nada — **ele devolve um pedido**, e quem executa é o seu código. Essa distinção é a base de tudo que se chama de "agente".
+
+O esquema da ferramenta pode sair da própria assinatura da função:
+
+```python
+from anthropic import beta_tool
+
+@beta_tool
+def consulta_estoque(sku: str, deposito: str = "central") -> str:
+    """Devolve a quantidade em estoque de um SKU.
+
+    Args:
+        sku: Codigo do produto, por exemplo "ABC-123".
+        deposito: Nome do deposito a consultar.
+    """
+    return json.dumps({"sku": sku, "deposito": deposito, "quantidade": 17})
+```
+
+```text
+== o esquema que o decorador gerou a partir da assinatura
+{
+  "name": "consulta_estoque",
+  "description": "Devolve a quantidade em estoque de um SKU.",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "sku": {
+        "description": "Codigo do produto, por exemplo \"ABC-123\".",
+        "type": "string"
+      },
+      "deposito": {
+        "default": "central",
+        "description": "Nome do deposito a consultar.",
+        "type": "string"
+      }
+    },
+    "required": ["sku"],
+    "type": "object"
+  }
+}
+```
+
+As anotações de tipo (@sec-cap068) viraram o esquema JSON, e a docstring (@sec-cap073) virou a descrição. Isso é mais do que conveniência: **a descrição é o que o modelo lê para decidir se e como usar a ferramenta.** Uma docstring vaga produz chamadas erradas; é literalmente parte do prompt.
+
+O laço tem quatro passos e cabe numa tela:
+
+```python
+mensagens = [{"role": "user", "content": "Quantas unidades do ABC-123 temos?"}]
+
+while True:
+    resp = cliente.messages.create(model="claude-opus-5", max_tokens=1024,
+                                   tools=ferramentas, messages=mensagens)
+    if resp.stop_reason != "tool_use":
+        break
+
+    mensagens.append({"role": "assistant", "content": resp.content})
+    resultados = []
+    for bloco in resp.content:
+        if bloco.type == "tool_use":
+            saida = consulta_estoque(**bloco.input)
+            resultados.append({"type": "tool_result",
+                               "tool_use_id": bloco.id,   # tem de casar com o id
+                               "content": saida})
+    mensagens.append({"role": "user", "content": resultados})
+```
+
+```text
+== o laco
+  volta 1: stop_reason=tool_use blocos=['text', 'tool_use']
+           executando consulta_estoque({'sku': 'ABC-123', 'deposito': 'central'})
+  volta 2: stop_reason=end_turn blocos=['text']
+
+  resposta final: Ha 17 unidades do ABC-123 no deposito central.
+  mensagens acumuladas no historico: 3
+```
+
+Quatro detalhes que quebram na prática:
+
+**`tool_use_id` precisa casar exatamente.** É como o modelo associa resultado a pedido. Trocá-lo ou omiti-lo produz erro de validação.
+
+**Todos os resultados vão numa única mensagem de usuário.** O modelo pode pedir várias ferramentas de uma vez; devolvê-las em mensagens separadas faz ele parar de pedir em paralelo.
+
+**Ferramenta que falhou devolve `tool_result` com `is_error: True`**, não uma exceção que derruba o laço. O modelo consegue se recuperar de um erro que ele vê; não consegue se recuperar de um processo que morreu.
+
+**A saída do modelo é entrada não confiável.** `bloco.input` chegou pela rede, foi produzido por um sistema probabilístico, e pode ter sido influenciado por texto que um usuário escreveu. Trate como se viesse de um formulário web: valide antes de usar, e **jamais** passe direto para `eval`, `subprocess`, uma consulta SQL montada por concatenação ou um caminho de arquivo (@sec-cap075, @sec-cap091).
+
+## Saída estruturada: contrato, não esperança
+
+Pedir "responda em JSON" no prompt funciona quase sempre — e "quase sempre" é exatamente o problema. A saída de um LLM é não determinística por construção; o que você precisa é de um contrato validado na fronteira.
+
+Pydantic (@sec-cap087) resolve os dois lados: gera o esquema para mandar ao modelo e valida o que voltou.
+
+```python
+class Chamado(BaseModel):
+    resumo: str = Field(description="Uma frase descrevendo o problema.")
+    severidade: int = Field(ge=1, le=5, description="1 = trivial, 5 = critico.")
+    componente: str
+    reproduzivel: bool
+```
+
+```text
+== o modelo devolveu isto (texto):
+  {"resumo": "Erro 500 ao salvar", "severidade": 4, "componente": "api", ...}
+  validado: resumo='Erro 500 ao salvar' severidade=4 componente='api' reproduzivel=True
+
+== e se vier fora do contrato, VOCE descobre -- nao o usuario:
+  less_than_equal: campo ('severidade',) -- Input should be less than or equal to 5
+```
+
+Uma severidade 9 num campo declarado de 1 a 5 vira um `ValidationError` no seu código, com o campo e o motivo — em vez de virar um registro incoerente no banco que alguém descobre em três meses. **A validação é sua, sempre**, mesmo com os recursos de saída estruturada da API: eles reduzem muito a chance de erro, não a eliminam.
+
+## Falhas, repetição e tempo limite
+
+Uma API de LLM é uma dependência de rede lenta. Ela vai falhar. O SDK já cuida da parte chata:
+
+```text
+== o SDK repete 429 sozinho (max_retries=2 por padrao)
+  resposta: 'consegui' apos 3 requisicoes e 2.0 s
+
+== com max_retries=0, a excecao sobe
+  RateLimitError: status 429, retry-after=1
+```
+
+Duas repetições por padrão, com espera crescente, para erros de conexão, 408, 409, 429 e 5xx. **Não reimplemente isso** — configure `max_retries` se precisar de outro número.
+
+O que você precisa escrever é o tratamento, e ele é uma cadeia do mais específico ao mais geral:
+
+```text
+  BadRequestError          APIStatusError -> APIError -> AnthropicError
+  AuthenticationError      APIStatusError -> APIError -> AnthropicError
+  PermissionDeniedError    APIStatusError -> APIError -> AnthropicError
+  NotFoundError            APIStatusError -> APIError -> AnthropicError
+  RateLimitError           APIStatusError -> APIError -> AnthropicError
+  InternalServerError      APIStatusError -> APIError -> AnthropicError
+  APIConnectionError       APIError -> AnthropicError -> Exception
+  APITimeoutError          APIConnectionError -> APIError -> AnthropicError
+```
+
+```python
+try:
+    resposta = cliente.messages.create(...)
+except anthropic.AuthenticationError:
+    raise                      # chave errada: nao adianta repetir, falhe alto
+except anthropic.BadRequestError as e:
+    log.error("pedido malformado: %s", e.message)   # bug seu, nao do servidor
+except anthropic.RateLimitError as e:
+    espera = int(e.response.headers.get("retry-after", "60"))
+    ...
+except anthropic.APIConnectionError:
+    ...                        # rede: vale repetir
+```
+
+Capturar um `APIStatusError` genérico apaga justamente a distinção que importa — o que vale repetir e o que não vale. Repetir um 400 é gastar dinheiro para receber o mesmo erro três vezes.
+
+E há o tempo limite: o padrão do SDK é **dez minutos**. Num serviço web isso é uma eternidade — a requisição do seu usuário morre muito antes. Defina um valor compatível com o seu contexto:
+
+```python
+cliente = anthropic.Anthropic(timeout=30.0)
+# ou, por chamada:
+cliente.with_options(timeout=5.0).messages.create(...)
+```
+
+## E quando isso vira um "agente"
+
+Um agente é o laço da seção anterior, com mais ferramentas e mais voltas. Não há mágica — e é justamente por isso que a decisão de construir um merece cuidado.
+
+Vale a pena quando as quatro condições valem juntas:
+
+- **Complexidade**: a tarefa é de múltiplos passos e não dá para especificar todos de antemão.
+- **Valor**: o resultado justifica o custo e a latência, que são muito maiores.
+- **Viabilidade**: o modelo é bom nesse tipo de tarefa.
+- **Custo do erro**: existe como detectar e desfazer um erro (teste, revisão, reversão).
+
+Se alguma falhar, um fluxo determinístico com uma ou duas chamadas de LLM em pontos específicos entrega mais, mais barato e mais previsível. **"Agente" não é um nível de qualidade, é um formato de problema.**
+
+Quando você constrói um, as três proteções da figura não são opcionais:
+
+```python
+MAX_VOLTAS = 12
+TETO_TOKENS = 200_000
+
+voltas = gastos = 0
+while True:
+    if voltas >= MAX_VOLTAS:
+        raise RuntimeError(f"laco nao convergiu em {MAX_VOLTAS} voltas")
+    if gastos >= TETO_TOKENS:
+        raise RuntimeError(f"teto de {TETO_TOKENS} tokens atingido")
+    resp = cliente.messages.create(...)
+    gastos += resp.usage.input_tokens + resp.usage.output_tokens
+    voltas += 1
+    ...
+```
+
+Um bug numa ferramenta que sempre devolve o mesmo erro produz um laço infinito — e esse laço é pago por token. O limite de voltas é a diferença entre um alerta e uma fatura.
+
+Para ferramentas com efeito colateral real — apagar, transferir, enviar, publicar — acrescente uma quarta: **aprovação humana**. Na prática, a função verifica uma política e devolve "usuário recusou" como resultado normal da ferramenta, em vez de executar.
+
+## Testar código que fala com um LLM
+
+Este capítulo inteiro é a demonstração da técnica: **aponte o cliente para um servidor que você controla**.
+
+```python
+cliente = anthropic.Anthropic(api_key="x", base_url="http://127.0.0.1:8931")
+```
+
+Com isso, a suíte de testes (@sec-cap070) fica determinística, roda em milissegundos, não custa nada e funciona na integração contínua sem segredo configurado. Você testa o que é seu: o laço termina; o `tool_use_id` casa; o 429 é repetido; o `max_tokens` truncado é detectado; o prefixo do cache é estável. Nada disso depende de qual palavra o modelo escolheu.
+
+O que **não** dá para testar assim é a qualidade da resposta — e isso se mede de outro jeito, com uma **avaliação**: um conjunto de casos com resultado esperado, rodado contra o modelo de verdade, cujo placar você acompanha ao longo do tempo. É o equivalente de teste de regressão para a parte não determinística, e é o que impede que uma "melhoria" no prompt piore silenciosamente metade dos casos. Avaliação roda antes de mudar prompt ou modelo, não a cada commit — ela custa dinheiro.
+
+## O risco que é específico deste assunto
+
+Duas ameaças não têm equivalente no resto do livro.
+
+**Injeção de prompt.** Se o seu programa põe texto de terceiros no contexto — um e-mail, uma página, o comentário de um usuário —, esse texto pode conter instruções, e o modelo não distingue com segurança a sua instrução da instrução de quem escreveu o conteúdo. Não existe escape que resolva. A defesa é de arquitetura: **limite o que as ferramentas podem fazer**, exija aprovação para o que é irreversível, e nunca dê a um agente que lê conteúdo não confiável uma ferramenta capaz de causar dano.
+
+**Vazamento por contexto.** Tudo que entra no prompt sai da sua máquina. Dado pessoal, segredo, chave de terceiro, trecho de banco de produção — se não deveria sair, não pode entrar no contexto. Anonimize antes, e registre o que foi enviado com o mesmo cuidado com que você registraria uma requisição a qualquer serviço externo.
+
+## 🐍 Jeito Pythônico
+
+**Trate o LLM como dependência de rede**: com tempo limite explícito, repetição, tratamento de erro tipado e observabilidade. O padrão de dez minutos do SDK é longo demais para um serviço web.
+
+**Nunca escreva a chave no código.** Construtor sem argumentos, credencial no ambiente. Chave em repositório é chave rotacionada.
+
+**`content` é uma lista de blocos.** Teste `.type` antes de acessar `.text` — `content[0].text` quebra no dia em que o modelo pensar antes de responder.
+
+**Sempre olhe `stop_reason`.** Uma resposta truncada por `max_tokens` chega com cara de resposta completa.
+
+**Use streaming quando a resposta puder ser longa**, mesmo sem exibir o texto aparecendo: é proteção contra tempo limite.
+
+**Estável primeiro, volátil depois.** Medido: um `datetime.now()` no prompt de sistema mudou o hash do prefixo a cada chamada — cache zerado, sem aviso, com 83% de economia perdida.
+
+**A docstring da ferramenta é parte do prompt.** O modelo lê a descrição para decidir se e como chamar; vaga produz chamada errada.
+
+**`tool_use_id` casando, resultados numa única mensagem, erro como `is_error: True`.** Erro que o modelo vê ele contorna; exceção que derruba o laço, não.
+
+**A saída do modelo é entrada não confiável.** Valide todo argumento de ferramenta e nunca o passe a `eval`, `subprocess`, SQL ou caminho de arquivo.
+
+**Valide o formato com Pydantic na fronteira.** Recurso de saída estruturada reduz a chance de erro; não elimina.
+
+**Todo laço de agente precisa de limite de voltas e teto de gasto**, e aprovação humana para o que é irreversível.
+
+**Aponte o cliente para um servidor local nos testes.** Determinístico, instantâneo, de graça — e o que sobra para medir com o modelo de verdade é qualidade, que é assunto de avaliação, não de teste unitário.
+
+## 🧪 Laboratório
+
+Nenhum passo abaixo precisa de chave de API. Os que precisariam estão marcados como opcionais.
+
+```bash
+uv pip install anthropic pydantic
+```
+
+**Passo 1 — o espelho.** Escreva o `servidor_falso.py` do capítulo: um `HTTPServer` numa thread, que grava o corpo recebido numa lista global e devolve uma resposta canônica com `content`, `stop_reason` e `usage`.
+
+**Passo 2 — o corpo da requisição.** Aponte o cliente para ele com `base_url` e reproduza a impressão do JSON enviado. Depois acrescente `temperature` e um `system` com dois blocos, e observe o corpo mudar.
+
+**Passo 3 — os cabeçalhos.** Imprima todos os cabeçalhos recebidos e identifique o que cada um faz:
+
+```text
+  X-Api-Key: chave-de-mentira
+  anthropic-version: 2023-06-01
+  x-stainless-retry-count: 0
+```
+
+**Passo 4 — a resposta que não é uma string.** Faça o servidor devolver uma resposta com dois blocos de texto e confirme que `resposta.content[0].text` perde o segundo. Escreva a versão correta, que percorre os blocos filtrando por `.type`.
+
+**Passo 5 — o `stop_reason` ignorado.** Faça o servidor devolver `stop_reason: "max_tokens"` com um texto cortado no meio. Escreva o código que detecta isso e decide o que fazer.
+
+**Passo 6 — streaming.** Monte a lista de eventos SSE do capítulo e reproduza a chegada aos pedaços. Depois **interrompa** o fluxo no meio (um `break` no laço) e observe o que `get_final_message()` faz.
+
+**Passo 7 — a ferramenta e seu esquema.** Escreva uma função com anotações de tipo e docstring no formato do Google, decore com `@beta_tool` e imprima `to_dict()`. Depois **remova** a docstring de um parâmetro e veja o que some do esquema.
+
+**Passo 8 — o laço completo.** Roteie o servidor para devolver primeiro um `tool_use` e depois um `end_turn`, e reproduza:
+
+```text
+  volta 1: stop_reason=tool_use blocos=['text', 'tool_use']
+  volta 2: stop_reason=end_turn blocos=['text']
+```
+
+**Passo 9 — a ausência de estado.** Imprima quantas mensagens cada requisição carregou e explique por que o custo de uma conversa cresce com o quadrado dos turnos.
+
+**Passo 10 — o laço infinito.** Faça o servidor devolver `tool_use` **sempre**. Rode o laço sem limite de voltas e interrompa com Ctrl-C. Depois acrescente `MAX_VOLTAS` e o teto de tokens, e confirme que ele para sozinho.
+
+**Passo 11 — o cache invalidado.** Reproduza os dois casos e escreva um **teste de `pytest`** que falha se o prefixo mudar entre duas chamadas — o teste que impede o `datetime.now()` de voltar:
+
+```text
+  identicos? True   -> o cache pode ser aproveitado
+  identicos? False  -> cache perdido em toda chamada, sem aviso
+```
+
+**Passo 12 — a repetição.** Roteie dois 429 seguidos de um 200 e confirme que o SDK repete sozinho. Depois ponha `max_retries=0` e trate a exceção lendo o cabeçalho `retry-after`.
+
+**Passo 13 — o contrato.** Escreva o modelo `Chamado` com `Field(ge=1, le=5)` e valide uma resposta fora do contrato. Imprima o campo e a mensagem do `ValidationError`.
+
+**Passo 14 — a estimativa de custo.** Reproduza a tabela de mil perguntas e depois refaça para o seu caso real: quantas chamadas por dia, quanto de contexto fixo, quanto de saída. Descubra a partir de quantas chamadas o cache se paga.
+
+**Passo 15 (opcional, precisa de chave).** Com uma chave real, rode a mesma sequência e compare `usage.cache_read_input_tokens` entre a primeira e a segunda chamada. Depois use `cliente.messages.count_tokens(...)` para conferir a contagem oficial contra a sua estimativa.
+
+## Resumo
+
+- **Uma API de LLM é um `POST` com JSON, sem estado.** Sem sessão, sem memória: o histórico inteiro viaja a cada chamada, e por isso o custo de uma conversa cresce com o quadrado dos turnos. Medido: volta 1 enviou 1 mensagem, volta 2 enviou 3.
+- **`content` é uma lista de blocos, e `stop_reason` diz por que parou.** `content[0].text` e ignorar o `stop_reason` são os dois bugs de integração mais comuns.
+- **A saída custa cerca de cinco vezes a entrada**, e o modelo mais caro custa cinco vezes o mais barato. Escolher modelo e pedir concisão são decisões de arquitetura.
+- **Streaming é proteção contra tempo limite**, não enfeite; o SDK entrega os pedaços e ainda remonta a mensagem completa com `get_final_message()`.
+- **Cache de prompt economizou 83%** no cenário medido — e é casamento de prefixo. Um `datetime.now()` no prompt de sistema mudou o hash a cada chamada e zerou a economia **sem nenhum aviso**. Estável primeiro, volátil depois; confira `cache_read_input_tokens`.
+- **Ferramenta é pedido, não execução.** O esquema sai das anotações de tipo, a descrição sai da docstring — e a docstring é parte do prompt. `tool_use_id` casando, resultados numa mensagem só, falha como `is_error: True`.
+- **A saída do modelo é entrada não confiável.** Valide todo argumento; nunca passe direto a `eval`, `subprocess`, SQL ou caminho de arquivo. Contra injeção de prompt não há escape — só limitar o que as ferramentas podem fazer.
+- **Valide o formato com Pydantic na fronteira**: severidade 9 num campo de 1 a 5 virou `ValidationError` no seu código, não registro incoerente no banco.
+- **O SDK já repete 429 e 5xx** (medido: três requisições, 2,0 s, resposta correta). Trate as exceções em cadeia, do mais específico ao mais geral, e reduza o tempo limite padrão de dez minutos.
+- **Agente é o mesmo laço com mais voltas.** Só vale quando complexidade, valor, viabilidade e custo do erro fecham juntos — e sempre com limite de voltas, teto de gasto e aprovação humana para o irreversível.
+- **Teste apontando o cliente para um servidor local**: determinístico, instantâneo, sem custo e sem segredo na integração contínua. Qualidade de resposta se mede por avaliação, não por teste unitário.
