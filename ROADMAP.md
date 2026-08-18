@@ -170,9 +170,9 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 - [x] **cap 101** - Arquitetura de projetos e código sustentável - `vol16/cap101-arquitetura-de-projetos-e-codigo-sustentavel.qmd`
 - [x] **cap 102** - Git, pre-commit e integração contínua para projetos Python - `vol16/cap102-git-pre-commit-e-integracao-continua-para.qmd`
 - [x] **cap 103** - Python e inteligência artificial: LLMs, APIs e agentes - `vol16/cap103-python-e-inteligencia-artificial-llms-apis-e.qmd`
-- [ ] **cap 104** - Para onde ir depois: PEPs, comunidade e prática contínua - `vol16/cap104-para-onde-ir-depois-peps-comunidade-e-pratica.qmd`
+- [x] **cap 104** - Para onde ir depois: PEPs, comunidade e prática contínua - `vol16/cap104-para-onde-ir-depois-peps-comunidade-e-pratica.qmd`
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (103 concluidos).
+**Total:** 104 capitulos em 16 volumes (104 concluidos).
 

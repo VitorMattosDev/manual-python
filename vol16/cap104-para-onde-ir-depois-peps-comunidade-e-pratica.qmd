@@ -1,3 +1,373 @@
 # Para onde ir depois: PEPs, comunidade e prática contínua {#sec-cap104}
 
-*(em elaboracao)*
+Cento e três capítulos atrás, o assunto era o que acontece quando você digita `python` e aperta Enter. Desde então passamos pelo modelo de objetos, pelo protocolo de iteração, pelo empacotamento, pelos testes, pela concorrência, pelo C e pelo interpretador sem GIL. É bastante coisa — e nada disso tem prazo de validade curto, porque quase tudo aqui é sobre como a linguagem *pensa*, não sobre a API da semana.
+
+Mas a linguagem se move. Este capítulo final não acrescenta um assunto novo: ele entrega o método para acompanhar o que vem depois, sozinho — como as decisões são tomadas, como saber o que vai quebrar antes de quebrar, e onde continuar aprendendo depois que o livro acaba.
+
+As comparações entre versões deste capítulo são reais, rodadas nas três instalações da mesma máquina: CPython 3.12.13 e 3.13.12 no Linux (WSL2) e CPython 3.14.4 no Windows.
+
+## Como o Python decide o que é o Python
+
+Não há um dono que escolhe. Toda mudança relevante na linguagem passa por um **PEP** — *Python Enhancement Proposal* —, um documento público com formato fixo, discutido abertamente antes de valer.
+
+Existem três espécies, e confundi-las causa mal-entendido:
+
+- **Standards Track** propõe mudança na linguagem ou na biblioteca padrão. É a maioria: PEP 484 (anotações de tipo), PEP 517 e 518 (construção de pacotes), PEP 703 (o interpretador sem GIL).
+- **Informational** não propõe nada: descreve, orienta ou registra consenso. PEP 20, o Zen do Python, é um destes — não é norma, é declaração de valores.
+- **Process** define como o projeto funciona. PEP 1 descreve o próprio processo dos PEPs; PEP 13 define a governança.
+
+E existem estados, que importam muito na hora de ler:
+
+**Draft** é rascunho — pode mudar inteiro ou ser abandonado. **Accepted** foi aprovado mas ainda não saiu numa versão. **Final** está implementado e valendo. **Provisional** está na biblioteca padrão mas com permissão explícita para mudar. **Rejected**, **Withdrawn**, **Deferred** e **Superseded** não valem, e essa é justamente a armadilha: um PEP rejeitado continua no site para sempre, indexado pelos buscadores, com aparência idêntica à de um aceito. **Confira o cabeçalho antes de citar.**
+
+Quem decide é o **Conselho Diretor**, cinco pessoas eleitas anualmente pelos desenvolvedores centrais (PEP 13). O papel dele não é escrever a linguagem, é decidir quando uma discussão chegou ao ponto de virar decisão. As discussões acontecem em <https://discuss.python.org>, abertas, e qualquer pessoa pode ler — inclusive as que não deram em nada, que costumam ser as mais instrutivas.
+
+### Como ler um PEP em cinco minutos
+
+Todo PEP tem a mesma ossatura, e a leitura útil quase nunca é linear:
+
+1. **Abstract** — o que muda, em um parágrafo.
+2. **Motivation** — que problema real existia. É a seção mais valiosa, porque ensina *por que* a linguagem é como é.
+3. **Rationale** — por que esta solução e não as outras. As alternativas rejeitadas explicam metade das esquisitices de Python.
+4. **Specification** — o detalhe normativo. Leia quando for implementar, não quando for entender.
+5. **Backwards Compatibility** — o que quebra. Leia **sempre**, se você mantém código.
+
+Uma dúzia de PEPs explica a maior parte do Python moderno: **1** (o processo), **8** (estilo), **20** (Zen), **257** (docstrings), **484** e **585** (tipos), **517**, **518** e **621** (empacotamento), **572** (walrus), **634** (`match`), **703** (sem GIL) e **649** (anotações preguiçosas). Não precisa lê-los agora; precisa saber que quando você perguntar "por que isso é assim?", a resposta costuma estar num deles.
+
+## O calendário, e o que ele obriga
+
+::: {#fig-ciclo-versoes}
+```{.tikz}
+%%| filename: ciclo-versoes
+%%| alt: O ciclo anual de versoes do Python, a janela de suporte e o que fazer em cada fase
+\begin{tikzpicture}[
+  fx/.style={draw,rounded corners,align=center,font=\tiny,
+             minimum height=0.9cm,inner sep=4pt},
+  hd/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.3,-4.4) rectangle (14.4,4.0);
+
+  \node[hd] at (-0.2,3.8) {uma versao por ano, cinco anos de vida (PEP 602)};
+
+  \draw[->,>=stealth,thick] (0.4,1.7) -- (13.9,1.7);
+  \foreach \xx/\lb in {0.9/ano 0, 3.5/ano 1, 6.1/ano 2, 8.7/ano 3, 11.3/ano 4, 13.5/ano 5}
+    \draw (\xx,1.85) -- (\xx,1.55) node[below,font=\tiny]{\lb};
+
+  \node[fx,fill=manualgreen!18,text width=2.3cm] at (2.2,2.7)
+    {lancamento\\ (outubro)};
+  \node[fx,fill=manualred!16,text width=2.3cm] at (12.9,2.7)
+    {fim de vida:\\ nada mais};
+
+  \node[fx,fill=manualblue!14,text width=4.6cm] at (3.5,0.5)
+    {\textbf{2 anos: correcao de bugs}\\ atualize aqui --- e de graca};
+  \node[fx,fill=manualyellow!22,text width=6.0cm] at (10.0,0.5)
+    {\textbf{3 anos: so seguranca}\\ ainda funciona, mas nao ganha correcao de bug
+     nem melhoria de desempenho};
+
+  \node[nt] at (-0.2,-1.4)
+    {\textbf{a regra pratica que decorre disso:} sustente as versoes que a montante
+     sustenta, nem mais nem menos. Manter compatibilidade com uma versao morta
+     custa \texttt{if} espalhado pelo codigo e impede usar recurso novo; largar uma
+     versao viva quebra usuario que nao tinha como migrar.};
+
+  \node[draw,rounded corners,fill=manualgray!14,align=left,text width=13.4cm,
+        font=\tiny,inner sep=6pt] at (7.1,-3.0)
+    {\textbf{e a rotina de outubro, que leva uma tarde:} ler o \emph{What's New};
+     acrescentar a versao nova a matriz da integracao continua; rodar a suite com
+     \texttt{-W error::DeprecationWarning}; subir o \texttt{target-version} do
+     \texttt{ruff} e aceitar as correcoes automaticas; e tirar da matriz a versao
+     que morreu. Feito uma vez por ano, e uma tarde. Adiado por tres anos, e um
+     projeto.};
+\end{tikzpicture}
+```
+O ciclo anual, a janela de suporte e a rotina que os acompanha.
+:::
+
+O PEP 602 fixou o ritmo: **uma versão nova por ano, em outubro**. Cada uma recebe correções de bug por dois anos e depois só correções de segurança, até completar cinco anos de vida.
+
+Esse calendário tem uma consequência prática direta: **a matriz de versões do seu projeto (@sec-cap102) deve seguir a montante.** Sustente o que o CPython sustenta. Carregar compatibilidade com uma versão morta enche o código de desvios e impede usar o que é melhor; largar uma versão ainda viva quebra quem não tinha como migrar.
+
+## O que muda de verdade entre duas versões
+
+Vale ver isso com números, não com impressões. O mesmo arquivo, nas três instalações:
+
+```python
+print(f"    gc.get_threshold()              : {gc.get_threshold()}")
+print(f"    annotationlib (PEP 649/749)     : {existe('annotationlib')}")
+print(f"    concurrent.interpreters (PEP 734): {existe('concurrent.interpreters')}")
+print(f"    string.templatelib (PEP 750)    : {existe('string.templatelib')}")
+print(f"    compression.zstd (PEP 784)      : {existe('compression.zstd')}")
+print(f"    sys.remote_exec (PEP 768)       : "
+      f"{'sim' if hasattr(sys, 'remote_exec') else 'nao'}")
+```
+
+```text
+  Python 3.12.13
+    gc.get_threshold()              : (700, 10, 10)
+    annotationlib (PEP 649/749)     : nao
+    concurrent.interpreters (PEP 734): nao
+    string.templatelib (PEP 750)    : nao
+    compression.zstd (PEP 784)      : nao
+    sys.remote_exec (PEP 768)       : nao
+
+  Python 3.13.12
+    gc.get_threshold()              : (2000, 10, 10)
+    annotationlib (PEP 649/749)     : nao
+    ...
+
+  Python 3.14.4
+    gc.get_threshold()              : (2000, 10, 0)
+    annotationlib (PEP 649/749)     : sim
+    concurrent.interpreters (PEP 734): sim
+    string.templatelib (PEP 750)    : sim
+    compression.zstd (PEP 784)      : sim
+    sys.remote_exec (PEP 768)       : sim
+```
+
+Duas leituras.
+
+**Constantes se mexem.** O limiar da geração 0 do coletor foi de 700 para 2000 entre o 3.12 e o 3.13 (@sec-cap098), e o terceiro valor foi a zero no 3.14. Números que texto antigo cita como se fossem eternos mudam de versão para versão — é por isso que este livro insiste em medir na sua máquina em vez de repetir folclore.
+
+**Cinco recursos grandes entraram de uma vez.** `annotationlib` (PEP 649 e 749), interpretadores múltiplos na biblioteca padrão (PEP 734), *template strings* (PEP 750), compressão zstd (PEP 784) e o anexo remoto de depurador (PEP 768). Nenhum deles existia dois anos antes. É a taxa normal de mudança de uma linguagem viva, e é exatamente a razão de existir uma rotina anual.
+
+### O caso que mostra o que "mudança de semântica" significa
+
+O PEP 649 é o exemplo mais nítido. Considere:
+
+```python
+def f(x: TipoQueNaoExiste) -> None: ...
+```
+
+```text
+  Python 3.12.13
+    definir a funcao          : NameError (name 'TipoQueNaoExiste' is not defined)
+  Python 3.13.12
+    definir a funcao          : NameError (name 'TipoQueNaoExiste' is not defined)
+
+  Python 3.14.4
+    definir a funcao          : ok
+    ler f.__annotations__     : NameError (name 'TipoQueNaoExiste' is not defined)
+```
+
+Até o 3.13, a anotação é avaliada **na hora de definir a função** — o módulo nem chega a carregar. A partir do 3.14, ela é avaliada **na hora em que alguém lê `__annotations__`**, e o módulo carrega normalmente.
+
+Isso resolve dois incômodos antigos de uma vez: referência circular entre tipos deixa de exigir aspas, e o custo de avaliar anotações some de quem nunca as lê. E é uma mudança de comportamento real, não cosmética: código que dependia da falha na importação passa a falhar em outro lugar, e ferramenta que inspeciona anotações precisa usar `annotationlib`.
+
+## Descobrir o que vai quebrar, antes de quebrar
+
+O Python avisa antes de remover — mas o aviso é silencioso por padrão. Ligá-lo é a prática mais barata deste capítulo:
+
+```python
+tenta("datetime.utcnow()", lambda: datetime.datetime.utcnow())
+tenta("locale.getdefaultlocale()", lambda: locale.getdefaultlocale())
+tenta("import telnetlib (PEP 594)", importa_telnet)
+```
+
+```text
+== o que o Python 3.13 ja reclama
+  datetime.utcnow()             DeprecationWarning: datetime.datetime.utcnow() is
+      deprecated and scheduled for removal in a future version. Use timezone-aware
+      objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  locale.getdefaultlocale()     DeprecationWarning: 'locale.getdefaultlocale' is
+      deprecated and slated for removal in Python 3.15. Use setlocale(),
+      getencoding() and getlocale() instead.
+  import telnetlib (PEP 594)    ModuleNotFoundError: No module named 'telnetlib'
+  import cgi (PEP 594)          ModuleNotFoundError: No module named 'cgi'
+```
+
+Repare na qualidade dos avisos: eles dizem **em qual versão some** e **o que usar no lugar**. `locale.getdefaultlocale` tem data marcada — 3.15. Quem ligar o aviso hoje corrige em cinco minutos; quem não ligar descobre no dia em que a atualização quebrar a produção.
+
+E o `telnetlib` e o `cgi` mostram o fim da linha: o PEP 594 removeu dezenove módulos antigos no 3.13, e o que sobrou foi `ModuleNotFoundError`. Eles avisaram por duas versões inteiras antes.
+
+A forma de não perder o aviso é transformá-lo em erro:
+
+```bash
+python -W error::DeprecationWarning -m pytest
+```
+
+```text
+  File "<string>", line 1, in <module>
+    import datetime; datetime.datetime.utcnow()
+                     ~~~~~~~~~~~~~~~~~~~~~~~~^^
+DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for
+removal in a future version. ...
+```
+
+Melhor ainda, no `pyproject.toml`, para valer sempre:
+
+```toml
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error::DeprecationWarning",
+    # excecoes, com o motivo e um link -- nunca uma lista sem explicacao
+    "ignore:.*pkg_resources.*:DeprecationWarning",
+]
+```
+
+::: {.callout-tip}
+## A pergunta que separa quem faz isso de quem não faz
+"O que vai quebrar quando sairmos do 3.13?" Se a resposta for "não sei", ligue os avisos hoje e você terá a lista em trinta segundos. É a manutenção de menor esforço e maior retorno que existe num projeto Python.
+:::
+
+## O modernizador automático
+
+Boa parte da atualização de estilo é mecânica, e o `ruff` faz sozinho. As regras `UP` (do `pyupgrade`) reescrevem sintaxe antiga para a da versão que você declarar:
+
+```python
+from typing import Dict, List, Optional, Union
+
+def carrega(caminhos: List[str], padrao: Optional[Dict[str, Union[int, str]]] = None):
+    ...
+```
+
+```bash
+ruff check --select UP,I,C4,SIM,PERF --target-version py313 --fix legado.py
+```
+
+```text
+UP007 [*] Use `X | Y` for type annotations
+ --> legado.py:6:61
+  |
+6 | def carrega(caminhos: List[str], padrao: Optional[Dict[str, Union[int, str]]] = None):
+  |                                                             ^^^^^^^^^^^^^^^
+help: Convert to `X | Y`
+
+SIM118 Use `key in dict` instead of `key in dict.keys()`
+  --> legado.py:14:13
+
+Found 8 errors.
+[*] 5 fixable with the `--fix` option (1 hidden fix can be enabled with the `--unsafe-fixes` option).
+```
+
+E o resultado:
+
+```python
+def carrega(caminhos: list[str], padrao: dict[str, int | str] | None = None):
+```
+
+`List[str]` virou `list[str]`, `Optional[X]` virou `X | None`, `Union[int, str]` virou `int | str` — sem você abrir o arquivo. Note também o que ele **não** fez sozinho: cinco das oito correções são automáticas, e as demais exigem decisão sua. Ferramenta boa sabe onde parar.
+
+Quando subir a versão do projeto, suba junto o `target-version` do `ruff` e aceite as correções. É metade da migração, de graça, num commit isolado que a revisão consegue ler.
+
+## Como acompanhar sem se afogar
+
+O volume de informação sobre Python é maior do que qualquer pessoa consegue consumir, e a maior parte é ruído. Quatro fontes bastam:
+
+**O documento *What's New* da versão.** É a única leitura obrigatória do ano — escrito pelas pessoas que fizeram a mudança, com exemplos e com a seção de incompatibilidades. Uma hora de leitura, uma vez por ano.
+
+**Os *changelog* das suas dependências**, quando você as atualiza. Ferramentas de atualização automática (`dependabot`, `renovate`) abrem o *pull request* com o link; a integração contínua (@sec-cap102) diz se passou.
+
+**<https://discuss.python.org>**, quando você quiser entender uma decisão. Não é para acompanhar diariamente; é para consultar.
+
+**Uma newsletter ou um agregador**, se você gosta do formato. *Python Weekly*, *PyCoder's Weekly*, o `r/Python`. Serve para descobrir bibliotecas, não para aprender fundamento.
+
+O que **não** funciona é tentar acompanhar tudo. A vantagem de ter lido este livro é justamente essa: com o modelo de objetos, o protocolo de iteração e o modelo de importação na cabeça, um recurso novo se encaixa numa estrutura que já existe. Você não precisa reaprender — precisa localizar.
+
+## Como continuar ficando melhor
+
+Ler mais livros é o caminho de menor retorno a partir daqui. Três hábitos rendem muito mais:
+
+**Leia a biblioteca padrão.** O código-fonte está na sua máquina agora: `python -c "import dataclasses; print(dataclasses.__file__)"`. `dataclasses`, `functools`, `contextlib`, `pathlib` e `enum` são módulos escritos com cuidado excepcional, e leem-se numa tarde cada. É a melhor fonte de Python idiomático que existe, e é grátis.
+
+**Escreva coisas terminadas.** Um projeto pequeno, *acabado* — com testes, com README, empacotado e publicado — ensina mais do que dez projetos abandonados na metade, porque as partes difíceis (empacotar, documentar, versionar, receber o primeiro relato de bug) só aparecem no fim.
+
+**Explique.** Escrever um artigo, responder uma dúvida, fazer uma apresentação de dez minutos na equipe. Explicar expõe com precisão cirúrgica o que você achava que sabia. Foi assim que este livro descobriu metade dos próprios erros.
+
+### Contribuir
+
+Contribuir para software livre é mais acessível do que parece, e o caminho de entrada quase nunca é código.
+
+Para um pacote qualquer: use, encontre um problema, **relate com um exemplo mínimo reproduzível**. Um relato bom — versão, sistema, dez linhas que reproduzem — é uma contribuição valiosa e rara. Depois: corrigir a documentação, acrescentar um teste que faltava, corrigir um bug pequeno.
+
+Para o CPython, o caminho está em <https://devguide.python.org>: bifurque, compile, procure a etiqueta *good first issue*, e comece pela documentação. A revisão é lenta e criteriosa — é uma linguagem usada por milhões de pessoas —, e essa lentidão faz parte do que a mantém confiável.
+
+### A comunidade
+
+Python tem uma das comunidades mais acolhedoras da computação, e isso não é acidente: é resultado de trabalho deliberado, de um código de conduta levado a sério e de gente que decidiu que principiante é bem-vindo.
+
+A **Python Software Foundation** cuida da infraestrutura, das marcas e das bolsas que levam gente a conferências. As conferências — **PyCon US**, **EuroPython**, e no Brasil a **Python Brasil**, além das PyConfs regionais — valem mais pelos corredores do que pelas palestras. E os grupos locais e comunidades como **PyLadies** são, para a maioria das pessoas, a porta de entrada real.
+
+Se você chegou até aqui, em algum momento vai ser a pessoa mais experiente da sala. Quando isso acontecer, lembre de como era não saber.
+
+## O que este livro tentou entregar
+
+Dezesseis volumes, e uma tese só: **entender o mecanismo vale mais do que memorizar a API.**
+
+Foi por isso que os Volumes 1 a 4 gastaram tempo no modelo de referências antes de falar de estruturas de dados; que os Volumes 5 a 8 foram do `import` até o modelo de dados, mostrando que decorador, gerador e gerenciador de contexto são o mesmo punhado de protocolos vistos de ângulos diferentes; que os Volumes 9 a 11 trataram teste, tipo e ferramenta como parte do código, não como acessório; que os Volumes 12 a 14 aplicaram tudo em automação, dados e web; e que os Volumes 15 e 16 desceram até o GIL, o coletor de lixo e a fronteira com o C — e voltaram para falar de arquitetura, de processo e de como continuar.
+
+Sintaxe muda. `match` chegou no 3.10, `|` em tipos no 3.10, `tomllib` no 3.11, o `type` genérico no 3.12, as anotações preguiçosas no 3.14, e alguma coisa que ainda não tem nome vai chegar no 3.16. Nada disso invalida o que está aqui, porque referência, objeto, protocolo, escopo, exceção e módulo continuam sendo as mesmas peças.
+
+O que fica, no fim, é uma disposição: **medir em vez de supor, ler o fonte em vez de adivinhar, e escrever o exemplo pequeno que decide a dúvida.** Foi assim que cada número deste livro foi obtido, e é a única coisa aqui que não vai envelhecer.
+
+## 🐍 Jeito Pythônico
+
+**Confira o estado do PEP antes de citá-lo.** Rejeitado e aceito têm a mesma cara no buscador, e o rejeitado nunca sai do ar.
+
+**Leia a seção *Motivation*.** É onde está o porquê — e o porquê é o que se transfere para o próximo problema.
+
+**Sustente as versões que o CPython sustenta**, nem mais nem menos. Uma por ano em outubro, cinco anos de vida (PEP 602).
+
+**Ligue `DeprecationWarning` como erro na suíte.** Medido: o 3.13 já aponta `datetime.utcnow()` e dá a data de remoção de `locale.getdefaultlocale` — a versão 3.15.
+
+**Suba o `target-version` do `ruff` junto com a versão do projeto.** Medido: `List[str]` virou `list[str]` e `Optional[Dict[str, Union[int, str]]]` virou `dict[str, int | str] | None`, sem abrir o arquivo.
+
+**Meça em vez de repetir folclore.** O limiar do coletor foi 700, virou 2000 e mudou de novo; todo número citado de memória tem versão.
+
+**Leia o *What's New* uma vez por ano.** É a única leitura obrigatória, e é escrita por quem fez a mudança.
+
+**Leia a biblioteca padrão.** `dataclasses`, `functools`, `contextlib`, `pathlib`, `enum` — a melhor fonte de Python idiomático está instalada na sua máquina.
+
+**Termine projetos pequenos.** As partes que ensinam — empacotar, documentar, versionar, receber o primeiro bug — só aparecem no fim.
+
+**Relate bugs com exemplo mínimo reproduzível.** É contribuição de verdade, e é rara.
+
+**Explique para alguém.** Nada expõe o que você não sabe com a mesma precisão.
+
+## 🧪 Laboratório
+
+**Passo 1 — leia um PEP inteiro.** Escolha o PEP 572 (walrus) ou o 634 (`match`) e leia da *Abstract* à *Backwards Compatibility*. Escreva três frases sobre qual alternativa foi rejeitada e por quê.
+
+**Passo 2 — o estado importa.** Encontre um PEP com estado *Rejected* ou *Withdrawn* que proponha algo que você já viu alguém afirmar que existe. Explique como o cabeçalho revela isso.
+
+**Passo 3 — as versões da sua máquina.** Rode o comparativo do capítulo em duas versões diferentes do Python que você tenha instaladas, e produza a sua própria tabela.
+
+**Passo 4 — o PEP 649 na prática.** Escreva um módulo com `def f(x: TipoQueNaoExiste): ...` e rode em 3.13 e em 3.14:
+
+```text
+  3.13: definir a funcao      : NameError
+  3.14: definir a funcao      : ok
+        ler f.__annotations__ : NameError
+```
+
+Explique o que isso permite (pista: referência circular entre tipos).
+
+**Passo 5 — o inventário de deprecações.** Rode a suíte do seu maior projeto com `-W error::DeprecationWarning` e liste tudo que quebrar. Essa lista é o seu trabalho de migração — e você acabou de descobri-la antes do prazo.
+
+**Passo 6 — o filtro permanente.** Ponha `filterwarnings = ["error::DeprecationWarning"]` no `pyproject.toml`. Para cada exceção que precisar acrescentar, escreva **o motivo e um link** ao lado.
+
+**Passo 7 — a modernização automática.** Rode `ruff check --select UP --target-version py313 --diff` no seu projeto. Leia o diff **antes** de aplicar e identifique uma correção que você não faria à mão.
+
+**Passo 8 — o *What's New*.** Leia o documento da versão mais recente e anote três coisas: uma que você vai usar já, uma que vai quebrar algo seu, e uma que você não entendeu. Vá atrás da terceira.
+
+**Passo 9 — leia o fonte.** Abra `dataclasses.py` na sua instalação e encontre onde ele **gera** o código do `__init__`. Explique por que ele usa `exec` e o que isso custa.
+
+**Passo 10 — um exemplo mínimo reproduzível.** Pegue o último bug que você encontrou numa biblioteca e reduza a dez linhas: sem framework, sem dados seus, rodando num arquivo só. Se não conseguiu reduzir, você ainda não entendeu o bug.
+
+**Passo 11 — a primeira contribuição.** Encontre um erro na documentação de um projeto que você usa e abra um *pull request* corrigindo. É pequeno de propósito: o objetivo é atravessar o processo inteiro uma vez.
+
+**Passo 12 — termine alguma coisa.** Escolha o menor projeto útil que você conseguir imaginar e leve-o até o fim: `src` (@sec-cap101), testes (@sec-cap070), tipos (@sec-cap069), `pyproject.toml` (@sec-cap032), `pre-commit` e integração contínua (@sec-cap102), README com exemplo que roda. Publique. É o exame final deste livro.
+
+## Resumo
+
+- **Toda mudança relevante passa por um PEP**, discutido em público. Standards Track propõe, Informational descreve, Process governa — e o **estado** no cabeçalho é o que separa o que vale do que foi rejeitado e continua indexado para sempre.
+- **A seção *Motivation* é a mais valiosa**: ela ensina por que a linguagem é como é, e isso se transfere para o próximo problema.
+- **Uma versão por ano, em outubro; cinco anos de vida** (PEP 602). Sustente o que a montante sustenta — nem uma versão morta a mais, nem uma viva a menos.
+- **Constantes se mexem entre versões.** Medido: o limiar do coletor foi de 700 (3.12) para 2000 (3.13), e o terceiro valor foi a zero no 3.14. Número citado de memória sempre tem versão.
+- **O 3.14 trouxe cinco recursos grandes de uma vez** — `annotationlib`, `concurrent.interpreters`, `string.templatelib`, `compression.zstd` e `sys.remote_exec` —, nenhum dos quais existia dois anos antes.
+- **O PEP 649 mudou quando a anotação é avaliada.** Medido: até o 3.13 o módulo nem carrega; a partir do 3.14 ele carrega e a falha só aparece ao ler `__annotations__`.
+- **Deprecação avisa com antecedência e diz a versão de remoção** — mas em silêncio. `-W error::DeprecationWarning` e `filterwarnings` no `pyproject.toml` transformam o aviso em lista de tarefas antes do prazo. O PEP 594 já levou dezenove módulos.
+- **`ruff --select UP` faz metade da migração sozinho** e sabe onde parar: cinco das oito correções eram automáticas.
+- **Quatro fontes bastam para acompanhar**: o *What's New* anual, os changelogs das dependências, o Discourse quando houver dúvida, e uma newsletter se você gostar do formato.
+- **O que faz alguém melhorar depois deste livro** é ler a biblioteca padrão, terminar projetos pequenos, explicar para os outros e contribuir — começando por relatar bem um bug.
+- **A disposição é o que sobra**: medir em vez de supor, ler o fonte em vez de adivinhar, escrever o exemplo pequeno que decide a dúvida. A sintaxe envelhece; isso não.
