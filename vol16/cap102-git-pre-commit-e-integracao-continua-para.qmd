@@ -1,3 +1,501 @@
 # Git, pre-commit e integração contínua para projetos Python {#sec-cap102}
 
-*(em elaboracao)*
+Alguma coisa quebrou. O cálculo de mediana está devolvendo o número errado para listas de tamanho par, e o relatório mensal saiu com valores que ninguém consegue explicar. O bug não é novo — está no ar há semanas. Entre a última versão que sabidamente funcionava e a de hoje há vinte commits, e nenhum deles se chama "quebra a mediana".
+
+Este capítulo é sobre o conjunto de hábitos e ferramentas que transforma essa situação em quatro minutos de trabalho em vez de dois dias: um histórico que se pode interrogar, um conjunto de checagens que roda antes de o erro entrar, e uma integração contínua que reprova o que passou pelas duas anteriores. Não é burocracia — é o que permite tocar em código antigo sem medo.
+
+Todos os exemplos são reais: Linux (WSL2), git 2.53.0, `pre-commit` 4.6.2, `ruff` 0.14.5, `pytest` 9.1.1.
+
+::: {#fig-tres-portoes}
+```{.tikz}
+%%| filename: tres-portoes
+%%| alt: Tres portoes de qualidade com custo, latencia e o que cada um pega
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=4.1cm,
+             minimum height=3.6cm,font=\tiny,inner sep=6pt},
+  hd/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.3,-4.9) rectangle (14.4,3.6);
+
+  \node[hd] at (-0.2,3.3) {tres portoes --- quanto mais cedo, mais barato};
+
+  \node[bx,fill=manualgreen!16] at (2.3,1.1)
+    {\textbf{1. antes do commit}\\ \texttt{pre-commit}\\[3pt]
+     \textbf{latencia:} \textbf{0.52 s} no\\ repositorio inteiro\\[3pt]
+     \textbf{pega:} formatacao, import\\ nao usado, YAML quebrado,\\
+     chave privada, commit direto\\ na \texttt{main}\\[3pt]
+     \textbf{nao pega:} nada que\\ dependa de rodar em outra\\ plataforma};
+
+  \node[bx,fill=manualblue!14] at (7.1,1.1)
+    {\textbf{2. no pull request}\\ integracao continua\\[3pt]
+     \textbf{latencia:} minutos ---\\ \textbf{11m25s} na CI deste livro\\[3pt]
+     \textbf{pega:} teste que so quebra\\ noutro sistema operacional ou\\
+     noutra versao do Python;\\ dependencia que so existe\\ na sua maquina\\[3pt]
+     \textbf{nao pega:} o que ninguem\\ escreveu teste para};
+
+  \node[bx,fill=manualyellow!22] at (11.9,1.1)
+    {\textbf{3. na etiqueta}\\ publicacao\\[3pt]
+     \textbf{latencia:} minutos, uma\\ vez por versao\\[3pt]
+     \textbf{pega:} \texttt{wheel} incompleto,\\
+     metadado errado, artefato\\ que nao instala limpo\\[3pt]
+     \textbf{nao pega:} nada que os\\ dois anteriores deixaram\\ passar --- por isso a
+     ordem\\ importa};
+
+  \node[nt] at (-0.2,-1.7)
+    {\textbf{e quando algo passa pelos tres?} Ai entra o quarto instrumento, que
+     nao e um portao e sim uma busca: \texttt{git bisect run}. Ele usa o historico
+     como estrutura de dados e encontra o commit culpado por busca binaria.};
+
+  \node[draw,rounded corners,fill=manualgray!14,align=left,text width=13.4cm,
+        font=\tiny,inner sep=6pt] at (7.1,-3.4)
+    {\textbf{medido neste capitulo:} 20 commits, um deles quebrando o calculo em
+     silencio. O \texttt{git bisect run} testou \textbf{4} deles --- $\log_2 20
+     \approx 4.3$ --- e devolveu \texttt{887c23b ... is the first bad commit}. A
+     busca linear teria testado 8 na media. E a diferenca cresce: com 1000
+     commits, sao 10 testes contra 500.};
+\end{tikzpicture}
+```
+Os três portões de qualidade, e a busca que resolve o que escapou dos três.
+:::
+
+## O histórico é uma estrutura de dados
+
+A maioria das pessoas usa git como um botão de salvar. Ele é bem mais do que isso: é um registro consultável de *quando cada comportamento do sistema mudou*. Mas essa consulta só funciona se os commits tiverem sido feitos de um jeito que a permita.
+
+Duas propriedades bastam:
+
+**Um commit, uma mudança.** Se um commit renomeia trinta arquivos *e* corrige um bug, não há como isolar a correção — nem para revertê-la, nem para entendê-la, nem para achá-la depois. Renomeação vai num commit, correção vai em outro.
+
+**Todo commit compila e passa nos testes.** Um commit que não roda é um buraco no histórico: nenhuma ferramenta de busca consegue avaliá-lo, e todo mundo que passar por ele vai tropeçar.
+
+Com essas duas, o histórico vira pesquisável — e a ferramenta que o pesquisa é o `git bisect`.
+
+### `git bisect run`: busca binária no tempo
+
+Vinte commits, o último quebrado:
+
+```text
+###### o teste esta vermelho no HEAD
+FAILED tests/test_medidas.py::test_par - assert 3 == 2.5
+1 failed, 2 passed in 0.02s
+```
+
+Em vez de ler os vinte, você diz ao git onde está o bom, onde está o ruim, e **qual comando decide**:
+
+```bash
+git bisect start HEAD $(git rev-list --max-parents=0 HEAD)
+git bisect run python -m pytest -q
+```
+
+```text
+Bisecting: 9 revisions left to test after this (roughly 3 steps)
+[6e63e239] acrescenta funcao auxiliar 9
+running 'python' '-m' 'pytest' '-q'
+1 failed, 2 passed in 0.01s
+Bisecting: 2 revisions left to test after this (roughly 1 step)
+[4ce9b87c] acrescenta funcao auxiliar 11
+running 'python' '-m' 'pytest' '-q'
+3 passed in 0.01s
+Bisecting: 0 revisions left to test after this (roughly 1 step)
+[900d0db8] acrescenta funcao auxiliar 12
+running 'python' '-m' 'pytest' '-q'
+1 failed, 2 passed in 0.01s
+Bisecting: 0 revisions left to test after this (roughly 0 steps)
+[887c23b4] simplifica o calculo da mediana
+running 'python' '-m' 'pytest' '-q'
+1 failed, 2 passed in 0.02s
+887c23b410b6f93868a1463520f7565e5084155b is the first bad commit
+commit 887c23b410b6f93868a1463520f7565e5084155b
+    simplifica o calculo da mediana
+ src/estat/medidas.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+bisect found first bad commit
+```
+
+**Quatro testes.** O commit culpado se chamava "simplifica o cálculo da mediana", e a mudança inteira é uma linha:
+
+```python
+-    return (v[meio - 1] + v[meio]) / 2
++    return v[meio]
+```
+
+Uma "simplificação" que passava em dois dos três testes, foi revisada por alguém apressado, e produziu números plausíveis por semanas.
+
+O `git bisect run` funciona com qualquer comando que devolva zero para bom e não-zero para ruim. Não precisa ser `pytest`: pode ser um script de dez linhas que reproduz o problema. O tempo que você gasta escrevendo esse script é o único trabalho manual da operação inteira — e é sempre menos do que ler vinte diffs.
+
+::: {.callout-tip}
+## Quando a busca binária cai numa mina
+Se um commit do meio nem sequer roda (falha de import, dependência que ainda não existia), use o código de saída **125**: `git bisect` o entende como "não dá para julgar" e pula o commit. Num script de bisseção, `exit 125` é a forma de dizer "pule este". E `git bisect skip` faz o mesmo à mão.
+:::
+
+### A mensagem de commit é para daqui a dois anos
+
+"ajustes", "correções", "wip" são commits que existem mas não informam. A convenção que mais se difundiu é a *Conventional Commits*, e o motivo é prático: ela é legível por máquina.
+
+```text
+fix(medidas): corrige mediana para listas de tamanho par
+
+O caso par estava devolvendo o elemento do meio em vez da media dos
+dois centrais, desde 887c23b. Descoberto via bisect a partir de um
+relatorio de valores incoerentes.
+
+Closes #142
+```
+
+O prefixo (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`) permite gerar o changelog automaticamente e derivar a próxima versão semântica: `fix` incrementa o dígito de correção, `feat` o de funcionalidade, `BREAKING CHANGE:` no rodapé incrementa o maior. Ferramentas como `commitizen` e `python-semantic-release` fazem isso sem intervenção.
+
+Mesmo sem adotar a convenção inteira, duas regras pagam sozinhas: **a primeira linha diz o que mudou** (não "como"), **e o corpo diz por quê**. O "como" já está no diff; o "porquê" só existe na sua cabeça hoje.
+
+## O que nunca entra no repositório
+
+Um `.gitignore` de Python decente:
+
+```text
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.env
+.DS_Store
+```
+
+Três categorias, com motivos diferentes:
+
+- **Gerado** (`__pycache__`, `dist/`, `.coverage`): pode ser reconstruído, e versioná-lo produz conflito em toda mesclagem.
+- **Local** (`.venv/`, `.idea/`): é da sua máquina, não do projeto. Um `.venv` versionado quebra na máquina de qualquer outra pessoa.
+- **Segredo** (`.env`, `*.pem`, `id_rsa`): não pode existir no repositório em hipótese alguma.
+
+E aqui vem a parte que muita gente descobre tarde: **`git rm` não apaga nada do histórico.** O arquivo some do diretório de trabalho e continua em todo commit anterior, recuperável por qualquer pessoa que tenha um clone. Se um segredo foi commitado, a única resposta correta é **rotacionar o segredo**. Reescrever o histórico com `git filter-repo` ajuda a limpar, mas não desfaz o que já foi clonado — e você nunca sabe quem clonou.
+
+Por isso o segredo tem que ser barrado **antes** do commit. É a próxima seção.
+
+## `pre-commit`: o portão que custa meio segundo
+
+`pre-commit` instala um gancho no git que roda um conjunto de verificações sobre **os arquivos preparados para commit**, antes de ele acontecer. A configuração é um arquivo só:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-requests]
+```
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+O `install` escreve `.git/hooks/pre-commit`. Cada ferramenta roda num ambiente isolado que o próprio `pre-commit` cria — o que significa que a versão do `ruff` é a mesma para todo mundo do time, independentemente do que cada um tenha instalado.
+
+### O que acontece no primeiro commit
+
+Um arquivo escrito com pressa:
+
+```python
+import os
+import sys
+from   pathlib import Path
+def   soma( a,b ):
+    total=a+b
+    naousado = 42
+    return total
+```
+
+```text
+trim trailing whitespace.................................................Failed
+- hook id: trailing-whitespace
+- exit code: 1
+- files were modified by this hook
+
+Fixing sujo.py
+
+fix end of files.........................................................Passed
+check yaml...............................................................Passed
+check toml...............................................................Passed
+check for added large files..............................................Passed
+detect private key.......................................................Passed
+don't commit to branch...................................................Passed
+ruff check...............................................................Failed
+  -- commits no repositorio agora: 0
+```
+
+Zero commits. **O commit não aconteceu** — e essa é a armadilha que confunde todo mundo na primeira semana: `files were modified by this hook` significa que a ferramenta *consertou* o arquivo no disco, mas o que estava preparado para commit era a versão anterior. Você precisa preparar de novo:
+
+```bash
+git add -A
+git commit -m "..."
+```
+
+Na segunda tentativa os corretores automáticos passam, e sobra o que eles não sabem consertar:
+
+```text
+ruff check...............................................................Failed
+F841 Local variable `naousado` is assigned to but never used
+Found 1 error.
+```
+
+O `ruff` não apaga uma variável não usada por conta própria — apagar código é uma decisão sua, não dele (existe `--unsafe-fixes` para quem quiser o contrário, e o nome é honesto). Removida a linha à mão, tudo passa:
+
+```text
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+[trabalho (root-commit) 3ea5185] primeiro commit
+ 3 files changed, 32 insertions(+)
+```
+
+### Os dois ganchos que salvam o dia ruim
+
+```text
+###### commit direto na main
+don't commit to branch...................................................Failed
+- hook id: no-commit-to-branch
+- exit code: 1
+  commits: 1
+
+###### commit de uma chave privada
+detect private key.......................................................Failed
+```
+
+`no-commit-to-branch` custa zero e evita o commit feito na `main` por engano, aquele que só se percebe depois do `push`. `detect-private-key` é a única defesa que roda **antes** de o segredo entrar no histórico — depois disso, como vimos, não há apagamento que resolva.
+
+### O custo
+
+```text
+  pre-commit run --all-files: 0.52 s
+```
+
+Meio segundo para o repositório inteiro, com nove ganchos, incluindo `mypy`. Um portão que custa meio segundo é um portão que as pessoas não desligam — e essa é a única métrica de adoção que importa.
+
+Dois comandos completam o uso diário:
+
+```bash
+pre-commit run --all-files    # antes de abrir o PR, ou logo depois de adotar
+pre-commit autoupdate         # sobe os `rev:` para a ultima versao de cada gancho
+```
+
+::: {.callout-warning}
+## `--no-verify` é uma dívida, não um atalho
+`git commit --no-verify` pula todos os ganchos. Existe para a emergência real — a correção de produção às três da manhã. Usado como hábito, ele transforma o portão em decoração, e a checagem volta a acontecer só na CI, onde custa dez minutos em vez de meio segundo. Se você precisa dele com frequência, o problema é a configuração, não o gancho.
+:::
+
+## Integração contínua: o portão que roda no computador dos outros
+
+`pre-commit` roda na sua máquina, com o seu sistema operacional e a sua versão do Python. A integração contínua existe para responder a outra pergunta: **isso funciona em algum lugar que não seja a sua máquina?**
+
+Um workflow do GitHub Actions para um projeto Python moderno:
+
+```yaml
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualidade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      - run: uv sync --all-extras --dev
+      - run: uv run ruff check --output-format=github .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+
+  testes:
+    runs-on: ${{ matrix.so }}
+    strategy:
+      fail-fast: false
+      matrix:
+        so: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest -q --cov=src --cov-report=xml
+```
+
+Cada linha aqui está resolvendo um problema concreto:
+
+**`concurrency` com `cancel-in-progress`** cancela a execução anterior quando você empurra de novo no mesmo *pull request*. Sem isso, três `push` seguidos põem três matrizes de nove trabalhos na fila, e você espera por resultados de código que já não existe.
+
+**`fail-fast: false`** impede que a falha numa combinação cancele as outras oito. Você quer saber se o problema é "só no Windows" ou "em todas", e essa informação some com o padrão.
+
+**A matriz é uma decisão de custo.** Três sistemas por três versões são nove execuções por *push*. Se o projeto é uma biblioteca publicada no PyPI, isso é exatamente o que você precisa — porque os usuários vão usar todas as nove. Se é um serviço que roda num contêiner Linux com uma versão fixa, a matriz é desperdício: teste a combinação que existe em produção.
+
+**`--output-format=github`** faz o `ruff` emitir anotações no formato que o GitHub entende, e os erros aparecem **na linha do diff** no *pull request*, em vez de escondidos num registro de saída que ninguém abre.
+
+**`enable-cache: true`** no `setup-uv` guarda as dependências resolvidas entre execuções. Numa matriz de nove, é a diferença entre nove instalações completas e nove restaurações de cache.
+
+### O número que este livro produz
+
+A integração contínua deste manual — que renderiza o livro inteiro em HTML e PDF, com LaTeX e figuras TikZ — leva:
+
+```text
+completed  success  cap 098: memoria, contagem de referencias ...  Publicar livro  main  push  11m12s
+completed  success  licoes: cp1252 no subprocess corrompe ...      Publicar livro  main  push  11m25s
+completed  success  pages build and deployment                     gh-pages  dynamic       1m7s
+```
+
+Onze minutos. É um número aceitável para um build que compila LaTeX; seria péssimo para uma suíte de testes de biblioteca. **A latência da CI é um requisito de produto, não um detalhe de infraestrutura:** acima de dez minutos as pessoas param de esperar o resultado e passam a mesclar na esperança, e o portão perde a função.
+
+Repare também na segunda linha: são **dois** workflows. O primeiro publica em `gh-pages`; o segundo, disparado por essa publicação, é quem de fato coloca o site no ar. Entre os dois, a URL dá 404 — o que já custou mais de um diagnóstico errado de "quebrou o build".
+
+### Rodar o `pre-commit` também na CI
+
+Vale repetir o portão local na CI, com um passo só:
+
+```yaml
+      - uses: pre-commit/action@v3.0.1
+```
+
+Parece redundante e não é: ele pega quem commitou com `--no-verify`, quem clonou e nunca rodou `pre-commit install`, e quem editou um arquivo pela interface web do GitHub. O custo é de segundos.
+
+### Proteção de branch é o que dá dentes a tudo isso
+
+Nada disso vale se for possível empurrar direto na `main`. Nas configurações do repositório, exija: *pull request* antes da mesclagem, checagens obrigatórias aprovadas (nomeando os trabalhos do workflow), e branch atualizada com a base. É a configuração que transforma "a CI reprovou" em "não dá para mesclar".
+
+## Publicar
+
+O terceiro portão dispara numa etiqueta de versão:
+
+```yaml
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # exigido pela publicacao confiavel
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+```
+
+O detalhe importante é o que **não** está aí: nenhum token. A *publicação confiável* (`trusted publishing`) usa OIDC — o PyPI confia no GitHub para atestar que a execução veio daquele repositório e daquele workflow, e emite uma credencial de curta duração na hora. Não há segredo para vazar, rotacionar ou esquecer configurado num repositório arquivado. Para qualquer projeto novo, é a forma correta de publicar (@sec-cap032).
+
+## 🐍 Jeito Pythônico
+
+**Um commit, uma mudança, e todo commit passa nos testes.** É o que torna o histórico interrogável — e sem isso o `git bisect` não funciona.
+
+**Use `git bisect run` em vez de ler diffs.** Medido: 4 testes para achar o culpado entre 20 commits. Com 1000 commits seriam 10.
+
+**Código de saída 125 no script de bisseção** para pular commit que nem roda.
+
+**A primeira linha do commit diz o que mudou; o corpo diz por quê.** O "como" já está no diff.
+
+**Segredo commitado é segredo rotacionado.** `git rm` não apaga o histórico, e você não sabe quem já clonou.
+
+**`pre-commit` com `detect-private-key` e `no-commit-to-branch`** são as duas linhas de configuração com melhor retorno do arquivo inteiro.
+
+**Quando um gancho modifica o arquivo, prepare de novo e recommite.** `files were modified by this hook` significa que o commit não aconteceu.
+
+**Meça o custo do portão local.** Medido: 0,52 s no repositório inteiro com nove ganchos. Portão barato é portão que ninguém desliga; `--no-verify` habitual é sinal de configuração errada.
+
+**Na CI, `fail-fast: false` e `concurrency` com cancelamento.** O primeiro preserva a informação de qual combinação quebrou; o segundo evita esperar por código que já não existe.
+
+**Dimensione a matriz pelo público.** Biblioteca no PyPI precisa das nove combinações; serviço em contêiner precisa da que roda em produção.
+
+**Trate a latência da CI como requisito.** Acima de dez minutos as pessoas param de esperar, e o portão vira enfeite.
+
+**Publique com `trusted publishing`**, não com token: não há segredo para vazar.
+
+## 🧪 Laboratório
+
+**Passo 1 — um histórico para interrogar.** Crie um repositório com uma função `mediana` e três testes. Faça onze commits inofensivos, depois um que troque `(v[meio-1] + v[meio]) / 2` por `v[meio]`, depois mais sete inofensivos. Confirme que a suíte está vermelha no `HEAD`.
+
+**Passo 2 — bisseção manual.** Rode `git bisect start`, marque `bad` e `good`, e faça três ou quatro rodadas à mão, rodando `pytest` a cada uma. Anote quantos commits você precisou visitar.
+
+**Passo 3 — bisseção automática.** Refaça com `git bisect run python -m pytest -q` e reproduza:
+
+```text
+887c23b410b6f93868a1463520f7565e5084155b is the first bad commit
+    simplifica o calculo da mediana
+```
+
+**Passo 4 — o commit que nem roda.** Acrescente ao histórico um commit com erro de sintaxe. Rode a bisseção de novo e observe o resultado ficar sem sentido. Depois escreva um script de bisseção que devolve **125** nesse caso e confirme que o resultado volta ao normal.
+
+**Passo 5 — `pre-commit` do zero.** Instale, escreva o `.pre-commit-config.yaml` do capítulo e rode `pre-commit install`. Confirme que `.git/hooks/pre-commit` existe.
+
+**Passo 6 — o arquivo sujo.** Escreva o `sujo.py` com espaços em excesso, import não usado e variável morta. Tente commitar e reproduza:
+
+```text
+trim trailing whitespace ... Failed
+- files were modified by this hook
+  -- commits no repositorio agora: 0
+```
+
+**Passo 7 — o ciclo completo.** `git add -A` e commite de novo. Observe que sobra só o `F841`, entenda por que o `ruff` não o conserta sozinho, corrija à mão e feche o commit.
+
+**Passo 8 — os dois ganchos de segurança.** Renomeie a branch para `main` e tente commitar (deve falhar em `no-commit-to-branch`). Depois crie um arquivo com uma linha `-----BEGIN RSA PRIVATE KEY-----` e tente commitá-lo.
+
+**Passo 9 — o custo.** Cronometre `pre-commit run --all-files` com o repositório limpo. Se passar de dois segundos, descubra qual gancho é o culpado com `pre-commit run <id> --all-files`.
+
+**Passo 10 — a CI.** Escreva o workflow do capítulo num repositório seu, empurre e acompanhe com `gh run watch`. Depois quebre um teste de propósito e confira que a anotação do `ruff` aparece **na linha do diff** do *pull request*.
+
+**Passo 11 — a matriz.** Acrescente `windows-latest` à matriz e escreva um teste que use `pathlib` de um jeito que quebre no Windows (uma comparação de caminho com `/` literal, por exemplo). Confirme que só a coluna do Windows fica vermelha, graças ao `fail-fast: false`.
+
+**Passo 12 — proteção de branch.** Ative a proteção da `main` exigindo o trabalho `testes` aprovado. Abra um *pull request* com o teste quebrado e confirme que o botão de mesclagem fica indisponível.
+
+## Resumo
+
+- **O histórico só é útil se for interrogável**: um commit por mudança, e todo commit passando nos testes.
+- **`git bisect run` é busca binária no tempo.** Medido: 4 testes para achar o commit culpado entre 20; a busca linear testaria 8 na média, e a vantagem cresce com o logaritmo — 10 contra 500 em mil commits. Código de saída **125** pula commit que não roda.
+- **A mensagem de commit é para daqui a dois anos**: a primeira linha diz o que mudou, o corpo diz por quê. *Conventional Commits* torna isso legível por máquina e automatiza changelog e versão.
+- **`git rm` não apaga o histórico.** Segredo commitado é segredo rotacionado — a limpeza é secundária.
+- **`pre-commit` é o portão mais barato que existe**: 0,52 s no repositório inteiro com nove ganchos, versões de ferramenta iguais para todo o time.
+- **`files were modified by this hook` significa que o commit não aconteceu.** Prepare de novo com `git add` e recommite. É a confusão mais comum da primeira semana.
+- **`detect-private-key` e `no-commit-to-branch`** são as duas linhas com melhor retorno da configuração.
+- **A CI responde a outra pergunta**: funciona fora da sua máquina? Matriz dimensionada pelo público, `fail-fast: false` para preservar a informação, `concurrency` para não esperar por código morto, `--output-format=github` para o erro aparecer no diff.
+- **Latência da CI é requisito.** Onze minutos são aceitáveis para um livro com LaTeX; para uma suíte de biblioteca, seriam um convite a ignorar o resultado.
+- **Proteção de branch é o que dá dentes** a tudo isso, e `trusted publishing` publica sem token nenhum.
