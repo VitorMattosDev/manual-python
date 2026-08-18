@@ -111,7 +111,7 @@ A escolha do modelo é uma decisão de arquitetura, porque a diferença de preç
 | Claude Sonnet 5 | `claude-sonnet-5` | 3,00 | 15,00 |
 | Claude Haiku 4.5 | `claude-haiku-4-5` | 1,00 | 5,00 |
 
-: Preços por milhão de tokens (agosto de 2026). {#tbl-precos-llm}
+: Preço de tabela por milhão de tokens, em dólares, consultado em agosto de 2026. O Sonnet 5 estava então em preço promocional de introdução, mais baixo, com validade até o fim do mês. {#tbl-precos-llm}
 
 ::: {.callout-warning}
 ## Esta tabela envelhece
