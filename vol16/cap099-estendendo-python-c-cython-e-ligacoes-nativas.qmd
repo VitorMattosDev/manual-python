@@ -1,3 +1,455 @@
 # Estendendo Python: C, Cython e ligações nativas {#sec-cap099}
 
-*(em elaboracao)*
+Um laço numérico do seu programa demora dois segundos. Você já trocou a estrutura de dados, já eliminou a alocação dentro do laço, já rodou o `cProfile` (@sec-cap097) e o perfil é honesto: 96% do tempo está numa função de trinta linhas que faz aritmética de inteiros e nada mais. Não há nada de errado com o código — o problema é que cada `n // 2` custa uma busca de método, uma alocação de objeto e um incremento de contador de referências, e você está pedindo isso quarenta milhões de vezes.
+
+É aqui que Python oferece uma porta de saída que quase nenhuma outra linguagem de alto nível tem tão bem pavimentada: escrever a parte quente em C — ou em algo que vire C — e continuar chamando do Python. Este capítulo mostra as quatro rotas para atravessar essa fronteira, o que cada uma custa em tempo de execução e em complexidade de projeto, e quando a resposta certa é não atravessar coisa nenhuma.
+
+Todas as medições deste capítulo são reais, do mesmo ambiente: Linux (WSL2, 12 núcleos), CPython 3.13.12, GCC 15.2.0, Cython 3.2.9, cffi 2.1.1.
+
+## O núcleo que vamos empurrar para o C
+
+O exemplo é a sequência de Collatz: enquanto `n` não for 1, divida por 2 se for par, senão faça `3n + 1`. Contamos os passos e procuramos o pior caso abaixo de um limite. É aritmética pura, sem alocação, sem entrada e saída — o perfil de trabalho em que o C ganha do Python por uma ordem de grandeza.
+
+```python
+# puro.py
+def passos(n):
+    p = 0
+    while n != 1:
+        n = n // 2 if n % 2 == 0 else 3 * n + 1
+        p += 1
+    return p
+
+def maior_ate(limite):
+    melhor = 0
+    for i in range(1, limite):
+        p = passos(i)
+        if p > melhor:
+            melhor = p
+    return melhor
+```
+
+E o mesmo em C, num arquivo que não sabe que Python existe:
+
+```c
+/* collatz.c -- nucleo numerico puro, sem nada de Python dentro */
+#include <stdint.h>
+
+int passos(uint64_t n) {
+    int p = 0;
+    while (n != 1) {
+        n = (n % 2 == 0) ? n / 2 : 3 * n + 1;
+        p++;
+    }
+    return p;
+}
+
+int maior_ate(uint64_t limite) {
+    int melhor = 0;
+    for (uint64_t i = 1; i < limite; i++) {
+        int p = passos(i);
+        if (p > melhor) melhor = p;
+    }
+    return melhor;
+}
+```
+
+Repare no desenho: **o C não conhece Python**. Isso não é detalhe estético — é o que permite testar o `collatz.c` sozinho, compilá-lo para uma biblioteca compartilhada e alcançá-lo por três rotas diferentes sem reescrever nada.
+
+## Antes de escrever a primeira linha de C
+
+Três perguntas, na ordem, antes de considerar qualquer rota deste capítulo:
+
+**O algoritmo está certo?** Trocar uma busca linear por um `set` é um ganho de ordem de grandeza que não custa toolchain nenhuma. C não conserta um algoritmo quadrático; só o executa mais rápido.
+
+**Alguém já escreveu isso em C?** NumPy, `scipy`, `orjson`, `lxml`, `polars`, `regex` — o ecossistema científico e de dados inteiro já é C empacotado. Se o seu laço percorre um vetor numérico elemento a elemento, a resposta quase sempre é vetorizar com NumPy (@sec-cap080), não escrever C.
+
+**Você mediu?** Se o laço quente é 4% do tempo total, torná-lo instantâneo economiza 4%. A lei de Amdahl não negocia.
+
+Só depois disso a conversa começa. E quando começa, ela tem quatro portas.
+
+::: {#fig-quatro-portas}
+```{.tikz}
+%%| filename: quatro-portas
+%%| alt: As quatro rotas para chamar C a partir do Python, com custo e ganho medidos
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=3.05cm,
+             minimum height=3.6cm,font=\tiny,inner sep=5pt},
+  hd/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.3,-6.6) rectangle (14.4,3.6);
+
+  \node[hd] at (-0.2,3.3) {as quatro portas para o C --- tudo medido no mesmo nucleo};
+
+  \node[bx,fill=manualgreen!16] at (1.55,1.0)
+    {\textbf{ctypes}\\[2pt]
+     biblioteca padrao\\
+     \textbf{zero} compilacao\\ do seu lado\\[3pt]
+     ganho: \textbf{54.6x}\\
+     por chamada: \textbf{297 ns}\\[3pt]
+     armadilha: sem\\ \texttt{argtypes}, o argumento\\ vai truncado --- em silencio};
+
+  \node[bx,fill=manualblue!14] at (5.4,1.0)
+    {\textbf{cffi}\\[2pt]
+     dependencia externa\\
+     modo ABI: sem build\\
+     modo API: com build\\[3pt]
+     ganho: \textbf{54.7x}\\
+     por chamada: \textbf{206 ns}\\[3pt]
+     assinatura declarada\\ em C de verdade,\\ conferida na hora};
+
+  \node[bx,fill=manualyellow!22] at (9.25,1.0)
+    {\textbf{Cython}\\[2pt]
+     escreve Python\\ anotado, gera C\\[3pt]
+     sem tipos: \textbf{3.2x}\\
+     com \texttt{cdef}: \textbf{55.4x}\\
+     por chamada: \textbf{31 ns}\\[3pt]
+     o tipo e tudo: mesma\\ fonte, 17x de diferenca\\ entre as duas};
+
+  \node[bx,fill=manualred!14] at (13.1,1.0)
+    {\textbf{C API na mao}\\[2pt]
+     escreve C que\\ conhece \texttt{PyObject}\\[3pt]
+     ganho: \textbf{55.2x}\\
+     por chamada: \textbf{50 ns}\\[3pt]
+     controle total,\\ inclusive soltar o GIL:\\ \textbf{3.08x} com 4 threads};
+
+  \node[nt] at (-0.2,-1.7)
+    {\textbf{o eixo que decide:} as quatro rotas chegam ao mesmo tempo de
+     execucao quando o trabalho por chamada e grande --- 36 a 37 ms nas quatro.
+     O que as separa e o \emph{custo de atravessar a fronteira}, e ai a distancia
+     entre a mais barata e a mais cara e de quase dez vezes.};
+
+  \node[draw,rounded corners,fill=manualgray!14,align=left,text width=13.4cm,
+        font=\tiny,inner sep=6pt] at (7.1,-4.3)
+    {\textbf{escolha em uma linha:} biblioteca de terceiros ja compilada que voce
+     so quer chamar $\rightarrow$ \texttt{ctypes} ou \texttt{cffi}. Codigo Python
+     seu que precisa ficar rapido $\rightarrow$ \textbf{Cython}. Biblioteca nova,
+     com tipos proprios e controle do GIL $\rightarrow$ C API --- ou, melhor
+     ainda, \texttt{pybind11} / \texttt{nanobind} (C++) ou \texttt{PyO3} (Rust),
+     que escrevem a cerimonia por voce.};
+\end{tikzpicture}
+```
+As quatro rotas, com os números medidos neste capítulo.
+:::
+
+## Rota 1: `ctypes`, sem compilar nada do seu lado
+
+`ctypes` está na biblioteca padrão e carrega uma biblioteca compartilhada já compilada. Primeiro a biblioteca:
+
+```bash
+gcc -O2 -shared -fPIC -o libcollatz.so collatz.c
+```
+
+E o lado Python:
+
+```python
+import ctypes, pathlib
+
+lib = ctypes.CDLL(str(pathlib.Path(__file__).parent / "libcollatz.so"))
+lib.passos.argtypes = [ctypes.c_uint64]   # SEM isso, o argumento vai truncado
+lib.passos.restype = ctypes.c_int
+lib.maior_ate.argtypes = [ctypes.c_uint64]
+lib.maior_ate.restype = ctypes.c_int
+```
+
+Aquele comentário marca a armadilha mais cara do `ctypes`, e ela merece ser vista funcionando. Sem `argtypes`, o `ctypes` converte todo inteiro Python para o `int` da plataforma — 32 bits — e o que não couber é descartado sem uma palavra:
+
+```python
+n = 2**33 + 27          # nao cabe em 32 bits
+
+lib.passos.restype = ctypes.c_int
+print(f"  sem argtypes : passos({n}) = {lib.passos(n)}")
+lib.passos.argtypes = [ctypes.c_uint64]
+print(f"  com argtypes : passos({n}) = {lib.passos(n)}")
+```
+
+```text
+== o mesmo C, chamado de dois jeitos
+  sem argtypes : passos(8589934619) = 111
+  com argtypes : passos(8589934619) = 390
+  em Python    : passos(8589934619) = 390
+```
+
+Cento e onze é a resposta certa — **para o 27**. Os 33 bits de cima evaporaram, a função devolveu um número perfeitamente plausível, e nada avisou. É o modo de falha mais desagradável que existe: resultado errado, sem exceção, sem sinal. **Declare `argtypes` e `restype` em toda função**, inclusive nas que "obviamente" recebem um inteiro pequeno.
+
+O outro custo do `ctypes` aparece na travessia. Chamando uma função C que literalmente devolve o argumento, sem fazer nada:
+
+```text
+== custo de UMA chamada que nao faz nada (CPython 3.13.12)
+  chamada Python pura        38 ns   ( 1.0x a chamada Python)
+  Cython (def + cdef)        31 ns   ( 0.8x a chamada Python)
+  C API na mao               50 ns   ( 1.3x a chamada Python)
+  ctypes                    297 ns   ( 7.8x a chamada Python)
+  cffi (ABI)                206 ns   ( 5.4x a chamada Python)
+```
+
+O `ctypes` custa quase **oito chamadas Python** por travessia, porque ele monta a chamada em tempo de execução: consulta os `argtypes`, converte cada argumento, arma o quadro de pilha conforme a convenção de chamada da plataforma. É trabalho que um compilador faria uma vez, e que aqui é refeito a cada chamada.
+
+A conclusão prática: **`ctypes` é ótimo para poucas chamadas que fazem muito trabalho** — abrir um dispositivo, processar um buffer inteiro, chamar uma rotina de biblioteca do sistema. É péssimo para milhões de chamadas curtas.
+
+## Rota 2: `cffi`, a assinatura declarada em C
+
+`cffi` resolve o mesmo problema com uma ideia melhor: em vez de descrever tipos com objetos Python, você cola a declaração C de verdade.
+
+```python
+from cffi import FFI
+
+ffi = FFI()
+ffi.cdef("int passos(uint64_t n); int maior_ate(uint64_t limite);")
+lib = ffi.dlopen("./libcollatz.so")
+```
+
+Aquele `cdef` é analisado por um analisador de C real. Se a assinatura estiver errada, você descobre na hora — não com um resultado truncado três meses depois. E, como se vê na tabela acima, o custo por chamada cai para 206 ns.
+
+`cffi` tem dois modos, e a diferença importa:
+
+- **Modo ABI** (`ffi.dlopen`), acima: carrega o `.so` pronto, como o `ctypes`. Nada para compilar, mas você fica refém de a biblioteca ter exatamente a interface binária que você declarou.
+- **Modo API** (`ffi.set_source` e `ffi.compile`): gera e compila um módulo de extensão de verdade, com o compilador C conferindo tudo contra os cabeçalhos reais. Precisa de compilador na hora do build e, em troca, elimina uma classe inteira de erro — além de ficar mais rápido.
+
+Para código de produção que empacota uma biblioteca C, o modo API é a escolha certa. O modo ABI é para prototipar e para os casos em que você realmente não pode compilar nada.
+
+## Rota 3: Cython, e a lição dos tipos
+
+Cython compila Python para C. A primeira experiência a fazer é a mais reveladora: pegue o `puro.py` **sem mudar uma vírgula**, renomeie para `.pyx` e compile.
+
+```python
+# setup_cy.py
+from Cython.Build import cythonize
+from setuptools import setup
+
+setup(ext_modules=cythonize(["cy.pyx", "cy_ingenuo.pyx"], language_level=3))
+```
+
+```bash
+python setup_cy.py build_ext --inplace
+```
+
+O resultado é 3,2 vezes mais rápido. Bom, mas não é a ordem de grandeza que se espera de "compilar para C". O motivo está no C gerado: sem informação de tipo, o Cython não pode fazer nada além de chamar as mesmas funções da API do CPython que o interpretador chamaria. `n // 2` continua sendo um `PyNumber_FloorDivide` sobre dois `PyObject`. O ganho vem só de eliminar o laço de despacho de bytecode.
+
+Agora com tipos:
+
+```python
+# cython: language_level=3
+from libc.stdint cimport uint64_t
+
+cdef int _passos(uint64_t n) noexcept nogil:
+    cdef int p = 0
+    while n != 1:
+        n = n // 2 if n % 2 == 0 else 3 * n + 1
+        p += 1
+    return p
+
+def maior_ate(uint64_t limite):
+    cdef int melhor = 0, p
+    cdef uint64_t i
+    with nogil:
+        for i in range(1, limite):
+            p = _passos(i)
+            if p > melhor:
+                melhor = p
+    return melhor
+```
+
+Quatro declarações mudaram tudo:
+
+```text
+== maior_ate(300_000) -- melhor de 3, CPython 3.13.12
+  Python puro            2025.0 ms      1.0x   resultado=442
+  Cython sem tipos        639.4 ms      3.2x   resultado=442
+  Cython com cdef          36.5 ms     55.4x   resultado=442
+  C API na mao             36.7 ms     55.2x   resultado=442
+  ctypes                   37.1 ms     54.6x   resultado=442
+  cffi (ABI, dlopen)       37.0 ms     54.7x   resultado=442
+```
+
+**Dezessete vezes de diferença entre a mesma fonte compilada sem tipos e com tipos.** É a lição central do Cython: compilar não é o que acelera; *tipar* é. Com `cdef uint64_t`, o `n // 2` vira um deslocamento de bits em registrador e o laço inteiro roda sem tocar num `PyObject`.
+
+Duas peças a mais nesse trecho:
+
+`nogil` na função e `with nogil:` no laço declaram que aquele bloco não toca em nada de Python — e portanto o GIL pode ser solto (@sec-cap093). O Cython **verifica** isso em tempo de compilação: escreva uma lista Python dentro de um bloco `nogil` e o build falha. É uma garantia de compilador, não uma promessa sua.
+
+`noexcept` diz que a função não propaga exceção Python, o que dispensa a checagem de erro depois de cada chamada. Sem ele, o Cython gera código defensivo a mais.
+
+E há a alternativa moderna, o **modo Python puro**: em vez de um `.pyx`, você mantém um `.py` normal, usa as anotações do próprio Cython (`cython.int`, `cython.declare`) e o arquivo continua rodando sem compilação nenhuma quando o Cython não está instalado. Isso resolve o pior efeito colateral do `.pyx`: perder `ruff`, `mypy`, depurador e destaque de sintaxe do editor.
+
+::: {.callout-tip}
+## `cython -a` é a ferramenta que mais rende
+`cython -a cy.pyx` gera um HTML com cada linha pintada de amarelo em intensidade proporcional à quantidade de chamadas à API do CPython que ela gerou. Linha branca é C puro; linha amarelo-forte ainda está fazendo trabalho de interpretador. Otimizar Cython é, literalmente, apagar o amarelo — e é assim que se descobre qual `cdef` faltou.
+:::
+
+## Rota 4: a C API na mão
+
+Aqui você escreve C que sabe o que é um `PyObject`. É a rota mais trabalhosa e a única que dá controle total.
+
+```c
+/* capimod.c -- extensao escrita na mao com a C API do CPython */
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+#include <stdint.h>
+
+extern int maior_ate(uint64_t limite);   /* vem de collatz.c */
+
+static PyObject *
+capi_maior_ate(PyObject *self, PyObject *args)
+{
+    unsigned long long limite;
+    if (!PyArg_ParseTuple(args, "K", &limite))
+        return NULL;                      /* excecao ja levantada */
+
+    int melhor;
+    Py_BEGIN_ALLOW_THREADS                /* solta o GIL: so C daqui em diante */
+    melhor = maior_ate((uint64_t)limite);
+    Py_END_ALLOW_THREADS                  /* retoma o GIL antes de tocar em PyObject */
+
+    return PyLong_FromLong(melhor);
+}
+
+static PyMethodDef metodos[] = {
+    {"maior_ate", capi_maior_ate, METH_VARARGS,
+     "Maior numero de passos de Collatz abaixo de limite."},
+    {NULL, NULL, 0, NULL}                 /* sentinela obrigatoria */
+};
+
+static struct PyModuleDef modulo = {
+    PyModuleDef_HEAD_INIT, "capimod", "Collatz em C, via C API.", -1, metodos
+};
+
+PyMODINIT_FUNC
+PyInit_capimod(void)
+{
+    return PyModule_Create(&modulo);
+}
+```
+
+São cinquenta linhas para expor **uma** função, e cada bloco carrega uma regra:
+
+- **`PyArg_ParseTuple`** converte a tupla de argumentos conforme um formato (`"K"` é `unsigned long long`). Se ele devolveu falso, a exceção já foi levantada; seu trabalho é apenas `return NULL`.
+- **Devolver `NULL` significa "levantei uma exceção"**. Devolver `NULL` sem ter levantado nada produz um `SystemError` obscuro; devolver um objeto válido com uma exceção pendente é pior ainda.
+- **A sentinela `{NULL, NULL, 0, NULL}`** no fim do vetor de métodos não é opcional: é assim que o CPython sabe onde a lista acaba. Esquecê-la é uma falha de segmentação na importação.
+- **`PyInit_<nome>`** precisa casar exatamente com o nome do módulo, ou o import falha com `dynamic module does not define module export function`.
+- **Contagem de referências** (@sec-cap098) é sua responsabilidade. Aqui ela não aparece porque `PyLong_FromLong` devolve uma referência nova que vai direto para o chamador — mas assim que você manipular referências emprestadas, `Py_INCREF` e `Py_DECREF` viram a principal fonte de bugs, e o erro se manifesta como vazamento silencioso ou como falha de segmentação a mil chamadas de distância da causa.
+
+O build é o mesmo `setuptools`:
+
+```python
+from setuptools import Extension, setup
+
+setup(
+    name="capimod",
+    ext_modules=[Extension("capimod", sources=["capimod.c", "collatz.c"])],
+)
+```
+
+### O que só esta rota (e o Cython) dão: soltar o GIL
+
+`Py_BEGIN_ALLOW_THREADS` é a razão para escrever a C API na mão. Entre ele e `Py_END_ALLOW_THREADS`, a thread não tem o GIL, e **outras threads Python rodam de verdade**. É o mecanismo pelo qual NumPy, `zlib` e os drivers de banco de dados conseguem paralelismo real dentro de um único processo.
+
+Quatro threads no mesmo trabalho:
+
+```text
+== 4 threads no mesmo nucleo de trabalho (CPython 3.13.12)
+  Python puro (GIL preso)    1 thread  1302.2 ms | 4 threads   5533.7 ms | ganho 0.94x
+  C API com GIL solto        1 thread    23.9 ms | 4 threads     30.9 ms | ganho 3.08x
+```
+
+O Python puro tem ganho de **0,94x** — quatro threads levaram um pouco *mais* tempo do que quatro execuções sequenciais, porque o GIL as serializa e ainda cobra o custo de trocá-lo. A extensão com o GIL solto entrega **3,08x** em quatro threads, que é o esperado de paralelismo real com alguma perda por criação de thread e contenção de memória.
+
+::: {.callout-warning}
+## Entre os dois macros, nada de Python
+Tocar em qualquer `PyObject` — ler, escrever, incrementar referência — sem segurar o GIL corrompe o interpretador. Não levanta exceção: corrompe estrutura interna, e o processo morre depois, em outro lugar, com uma falha de segmentação que não aponta para o culpado. A regra é absoluta: entre `Py_BEGIN_ALLOW_THREADS` e `Py_END_ALLOW_THREADS`, só C.
+:::
+
+## O que ninguém conta: distribuir isso
+
+Escrever a extensão é a parte fácil. O custo real de uma dependência nativa aparece na hora de instalar na máquina dos outros.
+
+**Uma extensão é um binário por combinação de plataforma, arquitetura e versão do Python.** O arquivo gerado aqui se chama `capimod.cpython-313-x86_64-linux-gnu.so`, e esse nome é uma declaração completa: CPython 3.13, x86-64, Linux com glibc. No Windows seria um `.pyd`; no macOS ARM, outro arquivo. Publicar significa construir todas as combinações que você pretende suportar — e é para isso que existe o `cibuildwheel`, que roda a matriz inteira na integração contínua (tema do @sec-cap102).
+
+**Sem um pacote `wheel` para a plataforma do usuário, o `pip` compila do fonte** — e aí ele precisa de compilador, dos cabeçalhos de desenvolvimento do Python e das bibliotecas de que a sua extensão depende. Num contêiner enxuto ou num Windows sem as ferramentas de build, é aqui que a instalação quebra, com um erro de compilador que não diz nada a quem instalou.
+
+**A ABI estável (`abi3`)** é a saída para o pior desses problemas. Compilando contra a API limitada (`Py_LIMITED_API`), você produz um único binário que funciona em todas as versões do Python a partir da declarada — `capimod.abi3.so` em vez de um por versão. Custa acesso a partes da API e alguma perda de desempenho, e compensa muito quando a extensão é estável e você não quer refazer a matriz a cada lançamento do Python.
+
+## E as alternativas que não são C
+
+Escrever a C API na mão raramente é a melhor escolha hoje. Três alternativas cobrem quase todos os casos:
+
+- **`pybind11`** e **`nanobind`** (C++): você escreve C++ e a biblioteca gera toda a cola — conversão de tipos, contagem de referências, exceções que atravessam a fronteira nos dois sentidos. O `nanobind` é o sucessor mais enxuto e mais rápido do `pybind11`.
+- **PyO3 com `maturin`** (Rust): a rota que mais cresce. O compilador do Rust elimina por construção a classe de bug que domina extensões em C — uso após liberação, estouro de buffer, corrida de dados. `pydantic-core`, `ruff`, `uv` e `polars` são todos assim.
+- **Numba** (@sec-cap100): quando o núcleo é numérico e opera sobre arrays, um decorador pode entregar o mesmo ganho sem produzir binário nenhum para distribuir.
+
+## 🐍 Jeito Pythônico
+
+**Meça antes, e desconfie da vontade de escrever C.** Se o laço quente é 4% do tempo, o ganho máximo é 4%. Algoritmo primeiro, NumPy depois, C por último.
+
+**No `ctypes`, `argtypes` e `restype` em toda função, sem exceção.** Medido: `passos(2**33 + 27)` devolveu 111 em vez de 390 — resposta errada, plausível e silenciosa.
+
+**Prefira `cffi` ao `ctypes` quando a declaração vier de um cabeçalho C.** A assinatura é conferida por um analisador de C de verdade, e a travessia é mais barata (206 ns contra 297 ns).
+
+**Compilar não acelera; tipar acelera.** Medido: a mesma fonte deu 3,2x sem tipos e 55,4x com `cdef`. Use `cython -a` e otimize apagando o amarelo.
+
+**Prefira o modo Python puro do Cython ao `.pyx`** quando der: o arquivo continua sendo Python válido, e você não perde `ruff`, `mypy` nem depurador.
+
+**Solte o GIL no trabalho pesado.** `Py_BEGIN_ALLOW_THREADS` na C API, `with nogil:` no Cython. Medido: 3,08x com quatro threads contra 0,94x do Python puro. Entre os macros, nenhum `PyObject`.
+
+**`ctypes` e `cffi` para poucas chamadas grandes; Cython e C API para muitas chamadas pequenas.** Uma travessia de `ctypes` custa quase oito chamadas Python.
+
+**Não escreva a C API na mão sem motivo.** `nanobind`, `pybind11` ou PyO3 escrevem a cola por você e erram menos.
+
+**Trate a distribuição como parte do trabalho**, não como detalhe do fim. `cibuildwheel` monta a matriz; `abi3` evita refazê-la a cada versão do Python.
+
+## 🧪 Laboratório
+
+O laboratório inteiro precisa de compilador C e dos cabeçalhos do Python. No Debian ou Kali: `sudo apt install build-essential python3-dev`. No Windows, as *Build Tools for Visual Studio*; no macOS, `xcode-select --install`.
+
+**Passo 1 — a linha de base.** Escreva o `puro.py` e cronometre `maior_ate(300_000)` com `time.perf_counter`, melhor de três. Anote o número da sua máquina — é contra ele que tudo será comparado.
+
+**Passo 2 — a biblioteca compartilhada.** Escreva o `collatz.c` e compile:
+
+```bash
+gcc -O2 -shared -fPIC -o libcollatz.so collatz.c
+```
+
+Confira com `nm -D libcollatz.so | grep passos` que o símbolo está exportado.
+
+**Passo 3 — `ctypes`.** Carregue com `CDLL`, declare `argtypes` e `restype`, e confirme que o resultado bate com o do passo 1 (deve ser 442).
+
+**Passo 4 — o truncamento.** Reproduza a armadilha e explique de onde vem o 111:
+
+```text
+  sem argtypes : passos(8589934619) = 111
+  com argtypes : passos(8589934619) = 390
+```
+
+**Passo 5 — `cffi` nos dois modos.** Faça a versão ABI com `ffi.dlopen`. Depois faça a versão API com `ffi.set_source` e `ffi.compile`, e compare os tempos por chamada.
+
+**Passo 6 — Cython ingênuo.** Copie o `puro.py` para `cy_ingenuo.pyx` **sem alterar nada**, compile e meça. Você deve ver algo perto de 3x.
+
+**Passo 7 — Cython tipado.** Acrescente `cdef uint64_t`, `cdef int` e `nogil`, e meça de novo. O salto para perto de 55x é o ponto do capítulo.
+
+**Passo 8 — o amarelo.** Rode `cython -a cy_ingenuo.pyx`, abra o HTML e localize a linha mais amarela. Acrescente **só** o `cdef` que ela pede, recompile e veja a cor mudar.
+
+**Passo 9 — a C API.** Escreva o `capimod.c` e compile com `setuptools`. Depois **remova a sentinela** `{NULL, NULL, 0, NULL}` do vetor de métodos, recompile e importe — num diretório descartável, porque o processo pode morrer com falha de segmentação. Esse é o ponto do exercício: entender que o erro não é uma exceção.
+
+**Passo 10 — soltar o GIL.** Meça quatro threads com o Python puro e com a extensão:
+
+```text
+  Python puro (GIL preso)    ... 4 threads   5533.7 ms | ganho 0.94x
+  C API com GIL solto        ... 4 threads     30.9 ms | ganho 3.08x
+```
+
+Depois **tire** o par `Py_BEGIN_ALLOW_THREADS` e `Py_END_ALLOW_THREADS`, recompile e confirme que o ganho volta para perto de 1.
+
+**Passo 11 — a travessia.** Escreva um `int nada(int x)` que só devolve o argumento e exponha-o pelas quatro rotas. Meça o custo por chamada com `timeit` e reproduza a ordem de grandeza da tabela (de 31 a 297 ns).
+
+**Passo 12 — o nome do binário.** Liste os `.so` gerados e explique cada pedaço de `capimod.cpython-313-x86_64-linux-gnu.so`. Depois recompile com `py_limited_api=True` no `Extension` e a macro `Py_LIMITED_API` definida, e observe o nome virar `capimod.abi3.so`.
+
+## Resumo
+
+- **A fronteira só vale a pena depois do algoritmo e do NumPy.** C não conserta complexidade errada, e a lei de Amdahl limita o ganho ao peso da parte quente.
+- **Quatro rotas chegam ao mesmo destino em tempo de execução** quando o trabalho por chamada é grande: 36 a 37 ms nas quatro, contra 2025 ms do Python puro — cerca de **55x**.
+- **O que as separa é o custo de atravessar**: 31 ns no Cython, 50 ns na C API, 206 ns no `cffi` e 297 ns no `ctypes`, contra 38 ns de uma chamada Python comum. Poucas chamadas grandes toleram `ctypes`; milhões de chamadas curtas exigem Cython ou C API.
+- **`argtypes` no `ctypes` não é opcional.** Sem ele, `passos(2**33 + 27)` devolveu 111 em vez de 390 — truncamento silencioso, sem exceção.
+- **Compilar rende 3,2x; tipar rende 55,4x.** A mesma fonte, com e sem `cdef`, dá dezessete vezes de diferença. `cython -a` mostra exatamente onde falta tipo.
+- **Soltar o GIL é o motivo de descer ao C.** Medido: 3,08x com quatro threads na extensão contra 0,94x no Python puro. Entre `Py_BEGIN_ALLOW_THREADS` e `Py_END_ALLOW_THREADS`, nenhum `PyObject`.
+- **A C API na mão cobra caro em cerimônia** — sentinela, `PyInit_`, `NULL` significando exceção, contagem de referências manual — e hoje `nanobind`, `pybind11` e PyO3 fazem isso melhor.
+- **Distribuir é o custo escondido**: um binário por plataforma, arquitetura e versão do Python. `cibuildwheel` monta a matriz; `abi3` a reduz a um binário por plataforma.
