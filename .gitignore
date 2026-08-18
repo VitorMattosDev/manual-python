@@ -16,3 +16,5 @@ __pycache__/
 
 **/*.quarto_ipynb
 _figuras-check/
+index_files/
+*_files/
