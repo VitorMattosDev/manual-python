@@ -1,3 +1,472 @@
 # Arquitetura de projetos e código sustentável {#sec-cap101}
 
-*(em elaboracao)*
+O sistema tem três anos, quarenta mil linhas e uma reputação: "não encoste nesse módulo". Toda mudança pequena leva dois dias, porque a função que calcula desconto abre conexão com o banco, e o teste dela precisa de um contêiner Postgres, e o contêiner às vezes falha, e alguém acabou marcando o teste como `skip`. Ninguém decidiu isso. Foi construído um atalho por vez, cada um perfeitamente razoável no dia em que foi feito.
+
+Arquitetura de software, em Python, não é diagrama de caixinhas nem escolha de framework. É **a direção em que as dependências apontam** e **o que impede que essa direção se inverta na próxima sexta-feira às seis da tarde**. Este capítulo é sobre as duas coisas — e sobre as ferramentas que transformam a segunda numa checagem automática, não numa esperança.
+
+Todos os exemplos e saídas vêm de um projeto real construído e quebrado de propósito: Linux (WSL2), CPython 3.13.12, `pytest` 9.1.1, `import-linter` 2.13.
+
+## O layout do repositório não é gosto pessoal
+
+Antes de qualquer conversa sobre camadas, o `src`. A diferença entre os dois layouts parece cosmética:
+
+```text
+plano/                          srcl/
+  relatorio/                      src/
+    __init__.py                     relatorio/
+    formatos/                         __init__.py
+      csv_.py                         formatos/
+  tests/                                csv_.py
+  pyproject.toml                  tests/
+                                  pyproject.toml
+```
+
+Ela não é. Considere um erro banal e extremamente comum — o `pyproject.toml` declara o pacote, mas esquece o subpacote:
+
+```toml
+[tool.setuptools]
+packages = ["relatorio"]      # <- esqueceram de "relatorio.formatos"
+```
+
+No layout plano, os testes rodam na raiz do repositório e **passam**:
+
+```text
+###### LAYOUT PLANO -- pytest na raiz do repositorio, sem instalar
+.                                                                        [100%]
+1 passed in 0.01s
+  o import veio de: /home/vitor/v16/c101/plano/relatorio/__init__.py
+```
+
+Repare de onde veio o import: do diretório de trabalho, não de `site-packages`. O `pytest` põe a raiz do projeto no caminho de busca (@sec-cap029), o Python encontra o diretório `relatorio/` ali mesmo, e o teste nunca chega perto do pacote que você vai publicar.
+
+O que acontece com quem instala:
+
+```text
+  conteudo do wheel:
+    relatorio/__init__.py
+
+  -- importando de OUTRO diretorio, do pacote instalado:
+  File ".../site-packages/relatorio/__init__.py", line 1, in <module>
+    from relatorio.formatos.csv_ import escreve_csv
+ModuleNotFoundError: No module named 'relatorio.formatos'
+```
+
+O `wheel` saiu com **um arquivo**. A suíte verde não viu nada, porque testou o código-fonte, não o artefato.
+
+Agora o mesmo erro, no layout `src`:
+
+```text
+###### LAYOUT SRC -- exatamente o mesmo erro no pyproject.toml
+  -- pytest na raiz, sem instalar:
+ERROR tests/test_relatorio.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+```
+
+Falha na hora, na sua máquina, no primeiro segundo. Porque não existe nada chamado `relatorio` no diretório de trabalho: a única forma de importar é instalando, e instalar expõe o erro de empacotamento imediatamente.
+
+**É essa a função do `src`:** tornar impossível testar acidentalmente o código-fonte quando você acha que está testando o pacote instalado. Combine com `pip install -e .` para desenvolver (@sec-cap032), e a suíte passa a exercitar exatamente o que o usuário vai receber.
+
+## A regra da dependência
+
+O núcleo de toda arquitetura sustentável cabe numa frase: **as dependências apontam para dentro, na direção do que muda menos.**
+
+O que muda menos é a regra de negócio. O que muda mais é a borda: o banco de dados, o framework web, o formato do arquivo, a API de terceiros. Se a regra de negócio importa o banco, ela passa a mudar quando o banco muda — e você trocou uma coisa estável por uma instável sem ganhar nada.
+
+::: {#fig-regra-dependencia}
+```{.tikz}
+%%| filename: regra-dependencia
+%%| alt: Quatro camadas com dependencias apontando para dentro e dois atalhos que as violam
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=center,font=\scriptsize,
+             minimum height=1.05cm,text width=3.5cm,inner sep=4pt},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm},
+  hd/.style={font=\scriptsize\bfseries,anchor=west}
+]
+  \path (-0.3,-5.3) rectangle (14.4,3.6);
+
+  \node[hd] at (-0.2,3.3) {as dependencias apontam para dentro};
+
+  \node[bx,fill=manualgray!14] at (4.7,2.3) {\texttt{precos.web}\\[-1pt]
+    {\tiny traduz HTTP em chamada}};
+  \node[bx,fill=manualblue!14] at (4.7,0.8) {\texttt{precos.aplicacao}\\[-1pt]
+    {\tiny orquestra casos de uso}};
+  \node[bx,fill=manualgreen!18] at (4.7,-0.7) {\texttt{precos.dominio}\\[-1pt]
+    {\tiny regras e portas --- nada mais}};
+  \node[bx,fill=manualyellow!22] at (10.9,0.8) {\texttt{precos.infra}\\[-1pt]
+    {\tiny sqlite, HTTP, arquivos}};
+
+  \draw[->,>=stealth,thick] (4.7,1.78) -- (4.7,1.32);
+  \draw[->,>=stealth,thick] (4.7,0.28) -- (4.7,-0.18);
+
+  \draw[->,>=stealth,thick] (10.9,0.28) -- (10.9,-0.7) -- (6.45,-0.7);
+  \node[font=\tiny,anchor=south] at (8.7,-0.62) {implementa a porta};
+
+  \draw[->,>=stealth,thick] (6.45,2.3) -- (10.9,2.3) -- (10.9,1.32);
+  \node[font=\tiny,anchor=south] at (8.7,2.38) {monta o adaptador};
+
+  \draw[->,>=stealth,thick,color=manualred,dashed]
+    (2.95,0.8) .. controls (0.9,0.8) and (0.9,2.3) .. (2.95,2.3);
+  \node[font=\tiny,color=manualred,anchor=center] at (2.1,1.55) {proibido};
+
+  \node[nt] at (-0.2,-1.9)
+    {\textbf{o dominio nao importa ninguem.} Ele declara o que precisa como
+     \texttt{Protocol} --- a \emph{porta} --- e a infraestrutura implementa. A seta
+     de fora para dentro e o que permite trocar sqlite por Postgres sem tocar numa
+     regra de negocio, e testar a regra em milissegundos com um duble em memoria.};
+
+  \node[draw,rounded corners,fill=manualred!12,align=left,text width=13.4cm,
+        font=\tiny,inner sep=6pt] at (7.1,-3.8)
+    {\textbf{os dois atalhos que o \texttt{import-linter} pegou}, medidos neste
+     capitulo:\\[3pt]
+     \textbf{atalho A} --- \texttt{aplicacao} importa \texttt{infra} direto:
+     \emph{3 testes passaram}, contrato \textsc{broken}. A suite nao viu nada; so o
+     linter viu.\\[2pt]
+     \textbf{atalho B} --- \texttt{dominio} importa \texttt{infra}: fechou um ciclo
+     e a suite morreu com \texttt{ImportError ... partially initialized module}.
+     Erosao de arquitetura vira erro de import quando ja e tarde.};
+\end{tikzpicture}
+```
+A regra da dependência, e os dois atalhos que a quebram.
+:::
+
+Na prática isso são três arquivos. O domínio declara **o que precisa**, como um `Protocol` (@sec-cap047):
+
+```python
+# precos/dominio/portas.py
+from typing import Protocol
+from precos.dominio.modelo import Produto
+
+class RepositorioProdutos(Protocol):
+    def buscar(self, sku: str) -> Produto | None: ...
+    def salvar(self, produto: Produto) -> None: ...
+```
+
+A aplicação **recebe** a porta, nunca a constrói:
+
+```python
+# precos/aplicacao/casos.py
+def aplicar_desconto(repo: RepositorioProdutos, sku: str, percentual: Decimal) -> Produto:
+    produto = repo.buscar(sku)
+    if produto is None:
+        raise LookupError(f"sku desconhecido: {sku}")
+    novo = produto.com_desconto(percentual)
+    repo.salvar(novo)
+    return novo
+```
+
+E a infraestrutura implementa, sem que ninguém a anuncie:
+
+```python
+# precos/infra/sqlite_repo.py
+class RepoSQLite:
+    def __init__(self, conexao: sqlite3.Connection) -> None:
+        self.con = conexao
+        ...
+```
+
+`RepoSQLite` não herda de nada nem declara que implementa a porta. É *duck typing* estrutural: o `mypy` confere a compatibilidade no ponto em que ele é passado como `RepositorioProdutos`, e em tempo de execução nada acontece. Você tem a verificação sem o acoplamento.
+
+O ganho é imediato e mensurável no teste:
+
+```python
+class RepoMemoria:
+    def __init__(self, itens):
+        self.itens = dict(itens)
+    def buscar(self, sku):
+        return self.itens.get(sku)
+    def salvar(self, produto):
+        self.itens[produto.sku] = produto
+```
+
+```text
+...                                                                      [100%]
+3 passed in 0.02s
+```
+
+Vinte milissegundos para toda a suíte de domínio e de aplicação, sem banco, sem contêiner, sem rede. É esse número que decide se as pessoas vão rodar os testes antes de cada commit ou uma vez por dia.
+
+::: {.callout-note}
+## Isso não é "hexagonal" nem "clean architecture"
+Os nomes bonitos descrevem variações da mesma ideia de trinta anos: inverter a dependência entre política e mecanismo. Você não precisa adotar o vocabulário nem a estrutura de dez pastas. Precisa de **uma** decisão — o domínio não importa a borda — e de uma forma de fazê-la valer.
+:::
+
+## O que impede a erosão: contratos verificados
+
+A decisão acima não sobrevive sozinha. Ela é quebrada por um `import` a mais numa tarde apertada, e ninguém percebe na revisão porque a linha parece inofensiva.
+
+O `import-linter` transforma a decisão em contrato, no `pyproject.toml`:
+
+```toml
+[tool.importlinter]
+root_package = "precos"
+
+[[tool.importlinter.contracts]]
+name = "As camadas nao podem ser invertidas"
+type = "layers"
+layers = ["precos.web", "precos.aplicacao", "precos.dominio"]
+
+[[tool.importlinter.contracts]]
+name = "O dominio nao conhece nada alem de si mesmo"
+type = "forbidden"
+source_modules = ["precos.dominio"]
+forbidden_modules = ["precos.infra", "precos.web", "precos.aplicacao"]
+
+[[tool.importlinter.contracts]]
+name = "A aplicacao fala com portas, nao com adaptadores"
+type = "forbidden"
+source_modules = ["precos.aplicacao"]
+forbidden_modules = ["precos.infra", "precos.web"]
+```
+
+```text
+Analyzed 10 files, 6 dependencies.
+----------------------------------
+
+As camadas nao podem ser invertidas KEPT
+O dominio nao conhece nada alem de si mesmo KEPT
+A aplicacao fala com portas, nao com adaptadores KEPT
+
+Contracts: 3 kept, 0 broken.
+```
+
+Agora o atalho. Uma linha em `aplicacao/casos.py`:
+
+```python
+from precos.infra.sqlite_repo import RepoSQLite  # <- atalho
+```
+
+```text
+  -- pytest:
+...                                                                      [100%]
+3 passed in 0.02s
+
+  -- lint-imports:
+A aplicacao fala com portas, nao com adaptadores BROKEN
+
+precos.aplicacao is not allowed to import precos.infra:
+
+-   precos.aplicacao.casos -> precos.infra.sqlite_repo (l.6)
+```
+
+**Os três testes continuaram passando.** É o ponto do capítulo: a suíte verifica comportamento, não estrutura. Ela não tem como saber que aquela linha acabou de amarrar o caso de uso ao SQLite — daqui a seis meses, quando alguém quiser testá-lo sem banco, vai descobrir que não dá, e ninguém vai lembrar de qual commit foi.
+
+O linter viu na hora, apontou arquivo e linha, e devolve código de saída diferente de zero. Posto na integração contínua — tema do próximo capítulo —, ele reprova o *pull request*.
+
+### E quando a erosão cobra caro
+
+O segundo atalho é pior: `dominio/modelo.py` importando a infraestrutura. Aí o custo aparece imediatamente, mas de um jeito que não parece um problema de arquitetura:
+
+```text
+  -- pytest:
+E   ImportError: cannot import name 'Produto' from partially initialized module
+    'precos.dominio.modelo' (most likely due to a circular import)
+
+  -- lint-imports:
+precos.dominio is not allowed to import precos.infra:
+-   precos.dominio.modelo -> precos.infra.sqlite_repo (l.8)
+```
+
+Porque a infraestrutura já importava o domínio — ela precisa do `Produto` para construir. O atalho fechou o ciclo:
+
+```text
+== ciclos: 1
+  precos.dominio.modelo -> precos.infra.sqlite_repo -> precos.dominio.modelo
+```
+
+Import circular quase nunca é um problema de import. É um problema de **direção de dependência** que se manifesta como erro de import. As soluções que se encontra pela internet — mover o import para dentro da função, usar `TYPE_CHECKING`, importar tarde — são analgésicos: fazem o sintoma sumir e mantêm o acoplamento. A solução real é perguntar qual das duas setas não deveria existir.
+
+### Enxergando o grafo com a biblioteca padrão
+
+Não é preciso ferramenta para ver o grafo — o módulo `ast` resolve em quarenta linhas:
+
+```python
+def grafo(raiz: Path, pacote: str) -> dict[str, set[str]]:
+    g: dict[str, set[str]] = {}
+    for arq in sorted(raiz.rglob("*.py")):
+        mod = ".".join(arq.relative_to(raiz.parent).with_suffix("").parts)
+        mod = mod.removesuffix(".__init__")
+        alvos = set()
+        for no in ast.walk(ast.parse(arq.read_text(encoding="utf-8"))):
+            if isinstance(no, ast.ImportFrom) and no.module and no.module.startswith(pacote):
+                alvos.add(no.module)
+            elif isinstance(no, ast.Import):
+                alvos |= {a.name for a in no.names if a.name.startswith(pacote)}
+        g[mod] = {a for a in alvos if a != mod}
+    return g
+```
+
+```text
+== 10 modulos, 6 arestas internas
+  precos.aplicacao.casos
+      -> precos.dominio.modelo
+      -> precos.dominio.portas
+  precos.dominio.portas
+      -> precos.dominio.modelo
+  precos.infra.sqlite_repo
+      -> precos.dominio.modelo
+  precos.web.rotas
+      -> precos.aplicacao.casos
+      -> precos.infra.sqlite_repo
+```
+
+Seis arestas para dez módulos. Esse número é um sinal vital: quando ele cresce mais rápido que o número de módulos, o projeto está virando uma malha, e toda mudança passa a tocar em tudo. `pydeps` desenha isso; `import-linter` reprova; o `ast` te dá o número sem instalar nada.
+
+## O que fica *dentro* de cada módulo
+
+Direção de dependência resolve o esqueleto. Três hábitos resolvem o resto.
+
+### O `__init__.py` é a interface pública
+
+Um pacote sem `__init__.py` pensado obriga o usuário a importar de caminhos internos, e aí toda reorganização interna é uma quebra de compatibilidade. Exponha o que é contrato e nada mais:
+
+```python
+# precos/__init__.py
+from precos.dominio.modelo import Produto
+from precos.aplicacao.casos import aplicar_desconto
+
+__all__ = ["Produto", "aplicar_desconto"]
+```
+
+`__all__` (@sec-cap030) não é decoração: ele define o que `from precos import *` traz, e é o que ferramentas de documentação e verificadores de tipo leem como superfície pública. O que não está nele, você pode mudar amanhã.
+
+### Configuração é argumento, não estado global
+
+O padrão que mais destrói testabilidade em Python é este:
+
+```python
+# ruim: le o ambiente na importacao
+DB_URL = os.environ["DB_URL"]
+conexao = criar_conexao(DB_URL)
+```
+
+Três consequências, todas ruins: o módulo não importa sem a variável definida; o teste não consegue trocar a conexão; e a ordem de importação passa a importar. A alternativa é ler a configuração **uma vez, no ponto de entrada**, e passá-la adiante:
+
+```python
+# precos/config.py
+@dataclass(frozen=True)
+class Config:
+    db_url: str
+    tempo_limite: float = 5.0
+
+    @classmethod
+    def do_ambiente(cls) -> "Config":
+        return cls(db_url=os.environ["DB_URL"],
+                   tempo_limite=float(os.environ.get("TEMPO_LIMITE", "5")))
+```
+
+O `main` monta tudo — é o único lugar que conhece todas as peças — e o resto do sistema recebe o que precisa. Pydantic Settings (@sec-cap087) faz isso com validação e mensagens de erro decentes, se o projeto já usa Pydantic.
+
+### Complexidade também é um limite verificável
+
+`ruff` implementa a métrica de McCabe, e ela pode virar erro de lint:
+
+```toml
+[tool.ruff.lint]
+select = ["E", "F", "I", "C90", "B", "UP"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+```
+
+Uma função com complexidade 25 não é necessariamente errada, mas é sempre uma que ninguém consegue segurar na cabeça inteira. O limite não conserta o código — ele obriga a conversa a acontecer no *pull request*, não três anos depois.
+
+::: {.callout-tip}
+## O teste é o melhor sensor de arquitetura que existe
+Antes de qualquer métrica, olhe para os testes. Se testar uma regra de negócio exige subir um banco, a regra está acoplada ao banco. Se um teste precisa de mais de dez linhas de preparação, a unidade testada tem dependências demais. Se ninguém roda a suíte porque ela leva sete minutos, a arquitetura já decidiu por você. **Teste difícil é sintoma de desenho, não de falta de disciplina.**
+:::
+
+## O que registrar, e como
+
+Duas práticas baratas que salvam o projeto de si mesmo:
+
+**Registro de decisões de arquitetura.** Um arquivo Markdown por decisão, em `docs/adr/`, com quatro seções: contexto, decisão, consequências, situação. Vinte linhas cada. O valor não está no que já se sabe hoje — está em, dois anos depois, alguém encontrar `0007-por-que-nao-usamos-orm.md` e entender que a alternativa foi considerada e rejeitada por um motivo concreto, em vez de reabrir a discussão do zero.
+
+**Uma sessão de código executável no `README`.** Se o exemplo do `README` não roda, ele mente. `doctest` (@sec-cap073) na integração contínua resolve isso de graça.
+
+## Onde parar
+
+Este capítulo pode ser lido como um convite ao excesso, e vale dizer o contrário com todas as letras: **a maior parte do custo de arquitetura em projetos pequenos é arquitetura demais.**
+
+Um script de 300 linhas não precisa de camadas. Uma ferramenta de linha de comando com dois comandos não precisa de portas nem de adaptadores. Um `Protocol` com uma única implementação, que nunca terá outra, é indireção pura — custa uma camada de leitura e não compra nada.
+
+Os sinais de que chegou a hora de separar são concretos, e todos aparecem antes de a dor ficar cara:
+
+- O teste de uma regra de negócio precisa de infraestrutura.
+- Trocar uma biblioteca de borda obrigaria a mexer em código de negócio.
+- Duas pessoas não conseguem trabalhar em partes diferentes sem conflito constante.
+- O mesmo conceito aparece com três nomes diferentes em três módulos.
+- O grafo de imports virou uma malha, e todo teste importa metade do sistema.
+
+Até lá, um pacote plano com módulos coesos é uma arquitetura perfeitamente boa — e infinitamente mais fácil de refatorar depois do que uma estrutura de dez camadas construída para um problema que não chegou.
+
+## 🐍 Jeito Pythônico
+
+**Use o layout `src`.** Medido: com o layout plano e um erro de empacotamento, os testes passaram e o `wheel` saiu com um arquivo só; com `src`, o mesmo erro quebrou na primeira execução local.
+
+**Dependências apontam para dentro.** O domínio declara o que precisa como `Protocol` e não importa ninguém; a infraestrutura implementa. Isso é o que permite um duble em memória e uma suíte de 20 ms.
+
+**`Protocol` em vez de classe base abstrata** para as portas: o adaptador não precisa herdar de nada, o `mypy` confere na hora de passar, e não há acoplamento em tempo de execução.
+
+**Ponha a arquitetura num contrato verificável.** Medido: o atalho da aplicação para a infraestrutura passou nos três testes e foi reprovado pelo `import-linter`, com arquivo e linha.
+
+**Import circular é sintoma, não doença.** Mover o import para dentro da função esconde o acoplamento; a pergunta certa é qual das duas setas não deveria existir.
+
+**Configuração é argumento, não estado de módulo.** Leia o ambiente uma vez no ponto de entrada e passe adiante; `os.environ` no topo do módulo impede o import e mata a testabilidade.
+
+**`__all__` no `__init__.py` define a superfície pública** — e, por consequência, o que você tem liberdade de mudar sem quebrar ninguém.
+
+**Trate complexidade como limite de lint** (`C90` do `ruff`, `max-complexity = 10`), para a conversa acontecer no *pull request*.
+
+**Se o teste está difícil, o desenho está errado.** É o sensor mais confiável e o mais barato de consultar.
+
+**Não construa a camada antes da dor.** Um `Protocol` com uma implementação única é indireção sem contrapartida.
+
+## 🧪 Laboratório
+
+**Passo 1 — o layout plano mentindo.** Monte um projeto plano com um subpacote e "esqueça" de declará-lo em `packages`. Rode `pytest` na raiz e confirme o verde. Depois imprima `pacote.__file__` e mostre que veio do diretório de trabalho.
+
+**Passo 2 — o `wheel` vazio.** Construa com `python -m build --wheel` e liste o conteúdo:
+
+```python
+import zipfile, glob
+z = zipfile.ZipFile(glob.glob("dist/*.whl")[0])
+print([n for n in sorted(z.namelist()) if n.endswith(".py")])
+```
+
+Instale num venv limpo, importe **de outro diretório** e reproduza o `ModuleNotFoundError`.
+
+**Passo 3 — o mesmo erro no `src`.** Refaça com o layout `src` e confirme que a falha aparece já no `pytest` local. Escreva em uma frase por que a diferença existe.
+
+**Passo 4 — as quatro camadas.** Construa o pacote `precos` com `dominio`, `aplicacao`, `infra` e `web`, seguindo os arquivos do capítulo. Confirme que o `dominio` não tem nenhum import interno além dele mesmo.
+
+**Passo 5 — a porta e os dois adaptadores.** Escreva `RepoSQLite` e `RepoMemoria` sem que nenhum dos dois herde de `RepositorioProdutos`. Rode `mypy` e confirme que ele aceita os dois onde a porta é esperada. Depois **remova um método** de `RepoMemoria` e veja o `mypy` reclamar.
+
+**Passo 6 — a suíte rápida.** Teste o domínio e o caso de uso sem tocar em banco, e cronometre. O alvo é a faixa dos milissegundos:
+
+```text
+3 passed in 0.02s
+```
+
+**Passo 7 — os contratos.** Instale `import-linter`, escreva os três contratos no `pyproject.toml` e rode `lint-imports`. Confirme `3 kept, 0 broken`.
+
+**Passo 8 — o atalho invisível.** Acrescente `from precos.infra.sqlite_repo import RepoSQLite` em `aplicacao/casos.py`. Rode `pytest` (passa) e `lint-imports` (reprova). Confira o código de saída com `echo $?` — é ele que a integração contínua usa.
+
+**Passo 9 — o atalho caro.** Ponha o mesmo import em `dominio/modelo.py` e observe o `ImportError` de import circular. Explique por que este quebrou e o do passo 8 não.
+
+**Passo 10 — o grafo à mão.** Escreva o extrator com `ast` e a busca de ciclos. Rode no seu próprio pacote e conte as arestas. Se a razão arestas por módulo passar de 2, escolha um módulo e liste o que ele importa.
+
+**Passo 11 — configuração injetada.** Pegue um módulo seu que lê `os.environ` no topo, mova a leitura para uma `dataclass` de configuração construída no `main`, e escreva um teste que roda **sem nenhuma variável de ambiente definida**.
+
+**Passo 12 — o limite de complexidade.** Ligue `C90` no `ruff` com `max-complexity = 10` e rode no seu projeto. Pegue a função mais complexa e extraia funções até ela passar — sem mudar nenhum teste.
+
+## Resumo
+
+- **O layout `src` não é estilo.** Medido: com layout plano e um erro de `packages`, a suíte passou e o `wheel` saiu com um único arquivo; o usuário recebeu `ModuleNotFoundError`. Com `src`, o mesmo erro falhou na primeira execução local.
+- **A regra da dependência é a arquitetura**: as setas apontam para dentro, do que muda mais para o que muda menos. O domínio declara portas como `Protocol` e não importa ninguém.
+- **A inversão compra testabilidade medível**: três testes de regra e de caso de uso em **20 ms**, com um duble em memória, sem banco nem contêiner.
+- **A suíte não protege a arquitetura.** Medido: o atalho da aplicação para a infraestrutura passou nos três testes e só foi pego pelo `import-linter`, com arquivo e linha.
+- **Import circular é um problema de direção**, não de import. O atalho do domínio para a infraestrutura fechou um ciclo e derrubou a suíte com `partially initialized module`.
+- **O grafo de imports é um sinal vital** — dez módulos e seis arestas aqui; quando as arestas crescem mais rápido que os módulos, o projeto virou malha. `ast` extrai isso em quarenta linhas.
+- **Dentro do módulo**: `__all__` define a superfície pública, configuração entra por argumento a partir do ponto de entrada, e complexidade vira limite de lint (`C90`).
+- **Teste difícil é sintoma de desenho.** É o sensor mais barato e mais confiável de que a estrutura precisa mudar.
+- **Arquitetura demais é o erro mais comum em projeto pequeno.** Separe quando o teste pedir infraestrutura, quando trocar uma borda tocar no negócio, ou quando o grafo virar malha — não antes.
