@@ -166,7 +166,7 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 ### Volume 16 — Fronteira e Prática Contínua
 
 - [x] **cap 099** - Estendendo Python: C, Cython e ligações nativas - `vol16/cap099-estendendo-python-c-cython-e-ligacoes-nativas.qmd`
-- [ ] **cap 100** - Python acelerado: PyPy, Numba e o interpretador sem GIL - `vol16/cap100-python-acelerado-pypy-numba-e-o-interpretador.qmd`
+- [x] **cap 100** - Python acelerado: PyPy, Numba e o interpretador sem GIL - `vol16/cap100-python-acelerado-pypy-numba-e-o-interpretador.qmd`
 - [ ] **cap 101** - Arquitetura de projetos e código sustentável - `vol16/cap101-arquitetura-de-projetos-e-codigo-sustentavel.qmd`
 - [ ] **cap 102** - Git, pre-commit e integração contínua para projetos Python - `vol16/cap102-git-pre-commit-e-integracao-continua-para.qmd`
 - [ ] **cap 103** - Python e inteligência artificial: LLMs, APIs e agentes - `vol16/cap103-python-e-inteligencia-artificial-llms-apis-e.qmd`
@@ -174,5 +174,5 @@ Commit por capitulo: `cap NNN: <titulo>` com o status atualizado no mesmo commit
 
 ---
 
-**Total:** 104 capitulos em 16 volumes (99 concluidos).
+**Total:** 104 capitulos em 16 volumes (100 concluidos).
 

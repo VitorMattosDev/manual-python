@@ -1,3 +1,442 @@
 # Python acelerado: PyPy, Numba e o interpretador sem GIL {#sec-cap100}
 
-*(em elaboracao)*
+O capítulo anterior mostrou a saída clássica quando o Python é lento demais: reescrever a parte quente em C. Funciona — e cobra uma toolchain, uma matriz de binários e uma classe inteira de bugs que não existe no Python. Existe uma pergunta melhor a fazer antes: **e se o problema não fosse o seu código, mas o interpretador?**
+
+Três respostas amadureceram nos últimos anos, e as três valem para código Python que você já escreveu. PyPy troca o interpretador inteiro por um com compilação em tempo de execução. Numba compila funções isoladas para código de máquina, sem sair do CPython. E o CPython 3.13 passou a oferecer, oficialmente, uma variante **sem o GIL**. Cada uma acelera um formato de problema diferente, e cada uma cobra um preço específico — este capítulo mede os três.
+
+Ambiente de todas as medições: Linux (WSL2, 12 núcleos), CPython 3.13.12, CPython 3.13.15 free-threaded, PyPy 7.3.20 (Python 3.11.13), Numba 0.67.0, NumPy 2.5.2.
+
+::: {#fig-tres-aceleradores}
+```{.tikz}
+%%| filename: tres-aceleradores
+%%| alt: Tres aceleradores de Python comparados por formato de problema, ganho medido e preco
+\begin{tikzpicture}[
+  bx/.style={draw,rounded corners,align=left,text width=4.15cm,
+             minimum height=4.2cm,font=\tiny,inner sep=6pt},
+  hd/.style={font=\scriptsize\bfseries,anchor=west},
+  nt/.style={font=\tiny,anchor=west,align=left,text width=13.6cm}
+]
+  \path (-0.3,-6.4) rectangle (14.4,3.6);
+
+  \node[hd] at (-0.2,3.3) {tres aceleradores, tres formatos de problema};
+
+  \node[bx,fill=manualblue!14] at (2.35,0.9)
+    {\textbf{PyPy} --- outro interpretador\\[3pt]
+     \textbf{acelera:} laco Python longo,\\ aritmetica, objetos\\[3pt]
+     medido: \textbf{34x} em aritmetica,\\ 3.8x em objetos, 1.6x em\\ dicionario e string\\[3pt]
+     \textbf{preco:} partida de 11.6 para\\ \textbf{36.1 ms}; memoria base de\\
+     9.8 para \textbf{58.6 MiB}; segue\\ na linguagem 3.11; extensao\\ C paga pedagio};
+
+  \node[bx,fill=manualyellow!22] at (7.15,0.9)
+    {\textbf{Numba} --- JIT por funcao\\[3pt]
+     \textbf{acelera:} nucleo numerico\\ sobre \texttt{ndarray} e escalares\\[3pt]
+     medido: \textbf{35x} com \texttt{@njit},\\
+     \textbf{158x} com \texttt{parallel=True}\\[3pt]
+     \textbf{preco:} \textbf{683 ms} de compilacao\\ na 1a chamada; so um
+     subconjunto\\ do Python e do NumPy --- fora\\ dele, \texttt{TypingError}};
+
+  \node[bx,fill=manualgreen!16] at (11.95,0.9)
+    {\textbf{sem GIL} --- CPython 3.13t\\[3pt]
+     \textbf{acelera:} threads em trabalho\\ de CPU, no mesmo processo\\[3pt]
+     medido: \textbf{4.75x} com 8 threads,\\ contra \textbf{0.91x} do 3.13 normal\\[3pt]
+     \textbf{preco:} uma thread so ficou\\ ate \textbf{2.6x} mais lenta; e a
+     corrida\\ de dados deixa de ser teorica ---\\ \textbf{83\%} dos incrementos
+     sumiram};
+
+  \node[nt] at (-0.2,-2.0)
+    {\textbf{nenhum dos tres acelera espera.} Se o programa passa o tempo em rede,
+     disco ou banco de dados, os tres nao mudam nada --- ali a resposta e
+     \texttt{asyncio} ou threads (Volume 15). Acelerador so serve para trabalho de
+     CPU.};
+
+  \node[draw,rounded corners,fill=manualgray!14,align=left,text width=13.4cm,
+        font=\tiny,inner sep=6pt] at (7.1,-4.4)
+    {\textbf{e ha um quarto, que voce ja esta usando:} o proprio CPython acelerou
+     sozinho. O interpretador especializador do PEP 659 (3.11) reescreve bytecode
+     conforme os tipos que aparecem em tempo de execucao, e o PEP 744 (3.13)
+     acrescentou um JIT ainda \emph{experimental}, desligado por padrao. Antes de
+     trocar de interpretador, atualize o que voce tem.};
+\end{tikzpicture}
+```
+Os três aceleradores, o formato de problema de cada um e o que cada um cobra.
+:::
+
+## PyPy: o mesmo Python, outro interpretador
+
+PyPy é uma implementação completa e alternativa da linguagem, com um compilador de rastros em tempo de execução. Você não muda o código: roda `pypy3 seu_script.py` em vez de `python3`.
+
+O ponto importante — e o que decide se vale a pena — é que **o ganho depende inteiramente do formato do trabalho**. Três cargas com perfis diferentes, o mesmo arquivo nos dois interpretadores:
+
+```python
+def collatz(limite):          # aritmetica pura de inteiros
+    ...
+
+def objetos(n):               # cria e percorre objetos: alocacao e atributo
+    pontos = [Ponto(i * 0.5, i * 0.25) for i in range(n)]
+    ...
+
+def texto(n):                 # dicionario e string: o perfil de um servico web
+    contagem = {}
+    for i in range(n):
+        chave = f"chave-{i % 5000}"
+        contagem[chave] = contagem.get(chave, 0) + 1
+    ...
+```
+
+```text
+== CPython 3.13.12
+  collatz(200_000)     1a rodada   1302.7 ms | melhor   1302.7 ms
+  objetos(2_000_000)   1a rodada   1081.6 ms | melhor    842.1 ms
+  texto(3_000_000)     1a rodada    428.8 ms | melhor    428.8 ms
+
+== PyPy 3.11.13
+  collatz(200_000)     1a rodada     40.0 ms | melhor     38.2 ms
+  objetos(2_000_000)   1a rodada    388.2 ms | melhor    218.7 ms
+  texto(3_000_000)     1a rodada    297.6 ms | melhor    263.5 ms
+```
+
+Trinta e quatro vezes na aritmética, 3,8 vezes nos objetos, **1,6 vez** em dicionário e string. O mesmo interpretador, o mesmo hardware, a mesma execução — e uma diferença de vinte vezes entre o melhor e o pior caso.
+
+A explicação é o que o compilador de rastros consegue eliminar. No laço de Collatz, ele descobre que `n` é sempre um inteiro de máquina, remove a alocação de objeto, remove a checagem de tipo e emite aritmética nativa. No laço de dicionário, cada iteração formata uma string nova e consulta uma tabela de dispersão: o trabalho é alocação e busca, não aritmética, e não há o que remover.
+
+**A regra prática:** quanto mais o seu laço parecer com C escrito em Python, mais o PyPy ganha. Quanto mais ele parecer com cola entre estruturas de dados, menos.
+
+### O aquecimento é visível
+
+O JIT precisa ver o laço rodar algumas vezes antes de valer a pena compilá-lo. Doze chamadas seguidas de um trabalho pequeno:
+
+```text
+== 12 chamadas seguidas de collatz(3_000) -- PyPy 3.11.13
+  chamada  1     2.39 ms
+  chamada  2     0.45 ms
+  chamada  3     0.36 ms
+  ...
+  chamada 12     0.36 ms
+```
+
+Contra o CPython, que é plano de ponta a ponta:
+
+```text
+== 12 chamadas seguidas de collatz(3_000) -- CPython 3.13.12
+  chamada  1    11.75 ms
+  chamada  2    11.80 ms
+  ...
+  chamada 12    11.89 ms
+```
+
+A primeira chamada do PyPy custa **sete vezes** o que custam as seguintes. Isso tem duas consequências diretas: qualquer medição de PyPy que não descarte a primeira rodada está errada, e **processo de vida curta não colhe nada** do JIT — ele morre antes de o compilador amortizar.
+
+### O que o PyPy cobra
+
+```text
+== partida (20 execucoes de um script que so imprime "oi")
+  CPython:   11.6 ms por partida
+  PyPy   :   36.1 ms por partida
+
+== memoria residente
+  CPython  3.13.12  base     9.8 MiB | com 1e6 objetos    94.6 MiB | delta  84.9 MiB
+  PyPy     3.11.13  base    58.6 MiB | com 1e6 objetos   158.2 MiB | delta 101.0 MiB
+```
+
+Três vezes mais lento para subir e seis vezes mais memória em repouso. Num script de linha de comando que roda em 200 ms, o PyPy é **mais lento**, ponto final. Num serviço que fica no ar processando requisições por horas, esses 50 MiB somem no ruído e os 34x aparecem inteiros.
+
+E há três limitações que decidem a viabilidade antes de qualquer medição:
+
+**Ele acompanha a linguagem com atraso.** A versão usada aqui implementa o Python 3.11. `match` funciona, mas `type` como declaração de alias genérico (PEP 695, 3.12) não. Um projeto que já usa sintaxe de 3.12 ou 3.13 simplesmente não roda.
+
+**Extensões C pagam pedágio.** PyPy emula a C API através de uma camada de compatibilidade (`cpyext`), e essa emulação custa caro em cada travessia. Bibliotecas com muita chamada curta para C — o perfil de boa parte do ecossistema científico — podem ficar mais lentas do que no CPython.
+
+**A contagem de referências não existe.** PyPy usa um coletor de rastreamento (@sec-cap098): o objeto morre quando o coletor decidir, não quando o contador zera. Código que confia em destruição imediata para fechar arquivo ou soltar trava vaza descritores. É mais um argumento para o `with` de sempre.
+
+## Numba: compilar uma função, não o programa
+
+Numba faz o oposto do PyPy. Você continua no CPython, com todo o seu ecossistema, e marca **funções específicas** com um decorador. Na primeira chamada, o Numba lê o bytecode, infere os tipos a partir dos argumentos reais, gera código LLVM e compila para código de máquina.
+
+```python
+from numba import njit, prange
+
+@njit
+def mandel(largura, altura, iteracoes):
+    saida = np.zeros((altura, largura), dtype=np.int32)
+    for lin in range(altura):
+        cy = -1.25 + 2.5 * lin / altura
+        for col in range(largura):
+            cx = -2.0 + 3.0 * col / largura
+            zx = zy = 0.0
+            k = 0
+            while k < iteracoes and zx * zx + zy * zy <= 4.0:
+                zx, zy = zx * zx - zy * zy + cx, 2.0 * zx * zy + cy
+                k += 1
+            saida[lin, col] = k
+    return saida
+```
+
+A única diferença para a versão pura é a linha do decorador. E a versão paralela troca `range` por `prange` no laço externo e acrescenta `parallel=True`:
+
+```text
+== mandelbrot 800x600, 200 iteracoes | numba 0.67.0 | CPython 3.13.12
+  Python puro                          2014.8 ms
+  @njit  1a chamada (compila)           682.6 ms
+  @njit  ja compilado                    57.1 ms   (35x)
+  @njit(parallel=True) 1a chamada       778.6 ms
+  @njit(parallel=True) ja compilado      12.7 ms   (158x)
+  resultados identicos: True
+  numba.get_num_threads() = 12
+```
+
+Trinta e cinco vezes com um decorador; **cento e cinquenta e oito** vezes com dois. E os três resultados são idênticos elemento a elemento — o que é a única forma honesta de reportar ganho, porque acelerador que muda a resposta não acelerou nada.
+
+Repare que o `parallel=True` **ignora o GIL**: o código gerado é nativo e roda em doze threads de verdade dentro do mesmo processo, exatamente como a extensão C do @sec-cap099 com o GIL solto.
+
+### O preço: a compilação
+
+Os 682 ms da primeira chamada são reais e aparecem toda vez que o processo sobe. Se a função é chamada uma vez por execução, o Numba te fez perder tempo. Se é chamada mil vezes, ele se paga na segunda.
+
+`cache=True` grava o código compilado em disco e resolve boa parte disso:
+
+```text
+== cache=True, cache frio (sem __pycache__)
+  1a chamada deste processo :    460.8 ms
+  2a chamada deste processo :     54.8 ms
+== cache=True, cache quente (mesmo script de novo)
+  1a chamada deste processo :    158.3 ms
+  2a chamada deste processo :     56.0 ms
+  arquivos do cache:
+  nb_cache.mandel-6.py313.1.nbc
+  nb_cache.mandel-6.py313.nbi
+```
+
+De 461 ms para 158 ms na primeira chamada de um processo novo. Não vai a zero — o Numba ainda precisa validar a assinatura e carregar o objeto do disco —, mas é a diferença entre um script de linha de comando utilizável e um irritante. Note o `py313` no nome do arquivo: o cache é por versão do Python e por arquitetura, como qualquer binário.
+
+### O preço maior: o Numba não é Python
+
+O modo `nopython` — que é o que `@njit` liga — só entende um subconjunto do Python e do NumPy: escalares, `ndarray`, tuplas, e alguns tipos próprios como `numba.typed.List`. Fora disso, ele recusa:
+
+```python
+@njit
+def soma_dicts(registros):
+    total = 0
+    for r in registros:
+        total += r["valor"]
+    return total
+
+soma_dicts([{"valor": 1}, {"valor": 2}])
+```
+
+```text
+  TypingError
+    Failed in nopython mode pipeline (step: nopython frontend)
+    non-precise type pyobject
+    During: typing of argument at nb_falha.py (4)
+```
+
+Uma lista de dicionários Python é `pyobject` — tipo impreciso — e o Numba para ali. Isso não é um defeito: é a condição para o ganho. Ele só consegue gerar código de máquina porque sabe exatamente o tipo de cada valor, e um `dict` que pode conter qualquer coisa destrói essa garantia.
+
+O que isso significa na prática é que o Numba se aplica ao **núcleo numérico**, não ao programa. Você mantém a leitura de arquivo, a validação e a serialização em Python normal, e decora só o laço que faz conta sobre arrays.
+
+::: {.callout-note}
+## Numba não é a única ferramenta desse tipo
+No mesmo nicho estão o **JAX** (compila e diferencia código NumPy, com execução em CPU ou GPU), o **Taichi** e o **Cython em modo Python puro** (@sec-cap099). Para trabalho sobre `DataFrame`, o caminho hoje costuma ser outro: **Polars** e **DuckDB** já executam a consulta inteira em Rust ou C++, sem você compilar nada.
+:::
+
+## O CPython sem GIL
+
+Esta é a mudança mais profunda dos três, e a mais recente. O PEP 703 foi aceito em 2023, e o Python 3.13 é o primeiro a trazer, oficialmente, uma **variante do CPython construída sem o bloqueio global do interpretador** — o mesmo GIL que o @sec-cap093 mostrou serializando threads.
+
+Ela não substitui a instalação normal; é um binário à parte, com o sufixo `t`:
+
+```bash
+uv python install 3.13t
+python3.13t -c "import sys; print(sys._is_gil_enabled())"
+```
+
+```text
+False
+```
+
+E o efeito no trabalho de CPU é exatamente o que se esperava por vinte anos:
+
+```text
+== CPython 3.13.12 | GIL ativo: True
+  1 thread                    743.9 ms
+  2 threads (mesmo trabalho)   1562.9 ms   ganho  0.95x
+  4 threads (mesmo trabalho)   3216.5 ms   ganho  0.93x
+  8 threads (mesmo trabalho)   6513.9 ms   ganho  0.91x
+
+== CPython 3.13.15 | GIL ativo: False
+  1 thread                    937.6 ms
+  2 threads (mesmo trabalho)   1128.5 ms   ganho  1.66x
+  4 threads (mesmo trabalho)   1137.6 ms   ganho  3.30x
+  8 threads (mesmo trabalho)   1577.8 ms   ganho  4.75x
+```
+
+O mesmo arquivo, o mesmo hardware. Com GIL, oito threads dão **0,91x** — pior do que uma, porque o interpretador as serializa e ainda cobra o rodízio. Sem GIL, **4,75x**. É paralelismo real de código Python puro, sem `multiprocessing`, sem serializar argumento nenhum, sem processo filho.
+
+### O primeiro preço: uma thread só fica mais lenta
+
+Repare no `1 thread` das duas medições: 743,9 ms contra 937,6 ms. Vinte e seis por cento mais lento. Em operações mais miúdas o custo é maior:
+
+```text
+== CPython 3.13.12 | GIL ativo: True
+  laco de atributo     2.39 ms
+  append em lista      2.61 ms
+  dict get/set         8.93 ms
+
+== CPython 3.13.15 | GIL ativo: False
+  laco de atributo     6.26 ms
+  append em lista      3.74 ms
+  dict get/set        11.24 ms
+```
+
+O laço de atributo ficou **2,6 vezes mais lento**. A causa é estrutural: sem o GIL, cada contagem de referência precisa ser segura para acesso concorrente, e as estruturas internas precisam de sincronização própria. O CPython sem GIL usa contagem enviesada e imortalização de objetos para reduzir esse custo, e ele vem caindo a cada versão — mas não é zero, e não vai ser.
+
+**A conta é direta:** se o seu programa não usa threads para trabalho de CPU, o interpretador sem GIL só te faz perder.
+
+### O segundo preço, que é o mais sério
+
+O GIL nunca foi um mecanismo de sincronização, mas na prática ele escondia uma quantidade enorme de código errado. Um contador incrementado por oito threads, sem trava:
+
+```python
+class Contador:
+    def __init__(self):
+        self.valor = 0
+
+def incrementa_sem_trava(c):
+    for _ in range(200_000):
+        c.valor += 1          # leitura + soma + escrita: NAO e atomico
+```
+
+```text
+== CPython 3.13.12 | GIL ativo: True | esperado 1600000
+  sem trava, tentativa 1:   1600000   perdidos 0
+  sem trava, tentativa 2:   1600000   perdidos 0
+  sem trava, tentativa 3:   1600000   perdidos 0
+  com threading.Lock()       :   1600000   perdidos 0
+
+== CPython 3.13.15 | GIL ativo: False | esperado 1600000
+  sem trava, tentativa 1:    262796   perdidos 1337204
+  sem trava, tentativa 2:    273964   perdidos 1326036
+  sem trava, tentativa 3:    282069   perdidos 1317931
+  com threading.Lock()       :   1600000   perdidos 0
+```
+
+**Oitenta e três por cento dos incrementos desapareceram.** O código é idêntico nos dois casos; o bug sempre esteve lá. Com o GIL, o intervalo entre a leitura e a escrita quase nunca era interrompido, e o programa passava nos testes por dez anos. Sem o GIL, ele erra em toda execução — e erra um número diferente a cada vez.
+
+E note a última linha das duas medições: `threading.Lock()` devolve o resultado exato nos dois interpretadores. **A correção não é nova; é a de sempre.** O que mudou é que agora ela é obrigatória.
+
+::: {.callout-warning}
+## O que migrar para 3.13t realmente significa
+Não é trocar um binário. É auditar todo estado compartilhado mutável do seu código e das suas dependências. `queue.Queue` continua seguro; `dict` e `list` continuam internamente consistentes; mas *qualquer* sequência do tipo ler-modificar-escrever sobre estado compartilhado precisa de `Lock`, e as suas extensões C precisam declarar `Py_mod_gil` como `Py_MOD_GIL_NOT_USED`. Uma extensão que não declara faz o interpretador **religar o GIL em tempo de execução** — e você perde tudo sem receber aviso nenhum, a não ser que teste `sys._is_gil_enabled()`.
+:::
+
+### Onde isso está hoje
+
+O free-threading é **oficialmente suportado** a partir do Python 3.14, mas continua opcional: a instalação padrão do CPython ainda vem com GIL, e você precisa pedir a variante `t` explicitamente. Os pacotes já publicam wheels específicas, marcadas com a etiqueta `cp313t` ou `cp314t` — NumPy, `pytest` e boa parte do ecossistema central já as publicam.
+
+Vale acompanhar de perto e experimentar em ambiente de teste. Não vale migrar produção sem medir que o seu caso pertence à categoria "threads em trabalho de CPU" e sem auditar o estado compartilhado.
+
+## E o CPython que você já tem
+
+Antes de instalar qualquer coisa deste capítulo, vale lembrar que o interpretador padrão acelerou muito por conta própria.
+
+O **PEP 659**, no 3.11, trouxe o interpretador especializador: enquanto o programa roda, o CPython observa quais tipos realmente aparecem em cada instrução e **reescreve o bytecode** para uma versão especializada. Um `a + b` que sempre soma dois inteiros vira uma instrução de soma de inteiros com uma checagem barata. O ganho típico foi de 10% a 60% sem nenhuma mudança de código, e ele continua sendo refinado a cada versão.
+
+O **PEP 744**, no 3.13, acrescentou um JIT de verdade, construído sobre essa especialização. Ele é **experimental e desligado por padrão**: só existe se o interpretador tiver sido compilado com `--enable-experimental-jit`. Os ganhos ainda são modestos, e a infraestrutura é a aposta de longo prazo do CPython.
+
+A conclusão prática é chata e verdadeira: **atualizar a versão do Python costuma ser a otimização de melhor relação custo-benefício que existe** — não exige decisão de arquitetura, não muda o modelo de concorrência e não acrescenta dependência.
+
+## Escolhendo
+
+A ordem que resolve quase todos os casos reais:
+
+1. **Meça** (@sec-cap097). Sem perfil, tudo aqui é palpite caro.
+2. **Atualize o Python.** É de graça e às vezes basta.
+3. **É espera?** Rede, disco, banco — então nenhum acelerador serve. `asyncio` (@sec-cap096) ou threads (@sec-cap094).
+4. **É conta sobre array?** NumPy vetorizado primeiro; `@njit` depois; `parallel=True` por último.
+5. **É laço Python longo, de aritmética ou objetos, num processo de vida longa?** PyPy é o candidato — se as dependências permitirem e a versão da linguagem bastar.
+6. **São threads em trabalho de CPU?** É o caso do 3.13t — depois de auditar o estado compartilhado.
+7. **Nada disso?** Aí sim, a fronteira nativa do @sec-cap099.
+
+## 🐍 Jeito Pythônico
+
+**Meça antes, sempre, e descarte a primeira rodada em qualquer JIT.** Medido: a primeira chamada no PyPy custou 2,39 ms contra 0,33 ms das seguintes.
+
+**Nenhum acelerador acelera espera.** Se o perfil aponta rede ou disco, o problema é de concorrência, não de velocidade de interpretador.
+
+**PyPy para processo de vida longa com laço Python pesado.** Medido: 34x em aritmética, 1,6x em dicionário e string. Partida de 36,1 ms e 58,6 MiB de base descartam scripts curtos.
+
+**Numba para o núcleo numérico, não para o programa.** Decore o laço sobre arrays; deixe leitura de arquivo, validação e serialização em Python normal. Uma lista de dicionários levanta `TypingError`, e isso é a condição do ganho, não um defeito.
+
+**`cache=True` em toda função `@njit` que sobreviva ao processo.** Medido: primeira chamada de 461 ms para 158 ms.
+
+**Confira que o acelerador não mudou a resposta.** `np.array_equal` entre a versão pura e a compilada é parte da medição, não um extra.
+
+**No interpretador sem GIL, toda sequência ler-modificar-escrever precisa de `Lock`.** Medido: 83% dos incrementos perdidos sem trava, zero com `threading.Lock()` — e a mesma trava já funcionava com GIL.
+
+**Confirme que o GIL está mesmo desligado** com `sys._is_gil_enabled()`. Uma extensão C que não declara compatibilidade religa o GIL em silêncio.
+
+**Atualizar a versão do Python é a otimização mais barata que existe.** O interpretador especializador do PEP 659 acelerou código que ninguém tocou.
+
+## 🧪 Laboratório
+
+Você vai precisar de três interpretadores. PyPy sai de <https://pypy.org/download.html> (tarball portátil, não precisa instalar); o CPython sem GIL vem do `uv`:
+
+```bash
+uv python install 3.13t
+uv pip install --python $(uv python find 3.13t) numba numpy
+```
+
+**Passo 1 — as três cargas.** Escreva `collatz`, `objetos` e `texto` num único módulo e cronometre as três no CPython. Anote os números da sua máquina.
+
+**Passo 2 — o mesmo arquivo no PyPy.** Rode `pypy3 compara.py` e monte a tabela dos ganhos. O ponto do exercício é a *dispersão*: por que a aritmética ganhou vinte vezes mais que o dicionário?
+
+**Passo 3 — o aquecimento.** Meça doze chamadas seguidas de um trabalho pequeno nos dois interpretadores e reproduza:
+
+```text
+  chamada  1     2.39 ms
+  chamada  2     0.45 ms
+  chamada 12     0.36 ms
+```
+
+**Passo 4 — o preço do PyPy.** Meça a partida (20 execuções de um script que só imprime) e a memória residente com um milhão de objetos, lendo `VmRSS` de `/proc/self/status`. Depois calcule a partir de quantos segundos de execução o PyPy passa a compensar no seu caso.
+
+**Passo 5 — Numba, o básico.** Escreva o Mandelbrot puro, cronometre, acrescente `@njit` e cronometre de novo separando a primeira chamada das seguintes. Compare os arrays com `np.array_equal`.
+
+**Passo 6 — Numba paralelo.** Troque o `range` do laço externo por `prange` e ligue `parallel=True`. Confirme o resultado idêntico e imprima `numba.get_num_threads()`.
+
+**Passo 7 — o cache.** Ligue `cache=True`, apague `__pycache__`, rode duas vezes e compare a primeira chamada de cada execução. Liste os arquivos gerados e explique o `py313` no nome.
+
+**Passo 8 — o limite do Numba.** Decore com `@njit` uma função que percorre uma lista de dicionários e leia a mensagem inteira do `TypingError`. Depois reescreva usando dois `np.ndarray` paralelos e confirme que compila.
+
+**Passo 9 — escalabilidade com e sem GIL.** Rode o mesmo teste de threads nos dois interpretadores e reproduza a tabela:
+
+```text
+  8 threads | GIL ativo  ganho 0.91x
+  8 threads | sem GIL    ganho 4.75x
+```
+
+**Passo 10 — o custo de uma thread só.** Meça laço de atributo, `append` e `dict` nos dois. Explique por que o laço de atributo é o mais penalizado.
+
+**Passo 11 — a corrida que o GIL escondia.** Reproduza o contador sem trava nos dois interpretadores:
+
+```text
+  GIL ativo : 1600000   perdidos 0
+  sem GIL   :  262796   perdidos 1337204
+```
+
+Rode três vezes e observe que o número perdido muda a cada execução. Depois ponha `threading.Lock()` e confirme o resultado exato nos dois.
+
+**Passo 12 — a mesma corrida com as ferramentas certas.** Refaça o passo 11 com `itertools.count()` e depois com uma `queue.Queue`, e discuta qual das duas resolve o problema e qual só o esconde.
+
+## Resumo
+
+- **Três aceleradores, três formatos de problema.** PyPy troca o interpretador, Numba compila funções isoladas, o 3.13t remove o GIL. Nenhum deles acelera espera de rede ou disco.
+- **PyPy rende de 34x a 1,6x conforme a carga** — aritmética pura no topo, dicionário e string na base. Quanto mais o laço parecer com C escrito em Python, mais ele ganha.
+- **PyPy cobra partida e memória**: 36,1 ms contra 11,6 ms para subir, 58,6 MiB contra 9,8 MiB em repouso. Processo de vida curta perde; serviço de vida longa ganha.
+- **O aquecimento do JIT é visível e mensurável**: 2,39 ms na primeira chamada contra 0,33 ms nas seguintes. Toda medição precisa descartar a primeira rodada.
+- **Numba entregou 35x com `@njit` e 158x com `parallel=True`**, com resultado idêntico ao do Python puro — ao custo de 683 ms de compilação na primeira chamada, que `cache=True` reduz a 158 ms.
+- **O modo `nopython` só aceita um subconjunto**: escalares, `ndarray` e tuplas. Lista de dicionários dá `TypingError`, e é essa restrição que torna o ganho possível.
+- **O CPython sem GIL entregou 4,75x com oito threads**, contra **0,91x** do interpretador normal — paralelismo real de código Python puro, no mesmo processo.
+- **E cobra nos dois lados**: uma thread só ficou até 2,6 vezes mais lenta, e a corrida de dados deixou de ser teórica — **83%** dos incrementos sumiram sem trava, com o mesmo código que passava há anos.
+- **A correção é a de sempre**: `threading.Lock()` deu o resultado exato nos dois interpretadores. O que mudou é que ela virou obrigatória.
+- **Antes de tudo isso, atualize o Python.** O interpretador especializador do PEP 659 e o JIT experimental do PEP 744 aceleram código que ninguém tocou.
