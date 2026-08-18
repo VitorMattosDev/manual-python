@@ -51,8 +51,12 @@ Uma dúzia de PEPs explica a maior parte do Python moderno: **1** (o processo), 
   \node[hd] at (-0.2,3.8) {uma versao por ano, cinco anos de vida (PEP 602)};
 
   \draw[->,>=stealth,thick] (0.4,1.7) -- (13.9,1.7);
-  \foreach \xx/\lb in {0.9/ano 0, 3.5/ano 1, 6.1/ano 2, 8.7/ano 3, 11.3/ano 4, 13.5/ano 5}
-    \draw (\xx,1.85) -- (\xx,1.55) node[below,font=\tiny]{\lb};
+  \draw (0.9,1.85) -- (0.9,1.55) node[below,font=\tiny]{ano 0};
+  \draw (3.5,1.85) -- (3.5,1.55) node[below,font=\tiny]{ano 1};
+  \draw (6.1,1.85) -- (6.1,1.55) node[below,font=\tiny]{ano 2};
+  \draw (8.7,1.85) -- (8.7,1.55) node[below,font=\tiny]{ano 3};
+  \draw (11.3,1.85) -- (11.3,1.55) node[below,font=\tiny]{ano 4};
+  \draw (13.5,1.85) -- (13.5,1.55) node[below,font=\tiny]{ano 5};
 
   \node[fx,fill=manualgreen!18,text width=2.3cm] at (2.2,2.7)
     {lancamento\\ (outubro)};

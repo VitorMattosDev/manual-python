@@ -376,10 +376,16 @@ Cada linha aqui está resolvendo um problema concreto:
 
 A integração contínua deste manual — que renderiza o livro inteiro em HTML e PDF, com LaTeX e figuras TikZ — leva:
 
+```bash
+gh run list --limit 4 --json name,conclusion,startedAt,updatedAt \
+  --jq '.[] | "\(.conclusion)  \(.name)  \(((.updatedAt|fromdate)-(.startedAt|fromdate)))s"'
+```
+
 ```text
-completed  success  cap 098: memoria, contagem de referencias ...  Publicar livro  main  push  11m12s
-completed  success  licoes: cp1252 no subprocess corrompe ...      Publicar livro  main  push  11m25s
-completed  success  pages build and deployment                     gh-pages  dynamic       1m7s
+success  pages build and deployment  67s
+success  Publicar livro  685s
+success  pages build and deployment  28s
+success  Publicar livro  672s
 ```
 
 Onze minutos. É um número aceitável para um build que compila LaTeX; seria péssimo para uma suíte de testes de biblioteca. **A latência da CI é um requisito de produto, não um detalhe de infraestrutura:** acima de dez minutos as pessoas param de esperar o resultado e passam a mesclar na esperança, e o portão perde a função.
