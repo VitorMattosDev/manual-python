@@ -23,7 +23,7 @@ A fila de produção está no [`ROADMAP.md`](ROADMAP.md). A estrutura canônica 
 
 ## Como produzir
 
-Este repositório é escrito capítulo a capítulo com o Claude Code em modo autônomo. Para começar, abra o repositório no Claude Code e cole o conteúdo de [`PROMPT-INICIAL.md`](PROMPT-INICIAL.md). As convenções e os erros já conhecidos estão em [`CLAUDE.md`](CLAUDE.md) e [`LICOES-MANUAIS.md`](LICOES-MANUAIS.md).
+Este repositório é escrito capítulo a capítulo com o Claude Code em modo autônomo. A fila de capítulos e o status de cada um estão no [`ROADMAP.md`](ROADMAP.md).
 
 ## Build local
 
